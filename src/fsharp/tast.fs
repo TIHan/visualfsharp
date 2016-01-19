@@ -35,12 +35,12 @@ open Microsoft.FSharp.Core.CompilerServices
 /// Unique name generator for stamps attached to lambdas and object expressions
 type Unique = int64
 //++GLOBAL MUTABLE STATE
-let newUnique = let i = ref 0L in fun () -> i := !i + 1L; !i
+let newUnique = let i = ref 0L in fun () -> System.Threading.Interlocked.Increment(i)
 type Stamp = int64
 
 /// Unique name generator for stamps attached to to val_specs, tycon_specs etc.
 //++GLOBAL MUTABLE STATE
-let newStamp = let i = ref 0L in fun () -> i := !i + 1L; !i
+let newStamp = let i = ref 0L in fun () -> System.Threading.Interlocked.Increment(i)
 
 /// A global generator of compiler generated names
 // ++GLOBAL MUTABLE STATE
@@ -3545,7 +3545,7 @@ and Binding =
 and ActivePatternElemRef = 
     | APElemRef of ActivePatternInfo * ValRef * int 
 
-    member x.IsTotalActivePattern = (let (APElemRef(total,_,_)) = x in total)
+    member x.ActivePatternInfo = (let (APElemRef(info,_,_)) = x in info)
     member x.ActivePatternVal = (let (APElemRef(_,vref,_)) = x in vref)
     member x.CaseIndex = (let (APElemRef(_,_,n)) = x in n)
 

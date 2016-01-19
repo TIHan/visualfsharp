@@ -40,7 +40,6 @@ open Microsoft.FSharp.Compiler.MSBuildResolver
 open Microsoft.FSharp.Compiler.TypeRelations
 open Microsoft.FSharp.Compiler.NameResolution
 open Microsoft.FSharp.Compiler.PrettyNaming
-open Internal.Utilities.FileSystem
 open Internal.Utilities.Collections
 open Internal.Utilities.Filename
 open Microsoft.FSharp.Compiler.Import
@@ -1345,6 +1344,7 @@ type ErrorStyle =
     | EmacsErrors 
     | TestErrors 
     | VSErrors
+    | GccErrors
 
 let SanitizeFileName fileName implicitIncludeDir =
     // The assert below is almost ok, but it fires in two cases:
@@ -1352,7 +1352,7 @@ let SanitizeFileName fileName implicitIncludeDir =
     //  - if you have a #line directive, e.g. 
     //        # 1000 "Line01.fs"
     //    then it also asserts.  But these are edge cases that can be fixed later, e.g. in bug 4651.
-    //System.Diagnostics.Debug.Assert(System.IO.Path.IsPathRooted(fileName), sprintf "filename should be absolute: '%s'" fileName)
+    //System.Diagnostics.Debug.Assert(FileSystem.IsPathRootedShim(fileName), sprintf "filename should be absolute: '%s'" fileName)
     try
         let fullPath = FileSystem.GetFullPathShim(fileName)
         let currentDir = implicitIncludeDir
@@ -1418,6 +1418,11 @@ let CollectErrorOrWarning (implicitIncludeDir,showFullPaths,flattenErrors,errorS
                     let file = file.Replace("/","\\")
                     let m = mkRange m.FileName (mkPos m.StartLine (m.StartColumn + 1)) (mkPos m.EndLine (m.EndColumn + 1) )
                     sprintf "%s(%d,%d-%d,%d): " file m.StartLine m.StartColumn m.EndLine m.EndColumn, m, file
+
+                  | ErrorStyle.GccErrors     -> 
+                    let file = file.Replace('/',System.IO.Path.DirectorySeparatorChar)
+                    let m = mkRange m.FileName (mkPos m.StartLine (m.StartColumn + 1)) (mkPos m.EndLine (m.EndColumn + 1) )
+                    sprintf "%s:%d:%d: " file m.StartLine m.StartColumn, m, file
 
                   // Here, we want the complete range information so Project Systems can generate proper squiggles
                   | ErrorStyle.VSErrors      -> 
@@ -1971,9 +1976,6 @@ type TcConfigBuilder =
       /// pause between passes? 
       mutable pause : bool
       
-      /// use reflection and indirect calls to call methods taking multidimensional generic arrays
-      mutable indirectCallArrayMethods : bool 
-      
       /// whenever possible, emit callvirt instead of call
       mutable alwaysCallVirt : bool
 
@@ -1993,6 +1995,7 @@ type TcConfigBuilder =
       /// if true - every expression in quotations will be augmented with full debug info (filename, location in file)
       mutable emitDebugInfoInQuotations : bool
 
+      mutable exename : string option
       /// When false FSI will lock referenced assemblies requiring process restart, false = disable Shadow Copy false (*default*)
       mutable shadowCopyReferences : bool
       }
@@ -2122,7 +2125,6 @@ type TcConfigBuilder =
           showExtensionTypeMessages = false
 #endif
           pause = false 
-          indirectCallArrayMethods = false
           alwaysCallVirt = true
           noDebugData = false
           isInteractive = isInteractive
@@ -2131,6 +2133,7 @@ type TcConfigBuilder =
           sqmNumOfSourceFiles = 0
           sqmSessionStartedTime = System.DateTime.Now.Ticks
           emitDebugInfoInQuotations = false
+          exename = None
           shadowCopyReferences = false
         }
 
@@ -2216,7 +2219,7 @@ type TcConfigBuilder =
            tcConfigB.includes <- tcConfigB.includes ++ absolutePath
            
     member tcConfigB.AddLoadedSource(m,path,pathLoadedFrom) =
-        if Path.IsInvalidPath(path) then
+        if FileSystem.IsInvalidPathShim(path) then
             warning(Error(FSComp.SR.buildInvalidFilename(path),m))    
         else 
             let path = 
@@ -2233,7 +2236,7 @@ type TcConfigBuilder =
         tcConfigB.embedResources <- tcConfigB.embedResources ++ filename
 
     member tcConfigB.AddReferencedAssemblyByPath (m,path) = 
-        if Path.IsInvalidPath(path) then
+        if FileSystem.IsInvalidPathShim(path) then
             warning(Error(FSComp.SR.buildInvalidAssemblyName(path),m))
         elif not (List.mem (AssemblyReference(m,path)) tcConfigB.referencedDLLs) then // NOTE: We keep same paths if range is different.
              tcConfigB.referencedDLLs <- tcConfigB.referencedDLLs ++ AssemblyReference(m,path)
@@ -2306,13 +2309,10 @@ type AssemblyResolution =
         | Some(assref) -> assref
         | None ->
             let readerSettings : ILBinaryReader.ILReaderOptions = {pdbPath=None;ilGlobals = EcmaILGlobals;optimizeForMemory=false} // ??
-            let reader = ILBinaryReader.OpenILModuleReader this.resolvedPath readerSettings
-            try
-                let assRef = mkRefToILAssembly reader.ILModuleDef.ManifestOfAssembly
-                this.ilAssemblyRef := Some(assRef)
-                assRef
-            finally 
-                ILBinaryReader.CloseILModuleReader reader
+            use reader = ILBinaryReader.OpenILModuleReader this.resolvedPath readerSettings
+            let assRef = mkRefToILAssembly reader.ILModuleDef.ManifestOfAssembly
+            this.ilAssemblyRef := Some(assRef)
+            assRef
 
 
 //----------------------------------------------------------------------------
@@ -2395,21 +2395,18 @@ type TcConfig private (data : TcConfigBuilder,validate:bool) =
             let filename = ComputeMakePathAbsolute data.implicitIncludeDir primaryAssemblyFilename
             try 
             
-                let ilReader = OpenILBinary(filename,data.optimizeForMemory,data.openBinariesInMemory,None,None, data.primaryAssembly.Name, data.noDebugData, data.shadowCopyReferences)
-                try 
-                   let ilModule = ilReader.ILModuleDef
+                use ilReader = OpenILBinary(filename,data.optimizeForMemory,data.openBinariesInMemory,None,None, data.primaryAssembly.Name, data.noDebugData, data.shadowCopyReferences)
+                let ilModule = ilReader.ILModuleDef
                  
-                   match ilModule.ManifestOfAssembly.Version with 
-                   | Some(v1,v2,v3,_) -> 
-                       if v1 = 1us then 
-                           warning(Error(FSComp.SR.buildRequiresCLI2(filename),rangeStartup))
-                       let clrRoot = Some(Path.GetDirectoryName(Path.GetFullPath(filename)))
+                match ilModule.ManifestOfAssembly.Version with 
+                | Some(v1,v2,v3,_) -> 
+                    if v1 = 1us then 
+                        warning(Error(FSComp.SR.buildRequiresCLI2(filename),rangeStartup))
+                    let clrRoot = Some(Path.GetDirectoryName(Path.GetFullPath(filename)))
 
-                       clrRoot, (int v1, sprintf "v%d.%d" v1 v2), (v1=5us && v2=0us && v3=5us) // SL5 mscorlib is 5.0.5.0
-                   | _ -> 
-                       failwith (FSComp.SR.buildCouldNotReadVersionInfoFromMscorlib())
-                finally
-                   ILBinaryReader.CloseILModuleReader ilReader
+                    clrRoot, (int v1, sprintf "v%d.%d" v1 v2), (v1=5us && v2=0us && v3=5us) // SL5 mscorlib is 5.0.5.0
+                | _ -> 
+                    failwith (FSComp.SR.buildCouldNotReadVersionInfoFromMscorlib())
             with _ -> 
                 error(Error(FSComp.SR.buildCannotReadAssembly(filename),rangeStartup))
         | _ ->
@@ -2457,13 +2454,10 @@ type TcConfig private (data : TcConfigBuilder,validate:bool) =
         | Some(fslibFilename) ->
             let filename = ComputeMakePathAbsolute data.implicitIncludeDir fslibFilename
             try 
-                let ilReader = OpenILBinary(filename,data.optimizeForMemory,data.openBinariesInMemory,None,None, data.primaryAssembly.Name, data.noDebugData, data.shadowCopyReferences)
-                try 
-                   checkFSharpBinaryCompatWithMscorlib filename ilReader.ILAssemblyRefs ilReader.ILModuleDef.ManifestOfAssembly.Version rangeStartup;
-                   let fslibRoot = Path.GetDirectoryName(FileSystem.GetFullPathShim(filename))
-                   fslibRoot (* , sprintf "v%d.%d" v1 v2 *)
-                finally
-                   ILBinaryReader.CloseILModuleReader ilReader
+                use ilReader = OpenILBinary(filename,data.optimizeForMemory,data.openBinariesInMemory,None,None, data.primaryAssembly.Name, data.noDebugData, data.shadowCopyReferences)
+                checkFSharpBinaryCompatWithMscorlib filename ilReader.ILAssemblyRefs ilReader.ILModuleDef.ManifestOfAssembly.Version rangeStartup;
+                let fslibRoot = Path.GetDirectoryName(FileSystem.GetFullPathShim(filename))
+                fslibRoot (* , sprintf "v%d.%d" v1 v2 *)
             with _ -> 
                 error(Error(FSComp.SR.buildCannotReadAssembly(filename),rangeStartup))
         | _ ->
@@ -2582,7 +2576,6 @@ type TcConfig private (data : TcConfigBuilder,validate:bool) =
     member x.showExtensionTypeMessages  = data.showExtensionTypeMessages    
 #endif
     member x.pause  = data.pause
-    member x.indirectCallArrayMethods = data.indirectCallArrayMethods
     member x.alwaysCallVirt = data.alwaysCallVirt
     member x.noDebugData = data.noDebugData
     member x.isInteractive = data.isInteractive
@@ -2611,16 +2604,8 @@ type TcConfig private (data : TcConfigBuilder,validate:bool) =
         | Some x -> 
             [tcConfig.MakePathAbsolute x]
         | None -> 
-            // When running on Mono we lead everyone to believe we're doing .NET 2.0 compilation 
-            // by default. 
             if runningOnMono then 
-                let mono10SysDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory() 
-                assert(mono10SysDir.EndsWith("1.0",StringComparison.Ordinal));
-                let mono20SysDir = Path.Combine(Path.GetDirectoryName mono10SysDir, "2.0")
-                if Directory.Exists(mono20SysDir) then
-                     [mono20SysDir]
-                else 
-                     [mono10SysDir]
+                [System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()]
             else                                
                 try 
                     match tcConfig.resolutionEnvironment with
@@ -2717,12 +2702,9 @@ type TcConfig private (data : TcConfigBuilder,validate:bool) =
                     else 
                         try
                             let readerSettings : ILBinaryReader.ILReaderOptions = {pdbPath=None;ilGlobals = EcmaILGlobals;optimizeForMemory=false}
-                            let reader = ILBinaryReader.OpenILModuleReader resolved readerSettings
-                            try
-                                let assRef = mkRefToILAssembly reader.ILModuleDef.ManifestOfAssembly
-                                assRef.QualifiedName
-                            finally 
-                                ILBinaryReader.CloseILModuleReader reader
+                            use reader = ILBinaryReader.OpenILModuleReader resolved readerSettings
+                            let assRef = mkRefToILAssembly reader.ILModuleDef.ManifestOfAssembly
+                            assRef.QualifiedName
                         with e ->
                             ""
                 Some
@@ -3683,7 +3665,7 @@ type TcImports(tcConfigP:TcConfigProvider, initialResolutions:TcAssemblyResoluti
 
         let ilILBinaryReader = OpenILBinary(filename,tcConfig.optimizeForMemory,tcConfig.openBinariesInMemory,ilGlobalsOpt,pdbPathOption, tcConfig.primaryAssembly.Name, tcConfig.noDebugData, tcConfig.shadowCopyReferences)
 
-        tcImports.AttachDisposeAction(fun _ -> ILBinaryReader.CloseILModuleReader ilILBinaryReader)
+        tcImports.AttachDisposeAction(fun _ -> (ilILBinaryReader :> IDisposable).Dispose())
         ilILBinaryReader.ILModuleDef, ilILBinaryReader.ILAssemblyRefs
       with e ->
         error(Error(FSComp.SR.buildErrorOpeningBinaryFile(filename, e.Message),m))
@@ -3835,12 +3817,21 @@ type TcImports(tcConfigP:TcConfigProvider, initialResolutions:TcAssemblyResoluti
                    outputFile             = tcConfig.outputFile
                    showResolutionMessages = tcConfig.showExtensionTypeMessages 
                    referencedAssemblies   = [| for r in resolutions.GetAssemblyResolutions() -> r.resolvedPath |]
-                   temporaryFolder        = Path.GetTempPath() }
+                   temporaryFolder        = FileSystem.GetTempPathShim() }
+
+            // The type provider should not hold strong references to disposed
+            // TcImport objects.  So the callbacks provided in the type provider config
+            // dispatch via a thunk which gets set to a non-resource-capturing 
+            // failing function when the object is disposed. 
+            let systemRuntimeContainsType =  
+                let systemRuntimeContainsTypeRef = ref tcImports.SystemRuntimeContainsType  
+                tcImports.AttachDisposeAction(fun () -> systemRuntimeContainsTypeRef := (fun _ -> raise (System.ObjectDisposedException("The type provider has been disposed"))))  
+                fun arg -> systemRuntimeContainsTypeRef.Value arg  
 
             let providers = 
                 [ for assemblyName in providerAssemblies do
                       yield ExtensionTyping.GetTypeProvidersOfAssembly(fileNameOfRuntimeAssembly, ilScopeRefOfRuntimeAssembly, assemblyName, typeProviderEnvironment, 
-                                                                       tcConfig.isInvalidationSupported, tcConfig.isInteractive, tcImports.SystemRuntimeContainsType, systemRuntimeAssemblyVersion, m) ]
+                                                                       tcConfig.isInvalidationSupported, tcConfig.isInteractive, systemRuntimeContainsType, systemRuntimeAssemblyVersion, m) ]
             let providers = providers |> List.concat
 
             // Note, type providers are disposable objects. The TcImports owns the provider objects - when/if it is disposed, the providers are disposed.
@@ -4330,7 +4321,7 @@ type TcImports(tcConfigP:TcConfigProvider, initialResolutions:TcAssemblyResoluti
 
         // OK, now we have both mscorlib.dll and FSharp.Core.dll we can create TcGlobals
         let tcGlobals = mkTcGlobals(tcConfig.compilingFslib,sysCcu.FSharpViewOfMetadata,ilGlobals,fslibCcu,
-                                    tcConfig.implicitIncludeDir,tcConfig.mlCompatibility,using40environment,tcConfig.indirectCallArrayMethods,
+                                    tcConfig.implicitIncludeDir,tcConfig.mlCompatibility,using40environment,
                                     tcConfig.isInteractive,getTypeCcu, tcConfig.emitDebugInfoInQuotations) 
 
 #if DEBUG
@@ -4625,7 +4616,7 @@ module private ScriptPreprocessClosure =
         
     let SourceFileOfFilename(filename,m,inputCodePage:int option) : ClosureDirective list = 
         try
-            let filename = FileSystem.SafeGetFullPath(filename)
+            let filename = FileSystem.GetFullPathShim(filename)
             use stream = FileSystem.FileStreamReadShim filename
             use reader = 
                 match inputCodePage with 
@@ -4664,7 +4655,7 @@ module private ScriptPreprocessClosure =
             match closureDirective with 
             | ClosedSourceFile _ as csf -> [csf]
             | SourceFile(filename,m,source) ->
-                let filename = FileSystem.SafeGetFullPath(filename)
+                let filename = FileSystem.GetFullPathShim(filename)
                 if observedSources.HaveSeen(filename) then [] 
                 else     
                     observedSources.SetSeen(filename)
@@ -4715,7 +4706,7 @@ module private ScriptPreprocessClosure =
         for directive in closureDirectives do
             match directive with 
             | ClosedSourceFile(filename,m,input,_,_,noWarns) -> 
-                let filename = FileSystem.SafeGetFullPath(filename)
+                let filename = FileSystem.GetFullPathShim(filename)
                 sourceFiles := (filename,m) :: !sourceFiles  
                 globalNoWarns := (!globalNoWarns @ noWarns) 
                 sourceInputs := (filename,input) :: !sourceInputs                 

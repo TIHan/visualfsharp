@@ -737,17 +737,17 @@ let vsSpecificFlags (tcConfigB: TcConfigBuilder) =
     CompilerOption("LCID", tagInt, OptionInt (fun n -> tcConfigB.lcid <- Some(n)), None, None);
     CompilerOption("flaterrors", tagNone, OptionUnit (fun () -> tcConfigB.flatErrors <- true), None, None); 
     CompilerOption("sqmsessionguid", tagNone, OptionString (fun s -> tcConfigB.sqmSessionGuid <- try System.Guid(s) |> Some  with e -> None), None, None);
+    CompilerOption("gccerrors", tagNone, OptionUnit (fun () -> tcConfigB.errorStyle <- ErrorStyle.GccErrors), None, None); 
+    CompilerOption("exename", tagNone, OptionString (fun s -> tcConfigB.exename <- Some(s)), None, None);
     CompilerOption("maxerrors", tagInt, OptionInt (fun n -> tcConfigB.maxErrors <- n), None, None); ]
 
 
 let internalFlags (tcConfigB:TcConfigBuilder) =
   [
-    CompilerOption("use-incremental-build", tagNone, OptionUnit (fun () -> tcConfigB.useIncrementalBuilder <- true), None, None)
     CompilerOption("stamps", tagNone, OptionUnit (fun () -> ()), Some(InternalCommandLineOption("--stamps", rangeCmdArgs)), None);
     CompilerOption("ranges", tagNone, OptionSet Tastops.DebugPrint.layoutRanges, Some(InternalCommandLineOption("--ranges", rangeCmdArgs)), None);  
     CompilerOption("terms" , tagNone, OptionUnit (fun () -> tcConfigB.showTerms <- true), Some(InternalCommandLineOption("--terms", rangeCmdArgs)), None);
     CompilerOption("termsfile" , tagNone, OptionUnit (fun () -> tcConfigB.writeTermsToFiles <- true), Some(InternalCommandLineOption("--termsfile", rangeCmdArgs)), None);
-    CompilerOption("use-incremental-build", tagNone, OptionUnit (fun () -> tcConfigB.useIncrementalBuilder <- true), None, None)
 #if DEBUG
     CompilerOption("debug-parse", tagNone, OptionUnit (fun () -> Internal.Utilities.Text.Parsing.Flags.debug <- true), Some(InternalCommandLineOption("--debug-parse", rangeCmdArgs)), None);
     CompilerOption("ilfiles", tagNone, OptionUnit (fun () -> tcConfigB.writeGeneratedILFiles <- true), Some(InternalCommandLineOption("--ilfiles", rangeCmdArgs)), None);
@@ -777,7 +777,6 @@ let internalFlags (tcConfigB:TcConfigBuilder) =
     CompilerOption("resolutionassemblyfoldersuffix", tagString, OptionString (fun s -> tcConfigB.resolutionAssemblyFoldersSuffix<-s), Some(InternalCommandLineOption("resolutionassemblyfoldersuffix", rangeCmdArgs)), None); // "The base registry key to use for assembly resolution. This part in brackets here: HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\.NETFramework\v2.0.50727\[AssemblyFoldersEx]");
     CompilerOption("resolutionassemblyfoldersconditions", tagString, OptionString (fun s -> tcConfigB.resolutionAssemblyFoldersConditions <- ","^s), Some(InternalCommandLineOption("resolutionassemblyfoldersconditions", rangeCmdArgs)), None); // "Additional reference resolution conditions. For example \"OSVersion=5.1.2600.0,PlatformID=id");
     CompilerOption("msbuildresolution", tagNone, OptionUnit (fun () -> tcConfigB.useMonoResolution<-false), Some(InternalCommandLineOption("msbuildresolution", rangeCmdArgs)), None); // "Resolve assembly references using MSBuild resolution rules rather than directory based (Default=true except when running fsc.exe under mono)");
-    CompilerOption("indirectcallarraymethods", tagNone, OptionUnit (fun () -> tcConfigB.indirectCallArrayMethods<-true), Some(InternalCommandLineOption("--indirectCallArrayMethods", rangeCmdArgs)), None);
     CompilerOption("alwayscallvirt",tagNone,OptionSwitch(callVirtSwitch tcConfigB),Some(InternalCommandLineOption("alwayscallvirt",rangeCmdArgs)), None);
     CompilerOption("nodebugdata",tagNone, OptionUnit (fun () -> tcConfigB.noDebugData<-true),Some(InternalCommandLineOption("--nodebugdata",rangeCmdArgs)), None);
     testFlag tcConfigB  ] @
@@ -1132,8 +1131,8 @@ let ApplyAllOptimizations (tcConfig:TcConfig, tcGlobals, tcVal, outfile, importM
     let optEnv0 = optEnv
     let (TAssembly(implFiles)) = tassembly
     ReportTime tcConfig ("Optimizations");
-    let results,(optEnvFirstLoop,_,_) = 
-        ((optEnv0,optEnv0,optEnv0),implFiles) ||> List.mapFold (fun (optEnvFirstLoop,optEnvExtraLoop,optEnvFinalSimplify) implFile -> 
+    let results,(optEnvFirstLoop,_,_,_) = 
+        ((optEnv0,optEnv0,optEnv0,SignatureHidingInfo.Empty),implFiles) ||> List.mapFold (fun (optEnvFirstLoop,optEnvExtraLoop,optEnvFinalSimplify,hidden) implFile -> 
 
             // Only do abstract_big_targets on the first pass!  Only do it when TLR is on!  
             let optSettings = tcConfig.optSettings 
@@ -1141,8 +1140,8 @@ let ApplyAllOptimizations (tcConfig:TcConfig, tcGlobals, tcVal, outfile, importM
             let optSettings = { optSettings with reportingPhase = true }
             
             //ReportTime tcConfig ("Initial simplify");
-            let optEnvFirstLoop,implFile,implFileOptData = 
-                Optimizer.OptimizeImplFile(optSettings,ccu,tcGlobals,tcVal, importMap,optEnvFirstLoop,isIncrementalFragment,tcConfig.emitTailcalls,implFile)
+            let optEnvFirstLoop,implFile,implFileOptData,hidden = 
+                Optimizer.OptimizeImplFile(optSettings,ccu,tcGlobals,tcVal, importMap,optEnvFirstLoop,isIncrementalFragment,tcConfig.emitTailcalls,hidden,implFile)
 
             let implFile = AutoBox.TransformImplFile tcGlobals importMap implFile 
                             
@@ -1156,7 +1155,7 @@ let ApplyAllOptimizations (tcConfig:TcConfig, tcGlobals, tcVal, outfile, importM
             let implFile,optEnvExtraLoop = 
                 if tcConfig.extraOptimizationIterations > 0 then 
                     //ReportTime tcConfig ("Extra simplification loop");
-                    let optEnvExtraLoop,implFile, _ = Optimizer.OptimizeImplFile(optSettings,ccu,tcGlobals,tcVal, importMap,optEnvExtraLoop,isIncrementalFragment,tcConfig.emitTailcalls,implFile)
+                    let optEnvExtraLoop,implFile, _, _ = Optimizer.OptimizeImplFile(optSettings,ccu,tcGlobals,tcVal, importMap,optEnvExtraLoop,isIncrementalFragment,tcConfig.emitTailcalls,hidden,implFile)
                     //PrintWholeAssemblyImplementation tcConfig outfile (sprintf "extra-loop-%d" n) implFile;
                     implFile,optEnvExtraLoop
                 else
@@ -1181,12 +1180,12 @@ let ApplyAllOptimizations (tcConfig:TcConfig, tcGlobals, tcVal, outfile, importM
             let implFile,optEnvFinalSimplify =
                 if tcConfig.doFinalSimplify then 
                     //ReportTime tcConfig ("Final simplify pass");
-                    let optEnvFinalSimplify,implFile, _ = Optimizer.OptimizeImplFile(optSettings,ccu,tcGlobals,tcVal, importMap,optEnvFinalSimplify,isIncrementalFragment,tcConfig.emitTailcalls,implFile)
+                    let optEnvFinalSimplify,implFile, _, _ = Optimizer.OptimizeImplFile(optSettings,ccu,tcGlobals,tcVal, importMap,optEnvFinalSimplify,isIncrementalFragment,tcConfig.emitTailcalls,hidden,implFile)
                     //PrintWholeAssemblyImplementation tcConfig outfile "post-rec-opt" implFile;
                     implFile,optEnvFinalSimplify 
                 else 
                     implFile,optEnvFinalSimplify 
-            (implFile,implFileOptData),(optEnvFirstLoop,optEnvExtraLoop,optEnvFinalSimplify))
+            (implFile,implFileOptData),(optEnvFirstLoop,optEnvExtraLoop,optEnvFinalSimplify,hidden))
 
     let implFiles,implFileOptDatas = List.unzip results
     let assemblyOptData = Optimizer.UnionOptimizationInfos implFileOptDatas
