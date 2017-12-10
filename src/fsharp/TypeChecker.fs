@@ -12059,6 +12059,10 @@ let TcModuleOrNamespaceLidAndPermitAutoResolve tcSink env amap (longId : Ident l
     | Exception err ->  raze err
 
 let TcOpenDecl tcSink (g:TcGlobals) amap m scopem env (longId : Ident list)  = 
+    for id in longId do
+        if String.IsNullOrWhiteSpace(id.idText) then
+            raise (Error(FSComp.SR.tcOpenIsEmpty(), m))
+
     let modrefs = ForceRaise (TcModuleOrNamespaceLidAndPermitAutoResolve tcSink env amap longId)
 
     // validate opened namespace names

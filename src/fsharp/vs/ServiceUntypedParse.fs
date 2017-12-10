@@ -1261,7 +1261,9 @@ module UntypedParseImpl =
 
                     member __.VisitModuleDecl(defaultTraverse, decl) =
                         match decl with
-                        | SynModuleDecl.Open(_, m) -> 
+                        | SynModuleDecl.Open(LongIdentWithDots(longId, _), m) -> 
+                            let isValidPos = pos.Column > m.StartColumn && (pos.Column > m.EndColumn || pos.Line <> m.EndLine)
+                            let isEmpty = longId |> List.exists(fun x -> String.IsNullOrWhiteSpace(x.idText))
                             // in theory, this means we're "in an open"
                             // in practice, because the parse tree/walkers do not handle attributes well yet, need extra check below to ensure not e.g. $here$
                             //     open System
@@ -1269,7 +1271,7 @@ module UntypedParseImpl =
                             //     let f() = ()
                             // inside an attribute on the next item
                             let pos = mkPos pos.Line (pos.Column - 1) // -1 because for e.g. "open System." the dot does not show up in the parse tree
-                            if rangeContainsPos m pos then  
+                            if isValidPos && (isEmpty || rangeContainsPos m pos) then  
                                 Some CompletionContext.OpenDeclaration
                             else
                                 None

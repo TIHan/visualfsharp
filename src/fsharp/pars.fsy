@@ -286,6 +286,7 @@ let rangeOfLongIdent(lid:LongIdent) =
 %type <Ast.SynExceptionDefn> exconDefn
 %type <Ast.SynExceptionDefnRepr> exconCore
 %type <Ast.SynModuleDecl list> moduleDefnsOrExprPossiblyEmptyOrBlock
+%type <unit> openDeclEmpty
 %type <Ast.LongIdentWithDots> openDecl
 %type <Ast.LongIdentWithDots> path
 %type <Ast.LongIdentWithDots> pathOp
@@ -1256,8 +1257,12 @@ moduleDefn:
         [] }
 
   /* 'open' declarations */
-  | openDecl 
+  | openDecl
       { [SynModuleDecl.Open($1, $1.Range)] }
+
+  | openDeclEmpty 
+      { let m = rhs parseState 1
+        [SynModuleDecl.Open(Ast.LongIdentWithDots([ident("", m)], []), m)] }
 
 
 /* The right-hand-side of a module abbreviation definition */ 
@@ -2354,7 +2359,10 @@ exconRepr:
   |             { None }
   | EQUALS path { Some ($2.Lid) }
 
-openDecl:  
+openDeclEmpty:  
+  | OPEN { }
+
+openDecl:
   | OPEN path { $2 }
 
 
