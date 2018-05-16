@@ -402,6 +402,7 @@ type internal FSharpLanguageService(package : FSharpPackage) =
     inherit AbstractLanguageService<FSharpPackage, FSharpLanguageService>(package)
 
     let projectInfoManager = package.ComponentModel.DefaultExportProvider.GetExport<FSharpProjectOptionsManager>().Value
+    let checkerProvider = package.ComponentModel.DefaultExportProvider.GetExport<FSharpCheckerProvider>().Value
 
     let projectDisplayNameOf projectFileName =
         if String.IsNullOrWhiteSpace projectFileName then projectFileName
@@ -461,13 +462,9 @@ type internal FSharpLanguageService(package : FSharpPackage) =
         this.Workspace.DocumentClosed.Add <| fun args -> tryRemoveSingleFileProject args.Document.Project.Id
 
         Events.SolutionEvents.OnAfterCloseSolution.Add <| fun _ ->
-            //checkerProvider.Checker.StopBackgroundCompile()
-
-            // FUTURE: consider enbling some or all of these to flush all caches and stop all background builds. However the operations
-            // are asynchronous and we need to decide if we stop everything synchronously.
-
-            //checker.ClearLanguageServiceRootCachesAndCollectAndFinalizeAllTransients()
-            //checkerProvider.Checker.InvalidateAll()
+            // Stop background compiler and clear all cache.
+            checkerProvider.Checker.StopBackgroundCompile()
+            checkerProvider.Checker.ClearLanguageServiceRootCachesAndCollectAndFinalizeAllTransients()
 
             singleFileProjects.Keys |> Seq.iter tryRemoveSingleFileProject
 
