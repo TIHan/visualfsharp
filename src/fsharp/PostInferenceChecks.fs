@@ -382,33 +382,32 @@ type PermitByRefExpr =
 
 let ignoreLimit (_limit: bool) = ()
 
-let mkArgsPermit isByRefReturnCall n = 
-    if n=1 then 
-        if isByRefReturnCall then PermitByRefExpr.YesReturnable else  PermitByRefExpr.Yes
+let mkArgsPermit n = 
+    if n=1 then PermitByRefExpr.Yes
     else PermitByRefExpr.YesTupleOfArgs n
 
 /// Work out what byref-values are allowed at input positions to named F# functions or members
-let mkArgsForAppliedVal isBaseCall isByRefReturnCall (vref:ValRef) argsl = 
+let mkArgsForAppliedVal isBaseCall (vref:ValRef) argsl = 
     match vref.ValReprInfo with
     | Some topValInfo -> 
         let argArities = topValInfo.AritiesOfArgs
         let argArities = if isBaseCall && argArities.Length >= 1 then List.tail argArities else argArities
         // Check for partial applications: arguments to partial applciations don't get to use byrefs
         if List.length argsl >= argArities.Length then 
-            List.map (mkArgsPermit isByRefReturnCall) argArities
+            List.map mkArgsPermit argArities
         else
             []
     | None -> []  
 
 /// Work out what byref-values are allowed at input positions to functions
-let rec mkArgsForAppliedExpr isBaseCall isByRefReturnCall argsl x =
+let rec mkArgsForAppliedExpr isBaseCall argsl x =
     match stripExpr x with 
     // recognise val 
-    | Expr.Val (vref,_,_)         -> mkArgsForAppliedVal isBaseCall isByRefReturnCall vref argsl
+    | Expr.Val (vref,_,_)         -> mkArgsForAppliedVal isBaseCall vref argsl
     // step through instantiations 
-    | Expr.App(f,_fty,_tyargs,[],_) -> mkArgsForAppliedExpr isBaseCall isByRefReturnCall argsl f        
+    | Expr.App(f,_fty,_tyargs,[],_) -> mkArgsForAppliedExpr isBaseCall argsl f        
     // step through subsumption coercions 
-    | Expr.Op(TOp.Coerce,_,[f],_) -> mkArgsForAppliedExpr isBaseCall isByRefReturnCall argsl f        
+    | Expr.Op(TOp.Coerce,_,[f],_) -> mkArgsForAppliedExpr isBaseCall argsl f        
     | _  -> []
 
 /// Check types occurring in the TAST.
@@ -563,16 +562,12 @@ and CheckValUse (cenv: cenv) (env: env) (vref: ValRef, vFlags, m) (context: Perm
         if isCallOfConstructorOfAbstractType then 
             errorR(Error(FSComp.SR.tcAbstractTypeCannotBeInstantiated(),m))
 
-        let isReturnExprBuiltUsingByRefLocal = 
-            context.PermitOnlyReturnable &&
-            isByrefTy g vref.Type &&
-            // The value is a local....
-            vref.ValReprInfo.IsNone && 
-            // The value is not an argument....
-            not (env.argVals.ContainsVal(vref.Deref))
+        let isReturnStackReferringByRef = 
+            context.PermitOnlyReturnable && 
+            vref.Deref.IsStackReferringByRef
 
-        if isReturnExprBuiltUsingByRefLocal then
-            errorR(Error(FSComp.SR.chkNoByrefReturnOfLocal(vref.DisplayName), m))
+        if isReturnStackReferringByRef then
+            errorR(Error(FSComp.SR.chkNoByrefAddressOfLocal(vref.DisplayName), m))
           
         let isReturnOfStructThis = 
             context.PermitOnlyReturnable && 
@@ -709,7 +704,7 @@ and CheckExpr (cenv:cenv) (env:env) origExpr (context:PermitByRefExpr) : bool =
             CheckValRef cenv env v m PermitByRefExpr.No
             CheckValRef cenv env baseVal m PermitByRefExpr.No
             CheckTypeInstNoByrefs cenv env m tyargs
-            CheckExprs cenv env rest (mkArgsForAppliedExpr true false rest f)
+            CheckExprs cenv env rest (mkArgsForAppliedExpr true rest f)
 
     // Allow base calls to IL methods
     | Expr.Op (TOp.ILCall (virt,_,_,_,_,_,_,mref,enclTypeArgs,methTypeArgs,tys),tyargs,(Expr.Val(baseVal,_,_)::rest),m) 
@@ -762,7 +757,16 @@ and CheckExpr (cenv:cenv) (env:env) origExpr (context:PermitByRefExpr) : bool =
         // If return is a byref, and being used as a return, then all arguments must be usable as byref returns
         let isByRefReturnCall = context.PermitOnlyReturnable && isByrefTy g (tyOfExpr g expr) 
 
-        CheckExprs cenv env argsl (mkArgsForAppliedExpr false isByRefReturnCall argsl f)
+        if isByRefReturnCall then
+            argsl
+            |> List.iter (fun e ->
+                match TryPickExprReturnStackReferringByRef cenv env e with
+                | Some(vref, m) ->
+                    errorR(Error(FSComp.SR.chkNoByrefReturnOfLocal(vref.DisplayName), m))
+                | _ -> ()
+            )
+
+        CheckExprs cenv env argsl (mkArgsForAppliedExpr false argsl f)
 
     | Expr.Lambda(_,_ctorThisValOpt,_baseValOpt,argvs,_,m,rty) -> 
         let topValInfo = ValReprInfo ([],[argvs |> List.map (fun _ -> ValReprInfo.unnamedTopArg1)],ValReprInfo.unnamedRetVal) 
@@ -884,15 +888,20 @@ and CheckExprOp cenv env (op,tyargs,args,m) context expr =
 
             if context.Disallow then 
                 errorR(Error(FSComp.SR.chkNoAddressOfAtThisPoint(vref.DisplayName), m))
-            
-            let returningAddrOfLocal = 
-                context.PermitOnlyReturnable && 
-                // The value is a local....
-                vref.ValReprInfo.IsNone && 
-                // The value is not an argument...
-                not (env.argVals.ContainsVal(vref.Deref)) 
-            
-            if returningAddrOfLocal then 
+
+            let returningAddrOfLocal =
+                context.PermitOnlyReturnable &&
+                (
+                    (
+                        // The value is a local....
+                        vref.ValReprInfo.IsNone &&
+                        // The value is not an argument...
+                        not (env.argVals.ContainsVal(vref.Deref))
+                    ) ||
+                    vref.Deref.IsStackReferringByRef
+                )
+
+            if returningAddrOfLocal then
                 errorR(Error(FSComp.SR.chkNoByrefAddressOfLocal(vref.DisplayName), m))
 
         let limit1 = IsLimited cenv env m vref
@@ -1295,6 +1304,44 @@ and AdjustAccess isHidden (cpath: unit -> CompilationPath) access =
     else 
         access
 
+and TryPickExprReturnStackReferringByRef cenv env e : (ValRef * range) option =
+    match e with
+    | Expr.Op(TOp.LValueOp(LAddrOf _, vref), _, _, m) -> 
+        let isStackReferringByRef =
+            // The value is a local....
+            vref.ValReprInfo.IsNone && 
+            // The value is not an argument....
+            not (env.argVals.ContainsVal(vref.Deref))
+
+        if isStackReferringByRef then
+            Some(vref, m)
+        else
+            None
+
+    | Expr.Val(vref, _, m) -> 
+        if vref.Deref.IsStackReferringByRef then
+            Some(vref, m)
+        else
+            None
+
+    | Expr.App(_, _, _, args, _) -> 
+        args
+        |> List.tryPick (fun arg -> 
+            TryPickExprReturnStackReferringByRef cenv env arg
+        )
+
+    | Expr.Sequential(e1, e2, _, _, _) -> 
+        let result1 = TryPickExprReturnStackReferringByRef cenv env e1
+        if result1.IsNone then
+            TryPickExprReturnStackReferringByRef cenv env e2
+        else
+            None
+
+    | Expr.Let(_, e, _, _) -> 
+        TryPickExprReturnStackReferringByRef cenv env e
+
+    | _ -> None
+
 and CheckBinding cenv env alwaysCheckNoReraise (TBind(v,bindRhs,_) as bind) : bool =
     let g = cenv.g
     let isTop = Option.isSome bind.Var.ValReprInfo
@@ -1324,6 +1371,11 @@ and CheckBinding cenv env alwaysCheckNoReraise (TBind(v,bindRhs,_) as bind) : bo
     if (v.IsMemberOrModuleBinding || v.IsMember) && not v.IsIncrClassGeneratedMember then 
         let access =  AdjustAccess (IsHiddenVal env.sigToImplRemapInfo v) (fun () -> v.TopValDeclaringEntity.CompilationPath) v.Accessibility
         CheckTypeForAccess cenv env (fun () -> NicePrint.stringOfQualifiedValOrMember cenv.denv v) access v.Range v.Type
+
+    if not isTop && isByrefTy g v.Type then
+        match TryPickExprReturnStackReferringByRef cenv env bindRhs with
+        | Some(_) -> v.SetIsStackReferringByRef()
+        | _ -> ()
     
     let env = if v.IsConstructor && not v.IsIncrClassConstructor then { env with ctorLimitedZone=true } else env
 

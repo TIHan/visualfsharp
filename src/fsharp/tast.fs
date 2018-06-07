@@ -232,25 +232,29 @@ type ValFlags(flags:int64) =
                                      | ValInRecScope(false) ->               0b0000001000000000000L) 
             ValFlags(flags)
 
-    member x.MakesNoCriticalTailcalls         =                   (flags &&& 0b0000010000000000000L) <> 0L
+    member x.MakesNoCriticalTailcalls                   = (flags &&& 0b0000010000000000000L) <> 0L
 
-    member x.WithMakesNoCriticalTailcalls =               ValFlags(flags ||| 0b0000010000000000000L)
+    member x.WithMakesNoCriticalTailcalls               = ValFlags(flags ||| 0b0000010000000000000L)
 
-    member x.PermitsExplicitTypeInstantiation =                   (flags &&& 0b0000100000000000000L) <> 0L
+    member x.PermitsExplicitTypeInstantiation           = (flags &&& 0b0000100000000000000L) <> 0L
 
-    member x.HasBeenReferenced                =                   (flags &&& 0b0001000000000000000L) <> 0L
+    member x.HasBeenReferenced                          = (flags &&& 0b0001000000000000000L) <> 0L
 
-    member x.WithHasBeenReferenced                     =  ValFlags(flags ||| 0b0001000000000000000L)
+    member x.WithHasBeenReferenced                      = ValFlags(flags ||| 0b0001000000000000000L)
 
-    member x.IsCompiledAsStaticPropertyWithoutField =             (flags &&& 0b0010000000000000000L) <> 0L
+    member x.IsCompiledAsStaticPropertyWithoutField     = (flags &&& 0b0010000000000000000L) <> 0L
 
     member x.WithIsCompiledAsStaticPropertyWithoutField = ValFlags(flags ||| 0b0010000000000000000L)
 
-    member x.IsGeneratedEventVal =                                (flags &&& 0b0100000000000000000L) <> 0L
+    member x.IsGeneratedEventVal                        = (flags &&& 0b0100000000000000000L) <> 0L
 
-    member x.IsFixed                                =             (flags &&& 0b1000000000000000000L) <> 0L
+    member x.IsFixed                                    = (flags &&& 0b1000000000000000000L) <> 0L
 
-    member x.WithIsFixed                               =  ValFlags(flags ||| 0b1000000000000000000L)
+    member x.WithIsFixed                                = ValFlags(flags ||| 0b1000000000000000000L)
+
+    member x.IsStackReferringByRef                      = (flags &&& 0b10000000000000000000L) <> 0L
+
+    member x.WithIsStackReferringByRef                  = ValFlags(flags ||| 0b10000000000000000000L)
 
     /// Get the flags as included in the F# binary metadata
     member x.PickledBits = 
@@ -258,7 +262,8 @@ type ValFlags(flags:int64) =
         // Clear the IsCompiledAsStaticPropertyWithoutField, only used to determine whether to use a true field for a value, and to eliminate the optimization info for observable bindings
         // Clear the HasBeenReferenced, only used to report "unreferenced variable" warnings and to help collect 'it' values in FSI.EXE
         // Clear the IsGeneratedEventVal, since there's no use in propagating specialname information for generated add/remove event vals
-                                                      (flags       &&&    ~~~0b0011001100000000000L) 
+        // Clear the IsStackReferringByRef, only used during post inference checks in local functions.
+                                                      (flags       &&&    ~~~0b10111001100000000000L) 
 
 /// Represents the kind of a type parameter
 [<RequireQualifiedAccess; StructuredFormatDisplay("{DebugText}")>]
@@ -2673,6 +2678,8 @@ and [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
     /// Indicates if the value is pinned/fixed
     member x.IsFixed = x.val_flags.IsFixed
 
+    member x.IsStackReferringByRef = x.val_flags.IsStackReferringByRef
+
     /// Indicates if this value allows the use of an explicit type instantiation (i.e. does it itself have explicit type arguments,
     /// or does it have a signature?)
     member x.PermitsExplicitTypeInstantiation = x.val_flags.PermitsExplicitTypeInstantiation
@@ -2895,6 +2902,8 @@ and [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
     member x.SetIsCompiledAsStaticPropertyWithoutField() = x.val_flags <- x.val_flags.WithIsCompiledAsStaticPropertyWithoutField
 
     member x.SetIsFixed()                                = x.val_flags <- x.val_flags.WithIsFixed
+
+    member x.SetIsStackReferringByRef()                  = x.val_flags <- x.val_flags.WithIsStackReferringByRef
 
     member x.SetValReprInfo info                         = 
         match x.val_opt_data with
