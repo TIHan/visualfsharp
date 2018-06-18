@@ -1446,6 +1446,7 @@ val isOutByrefTy : TcGlobals -> TType -> bool
 val isByrefTy : TcGlobals -> TType -> bool
 
 val isNativePtrTy : TcGlobals -> TType -> bool
+val isPointerTy : TcGlobals -> TType -> bool
 val destByrefTy : TcGlobals -> TType -> TType
 val destNativePtrTy : TcGlobals -> TType -> TType
 

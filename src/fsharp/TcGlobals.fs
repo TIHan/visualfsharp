@@ -337,6 +337,7 @@ type public TcGlobals(compilingFslib: bool, ilg:ILGlobals, fslibCcu: CcuThunk, d
   let v_decimal_ty      = mkSysNonGenericTy sys "Decimal"
   let v_unit_ty         = mkNonGenericTy v_unit_tcr_nice 
   let v_system_Type_ty = mkSysNonGenericTy sys "Type" 
+  let v_voidptr_ty      = mkNonGenericTy v_voidptr_tcr
 
   
   let v_system_Reflection_MethodInfo_ty = mkSysNonGenericTy ["System";"Reflection"] "MethodInfo"
@@ -679,7 +680,9 @@ type public TcGlobals(compilingFslib: bool, ilg:ILGlobals, fslibCcu: CcuThunk, d
   let v_array3D_set_info           = makeIntrinsicValRef(fslib_MFIntrinsicFunctions_nleref,                    "SetArray3D"                           , None                 , None          , [vara],     ([[mkArrayType 3 varaTy];[v_int_ty]; [v_int_ty]; [v_int_ty]; [varaTy]], v_unit_ty))
   let v_array4D_set_info           = makeIntrinsicValRef(fslib_MFIntrinsicFunctions_nleref,                    "SetArray4D"                           , None                 , None          , [vara],     ([[mkArrayType 4 varaTy];[v_int_ty]; [v_int_ty]; [v_int_ty]; [v_int_ty]; [varaTy]], v_unit_ty))
 
-  let v_nativeptr_tobyref_info     = makeIntrinsicValRef(fslib_MFNativePtrModule_nleref,                       "toByRef"                              , None                 , Some "ToByRefInlined", [vara], ([[mkNativePtrTy varaTy]], mkByrefTy varaTy))  
+  let v_nativeptr_tobyref_info     = makeIntrinsicValRef(fslib_MFNativePtrModule_nleref,                       "toByRef"                              , None                 , Some "ToByRefInlined",   [vara], ([[mkNativePtrTy varaTy]], mkByrefTy varaTy)) 
+  let v_nativeptr_stackalloc_info  = makeIntrinsicValRef(fslib_MFNativePtrModule_nleref,                       "stackalloc"                           , None                 , Some "StackAllocate",    [vara], ([[v_int_ty]], mkNativePtrTy varaTy))
+  let v_nativeptr_tovoidptr_info   = makeIntrinsicValRef(fslib_MFNativePtrModule_nleref,                       "toVoidPtr"                            , None                 , Some "ToVoidPtrInlined", [vara], ([[mkNativePtrTy varaTy]], v_voidptr_ty))
 
   let v_seq_collect_info           = makeIntrinsicValRef(fslib_MFSeqModule_nleref,                             "collect"                              , None                 , Some "Collect", [vara;varb;varc], ([[varaTy --> varbTy]; [mkSeqTy varaTy]], mkSeqTy varcTy))  
   let v_seq_delay_info             = makeIntrinsicValRef(fslib_MFSeqModule_nleref,                             "delay"                                , None                 , Some "Delay"  , [varb],     ([[v_unit_ty --> mkSeqTy varbTy]], mkSeqTy varbTy)) 
@@ -1343,6 +1346,8 @@ type public TcGlobals(compilingFslib: bool, ilg:ILGlobals, fslibCcu: CcuThunk, d
   member val seq_singleton_vref         = ValRefForIntrinsic v_seq_singleton_info
   member val seq_collect_vref           = ValRefForIntrinsic v_seq_collect_info
   member val nativeptr_tobyref_vref     = ValRefForIntrinsic v_nativeptr_tobyref_info
+  member val nativeptr_stackalloc_vref  = ValRefForIntrinsic v_nativeptr_stackalloc_info
+  member val nativeptr_tovoidptr_vref   = ValRefForIntrinsic v_nativeptr_tovoidptr_info
   member val seq_using_vref             = ValRefForIntrinsic v_seq_using_info
   member val seq_delay_vref             = ValRefForIntrinsic  v_seq_delay_info
   member val seq_append_vref            = ValRefForIntrinsic  v_seq_append_info
