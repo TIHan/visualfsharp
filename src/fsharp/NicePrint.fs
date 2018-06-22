@@ -736,11 +736,12 @@ module private PrintTypes =
             match kind with 
             | TyparKind.Type -> restL
             | TyparKind.Measure -> squareAngleL (wordL (tagClass "Measure")) @@ restL
+            | TyparKind.Nullable -> restL
 
     and layoutTyparAttribs denv kind attrs restL =         
         match attrs, kind with
         | [], TyparKind.Type -> restL 
-        | _, _  -> squareAngleL (sepListL (rightL (tagPunctuation ";")) ((match kind with TyparKind.Type -> [] | TyparKind.Measure -> [wordL (tagText "Measure")]) @ List.map (layoutAttrib denv) attrs)) ^^ restL
+        | _, _  -> squareAngleL (sepListL (rightL (tagPunctuation ";")) ((match kind with TyparKind.Type | TyparKind.Nullable -> [] | TyparKind.Measure -> [wordL (tagText "Measure")]) @ List.map (layoutAttrib denv) attrs)) ^^ restL
 
     and private layoutTyparRef denv (typar:Typar) =
         wordL (tagTypeParameter (sprintf "%s%s%s"

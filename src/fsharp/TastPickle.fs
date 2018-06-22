@@ -1312,7 +1312,8 @@ let u_vrefs = u_list u_vref
 let p_kind x st =
     p_byte (match x with
             | TyparKind.Type -> 0
-            | TyparKind.Measure -> 1) st
+            | TyparKind.Measure -> 1
+            | TyparKind.Nullable -> 0) st
 
 let p_member_kind x st = 
     p_byte (match x with 

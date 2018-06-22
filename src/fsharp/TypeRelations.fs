@@ -130,6 +130,7 @@ let ChooseTyparSolutionAndRange (g: TcGlobals) amap (tp:Typar) =
              match tp.Kind with 
              | TyparKind.Type -> g.obj_ty 
              | TyparKind.Measure -> TType_measure Measure.One
+             | TyparKind.Nullable -> g.obj_ty
          // Loop through the constraints computing the lub
          ((initial,m), tp.Constraints) ||> List.fold (fun (maxSoFar,_) tpc -> 
              let join m x = 

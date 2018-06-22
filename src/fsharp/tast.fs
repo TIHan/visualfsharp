@@ -268,10 +268,13 @@ type TyparKind =
 
     | Measure
 
+    | Nullable
+
     member x.AttrName =
       match x with
       | TyparKind.Type -> None
       | TyparKind.Measure -> Some "Measure"
+      | TyparKind.Nullable -> Some "Nullable"
 
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText  =  x.ToString()
@@ -280,6 +283,7 @@ type TyparKind =
       match x with
       | TyparKind.Type -> "type"
       | TyparKind.Measure -> "measure"
+      | TyparKind.Nullable -> "nullable"
 
 [<RequireQualifiedAccess>]
 /// Indicates if the type variable can be solved or given new constraints. The status of a type variable
@@ -327,7 +331,8 @@ type TyparFlags(flags:int32) =
                      | TyparRigidity.Anon           -> 0b0000010000000) |||
                    (match kind with
                      | TyparKind.Type               -> 0b0000000000000
-                     | TyparKind.Measure            -> 0b0000100000000) |||   
+                     | TyparKind.Measure            -> 0b0000100000000
+                     | TyparKind.Nullable           -> 0b0000000000000) |||   
                    (if comparisonDependsOn then 
                                                        0b0001000000000 else 0) |||
                    (match dynamicReq with
@@ -3936,7 +3941,12 @@ and
     override x.ToString() =  
         match x with 
         | TType_forall (_tps,ty) -> "forall ...  " + ty.ToString()
-        | TType_app (tcref, tinst) -> tcref.DisplayName + (match tinst with [] -> "" | tys -> "<" + String.concat "," (List.map string tys) + ">")
+        | TType_app (tcref, tinst) -> 
+            let name = tcref.DisplayName + (match tinst with [] -> "" | tys -> "<" + String.concat "," (List.map string tys) + ">")
+            if false then
+                name + "?"
+            else
+                name
         | TType_tuple (tupInfo, tinst) -> 
             (match tupInfo with 
              | TupInfo.Const false -> ""
@@ -5221,6 +5231,7 @@ let mkTyparTy (tp:Typar) =
     match tp.Kind with 
     | TyparKind.Type -> tp.AsType 
     | TyparKind.Measure -> TType_measure (Measure.Var tp)
+    | TyparKind.Nullable -> tp.AsType
 
 let copyTypar (tp: Typar) = 
     let optData = tp.typar_opt_data |> Option.map (fun tg -> { typar_il_name = tg.typar_il_name; typar_xmldoc = tg.typar_xmldoc; typar_constraints = tg.typar_constraints; typar_attribs = tg.typar_attribs })

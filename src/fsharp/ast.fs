@@ -451,6 +451,7 @@ and
     | MeasureDivide of dividendType:SynType * divisorType:SynType * range:range
     /// F# syntax : for units of measure e.g. m^3, kg^1/2
     | MeasurePower of measureType:SynType * SynRationalConst * range:range
+    | Nullable of typeName: SynType * range:range
     /// F# syntax : 1, "abc" etc, used in parameters to type providers
     /// For the dimensionless units i.e. 1 , and static parameters to provided types
     | StaticConstant of constant:SynConst * range:range
@@ -475,7 +476,8 @@ and
         | SynType.StaticConstantNamed (range=m)
         | SynType.HashConstraint (range=m)
         | SynType.MeasureDivide (range=m)
-        | SynType.MeasurePower (range=m) -> m
+        | SynType.MeasurePower (range=m)
+        | SynType.Nullable (range=m) -> m
         | SynType.LongIdent(lidwd) -> lidwd.Range
 
 

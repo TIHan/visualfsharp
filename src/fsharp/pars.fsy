@@ -1909,7 +1909,6 @@ autoPropsDefnDecl:
 opt_typ:
    | /* EMPTY */ { None } 
    | COLON typ { Some $2 }
-
    
 atomicPatternLongIdent:
   | GLOBAL DOT pathOp  { let (LongIdentWithDots(lid,dotms)) = $3 in (None,LongIdentWithDots(ident(MangledGlobalName,rhs parseState 1)::lid, rhs parseState 2::dotms)) }
@@ -4387,6 +4386,9 @@ appType:
 
   | powerType 
       { $1 }
+
+  | powerType QMARK
+    { SynType.Nullable($1, lhs parseState) }
 
   | typar      COLON_GREATER typ                     
       {  let tp,typ = $1,$3 

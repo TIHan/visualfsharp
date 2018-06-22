@@ -2389,8 +2389,8 @@ module PrettyTypes =
                     if NeedsPrettyTyparName tp then 
                         let (typeIndex, measureIndex, baseName, letters, i) = 
                           match tp.Kind with 
-                          | TyparKind.Type -> (typeIndex+1, measureIndex, 'a', 20, typeIndex) 
                           | TyparKind.Measure -> (typeIndex, measureIndex+1, 'u', 6, measureIndex)
+                          | _ -> (typeIndex+1, measureIndex, 'a', 20, typeIndex) 
                         let nm = 
                            if i < letters then String.make 1 (char(int baseName + i)) 
                            else String.make 1 baseName + string (i-letters+1)
@@ -2402,8 +2402,8 @@ module PrettyTypes =
                             // Use the next index and append it to the natural name
                             let (typeIndex, measureIndex, nm) = 
                               match tp.Kind with 
-                              | TyparKind.Type -> (typeIndex+1, measureIndex, tp.Name+ string typeIndex) 
                               | TyparKind.Measure -> (typeIndex, measureIndex+1, tp.Name+ string measureIndex)
+                              | _ -> (typeIndex+1, measureIndex, tp.Name+ string typeIndex) 
                             tryName (nm, typeIndex, measureIndex) (fun () -> 
                                 tryAgain (typeIndex, measureIndex)))
                 else
@@ -3452,7 +3452,7 @@ module DebugPrint = begin
     let rec tyconL (tycon:Tycon) =
         if tycon.IsModuleOrNamespace then entityL tycon else 
         
-        let lhsL = wordL (tagText (match tycon.TypeOrMeasureKind with TyparKind.Measure -> "[<Measure>] type" | TyparKind.Type -> "type")) ^^ wordL (tagText tycon.DisplayName) ^^ layoutTyparDecls tycon.TyparsNoRange
+        let lhsL = wordL (tagText (match tycon.TypeOrMeasureKind with TyparKind.Measure -> "[<Measure>] type" | _ -> "type")) ^^ wordL (tagText tycon.DisplayName) ^^ layoutTyparDecls tycon.TyparsNoRange
         let lhsL = lhsL --- layoutAttribs tycon.Attribs
         let memberLs = 
             let adhoc = 

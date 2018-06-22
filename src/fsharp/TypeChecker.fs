@@ -854,6 +854,7 @@ let TcConst cenv ty m env c =
             match tcref.TypeOrMeasureKind with
             | TyparKind.Type -> error(Error(FSComp.SR.tcExpectedUnitOfMeasureNotType(), m))
             | TyparKind.Measure -> Measure.Con tcref
+            | TyparKind.Nullable -> error(Error(FSComp.SR.tcExpectedUnitOfMeasureNotType(), m))
 
         | SynMeasure.Power(ms, exponent, _) -> Measure.RationalPower (tcMeasure ms, TcSynRationalConst exponent)
         | SynMeasure.Product(ms1, ms2, _) -> Measure.Prod(tcMeasure ms1, tcMeasure ms2)     
@@ -4556,6 +4557,13 @@ and TcTypeOrMeasure optKind cenv newOk checkCxs occ env (tpenv:SyntacticUnscoped
         | Some TyparKind.Measure, TyparKind.Type ->
             error(Error(FSComp.SR.tcExpectedUnitOfMeasureNotType(), m)) 
             TType_measure (NewErrorMeasure ()), tpenv
+        | _, TyparKind.Nullable ->
+            let typ, tpenv = TcTypeApp cenv newOk checkCxs occ env tpenv m tcref [] []
+            let typ =
+                match typ with
+                | TType_app(ty, m) -> TType_app(ty, m)
+                | _ -> typ
+            typ, tpenv
         | _, TyparKind.Measure ->
             TType_measure (Measure.Con tcref), tpenv
         | _, TyparKind.Type ->
@@ -4583,7 +4591,9 @@ and TcTypeOrMeasure optKind cenv newOk checkCxs occ env (tpenv:SyntacticUnscoped
               
             | _, _ ->
                 errorR(Error(FSComp.SR.tcUnitsOfMeasureInvalidInTypeConstructor(), m))
-                NewErrorType (), tpenv          
+                NewErrorType (), tpenv   
+                
+        | _, _ -> error(Error(FSComp.SR.tcExpectedUnitOfMeasureNotType(), m))
 
     | SynType.LongIdentApp (ltyp, LongIdentWithDots(longId, _), _, args, _commas, _, m) -> 
         let ad = env.eAccessRights
@@ -4621,6 +4631,7 @@ and TcTypeOrMeasure optKind cenv newOk checkCxs occ env (tpenv:SyntacticUnscoped
         match tp'.Kind with
         | TyparKind.Measure -> TType_measure (Measure.Var tp'), tpenv
         | TyparKind.Type -> mkTyparTy tp', tpenv
+        | TyparKind.Nullable -> mkTyparTy tp', tpenv
 
     // _ types
     | SynType.Anon m ->           
@@ -4628,6 +4639,7 @@ and TcTypeOrMeasure optKind cenv newOk checkCxs occ env (tpenv:SyntacticUnscoped
         match tp.Kind with
         | TyparKind.Measure -> TType_measure (Measure.Var tp), tpenv
         | TyparKind.Type -> mkTyparTy tp, tpenv
+        | _ -> error(Error(FSComp.SR.tcExpectedUnitOfMeasureNotType(), m))
 
     | SynType.WithGlobalConstraints(ty, wcs, _) ->
         let cty, tpenv = TcTypeAndRecover cenv newOk checkCxs occ env tpenv ty
@@ -4690,6 +4702,9 @@ and TcTypeOrMeasure optKind cenv newOk checkCxs occ env (tpenv:SyntacticUnscoped
     | SynType.App(_, _, _, _, _, _, m) ->
         errorR(Error(FSComp.SR.tcIllegalSyntaxInTypeExpression(), m))
         NewErrorType (), tpenv
+
+    | SynType.Nullable(ty, _m) ->
+        TcTypeOrMeasure (Some TyparKind.Nullable) cenv newOk checkCxs occ env tpenv ty
 
 and TcType cenv newOk checkCxs occ env (tpenv:SyntacticUnscopedTyparEnv) ty = 
     TcTypeOrMeasure (Some TyparKind.Type) cenv newOk checkCxs occ env tpenv ty
@@ -13252,6 +13267,7 @@ module MutRecBindingChecking =
                                     match memberFlags.MemberKind with 
                                     | MemberKind.Constructor -> error(Error(FSComp.SR.tcMeasureDeclarationsRequireStaticMembersNotConstructors(), m))
                                     | _ -> ()
+                            | _ -> error(Error(FSComp.SR.tcExpectedUnitOfMeasureNotType(), m))
                             let rbind = NormalizedRecBindingDefn(containerInfo, newslotsOK, declKind, bind)
                             let overridesOK  = DeclKind.CanOverrideOrImplement(declKind)
                             let (binds, _values), (tpenv, recBindIdx) = AnalyzeAndMakeAndPublishRecursiveValue overridesOK false cenv envForTycon (tpenv, recBindIdx) rbind
