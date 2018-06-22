@@ -1591,7 +1591,8 @@ let isUnitTy     g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _) -> 
 let isObjTy      g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _) -> tyconRefEq g g.system_Object_tcref tcref | _ -> false) 
 let isVoidTy     g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _) -> tyconRefEq g g.system_Void_tcref tcref   | _ -> false) 
 let isILAppTy    g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _) -> tcref.IsILTycon                          | _ -> false) 
-let isNativePtrTy    g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _) -> tyconRefEq g g.nativeptr_tcr tcref           | _ -> false) 
+let isNativePtrTy    g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _) -> tyconRefEq g g.nativeptr_tcr tcref           | _ -> false)
+let isNullrefTy  g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _) -> tyconRefEq g g.nullref_tcr tcref | _ -> false)
 
 let isByrefTy    g ty = 
     ty |> stripTyEqns g |> (function 

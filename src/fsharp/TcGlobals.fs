@@ -220,7 +220,8 @@ type public TcGlobals(compilingFslib: bool, ilg:ILGlobals, fslibCcu: CcuThunk, d
   let v_pint_tcr       = mk_MFCore_tcref fslibCcu "int`1"  
   let v_pint8_tcr      = mk_MFCore_tcref fslibCcu "sbyte`1"  
   let v_pint16_tcr     = mk_MFCore_tcref fslibCcu "int16`1"  
-  let v_pint64_tcr     = mk_MFCore_tcref fslibCcu "int64`1"  
+  let v_pint64_tcr     = mk_MFCore_tcref fslibCcu "int64`1"
+  let v_nullref_tcr    = mk_MFCore_tcref fslibCcu "nullref`1"
   let v_byref_tcr      = mk_MFCore_tcref fslibCcu "byref`1"
   let v_byref2_tcr      = mk_MFCore_tcref fslibCcu "byref`2"
   let v_outref_tcr      = mk_MFCore_tcref fslibCcu "outref`1"
@@ -945,6 +946,7 @@ type public TcGlobals(compilingFslib: bool, ilg:ILGlobals, fslibCcu: CcuThunk, d
   member __.pint8_tcr      = v_pint8_tcr
   member __.pint16_tcr     = v_pint16_tcr
   member __.pint64_tcr     = v_pint64_tcr
+  member __.nullref_tcr    = v_nullref_tcr
   member __.byref_tcr      = v_byref_tcr
   member __.byref2_tcr      = v_byref2_tcr
   member __.outref_tcr      = v_outref_tcr

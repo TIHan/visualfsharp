@@ -347,6 +347,8 @@ namespace Microsoft.FSharp.Core
     [<MeasureAnnotatedAbbreviation>] type int16<[<Measure>] 'Measure> = int16
     [<MeasureAnnotatedAbbreviation>] type int64<[<Measure>] 'Measure> = int64
 
+    type nullref<'T when 'T : not struct> = (# "!0" #)
+
     /// <summary>Represents a managed pointer in F# code.</c></summary>
     type byref<'T> = (# "!0&" #)
 

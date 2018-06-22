@@ -800,6 +800,8 @@ namespace Microsoft.FSharp.Core
     /// <c>System.Int64</c>.</summary>
     type int64<[<Measure>] 'Measure> = int64
 
+    type nullref<'T when 'T : not struct> = (# "!0" #)
+
     /// <summary>Represents a managed pointer in F# code.</summary>
 #if BUILDING_WITH_LKG || BUILD_FROM_SOURCE
     [<CompilerMessage("This construct is for use in the FSharp.Core library and should not be used directly", 1204, IsHidden=true)>]
