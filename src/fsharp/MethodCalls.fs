@@ -585,7 +585,7 @@ let TakeObjAddrForMethodCall g amap (minfo:MethInfo) isMutable m objArgs f =
             let hasCallInfo = ccallInfo.IsSome
             let mustTakeAddress = hasCallInfo || minfo.ObjArgNeedsAddress(amap, m)
             let objArgTy = tyOfExpr g objArgExpr
-            let wrap, objArgExpr', _readonly, _writeonly = mkExprAddrOfExpr g mustTakeAddress hasCallInfo isMutable objArgExpr None m
+            let wrap, objArgExpr', readonly, _writeonly = mkExprAddrOfExpr g mustTakeAddress hasCallInfo isMutable objArgExpr None m
             
             // Extension members and calls to class constraints may need a coercion for their object argument
             let objArgExpr' = 
@@ -594,6 +594,22 @@ let TakeObjAddrForMethodCall g amap (minfo:MethInfo) isMutable m objArgs f =
                   mkCoerceExpr(objArgExpr', minfo.ApparentEnclosingType, m, objArgTy)
               else
                   objArgExpr'
+
+            if mustTakeAddress && readonly && minfo.IsExtensionMember then
+                match minfo with
+                | FSMeth(_, _, vref, _) ->
+                    let ty, _ = destFunTy g vref.Type
+                    if isByrefTy g ty && not (isInByrefTy g ty) then
+                        errorR(Error(FSComp.SR.tcCannotCallExtensionMemberInrefToByref(), m))
+                | ILMeth(_, info, _) ->
+                    let paramTypes = info.GetRawArgTypes(amap, m, minfo.FormalMethodInst)
+                    match paramTypes with
+                    | [] -> failwith "impossible"
+                    | ty :: _ ->
+                        let ty = stripTyEqns g ty
+                        if isByrefTy g ty && not (isInByrefTy g ty) then
+                            errorR(Error(FSComp.SR.tcCannotCallExtensionMemberInrefToByref(), m))
+                | _ -> ()
 
             wrap, [objArgExpr'] 
 

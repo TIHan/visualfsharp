@@ -847,6 +847,20 @@ type ILMethInfo =
     /// Get the compiled return type of the method, where 'void' is None.
     member x.GetCompiledReturnTy (amap, m, minst) =
         ImportReturnTypeFromMetaData amap m x.RawMetadata.Return.Type x.MetadataScope x.DeclaringTypeInst minst 
+        |> Option.map (fun ty ->
+            if isByrefTy x.TcGlobals ty then
+                let hasReadOnlyAttribute =
+                    x.RawMetadata.Return.CustomAttrs.AsList
+                    |> List.exists (fun ilattrib ->
+                        ilattrib.Method.DeclaringType.TypeRef.Name = "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                    )
+                if hasReadOnlyAttribute then
+                    mkInByrefTy x.TcGlobals (destByrefTy x.TcGlobals ty)
+                else
+                    ty
+            else
+                ty 
+        )
 
     /// Get the F# view of the return type of the method, where 'void' is 'unit'.
     member x.GetFSharpReturnTy (amap, m, minst) = 
