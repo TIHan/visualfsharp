@@ -340,17 +340,21 @@ let rec CheckTypeDeep ((visitTy,visitTyconRefOpt,visitAppTyOpt,visitTraitSolutio
         | None -> ()
 
     | TType_ucase (_,tinst) -> CheckTypesDeep f g env tinst
-    | TType_tuple (_,tys) -> CheckTypesDeep f g env tys
-    | TType_fun (s,t) -> CheckTypeDeep f g env false s; CheckTypeDeep f g env false t
     | TType_var tp -> 
           if not tp.IsSolved then 
               match visitTyarOpt with 
               | None -> ()
               | Some visitTyar -> 
                     visitTyar (env,tp)
+    
+    | TType_tuple (_,tys) -> CheckTypesDeepNoInner f g env tys
+    | TType_fun (s,t) -> CheckTypeDeep f g env false s; CheckTypeDeep f g env false t
 
 and CheckTypesDeep f g env tys = 
     tys |> List.iter (CheckTypeDeep f g env true)
+
+and CheckTypesDeepNoInner f g env tys = 
+    tys |> List.iter (CheckTypeDeep f g env false)
 
 and CheckTypeConstraintDeep f g env x =
      match x with 
