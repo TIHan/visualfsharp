@@ -341,7 +341,7 @@ let rec CheckTypeDeep ((visitTy,visitTyconRefOpt,visitAppTyOpt,visitTraitSolutio
 
     | TType_ucase (_,tinst) -> CheckTypesDeep f g env tinst
     | TType_tuple (_,tys) -> CheckTypesDeep f g env tys
-    | TType_fun (s,t) -> CheckTypeDeep f g env true s; CheckTypeDeep f g env true t
+    | TType_fun (s,t) -> CheckTypeDeep f g env false s; CheckTypeDeep f g env false t
     | TType_var tp -> 
           if not tp.IsSolved then 
               match visitTyarOpt with 
@@ -561,7 +561,7 @@ let CheckType permitByRefLike (cenv:cenv) env m ty =
              else
                errorR (Error(FSComp.SR.checkNotSufficientlyGenericBecauseOfScope(tp.DisplayName),m))
 
-        let visitTyconRef _isInner tcref = 
+        let visitTyconRef isInner tcref = 
 
             match permitByRefLike with
             | PermitByRefType.None when isByrefLikeTyconRef cenv.g m tcref ->
@@ -569,6 +569,9 @@ let CheckType permitByRefLike (cenv:cenv) env m ty =
             | PermitByRefType.SpanLike when isByrefTyconRef cenv.g tcref ->
                 errorR(Error(FSComp.SR.chkErrorUseOfByref(), m))
             | _ -> ()
+
+            if isInner && isByrefLikeTyconRef cenv.g m tcref then
+                errorR(Error(FSComp.SR.chkErrorUseOfByref(), m))
 
             if tyconRefEq cenv.g cenv.g.system_Void_tcref tcref then 
                 errorR(Error(FSComp.SR.chkSystemVoidOnlyInTypeof(), m))
