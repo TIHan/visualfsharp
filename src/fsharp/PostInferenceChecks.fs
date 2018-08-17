@@ -348,7 +348,7 @@ let rec CheckTypeDeep ((visitTy,visitTyconRefOpt,visitAppTyOpt,visitTraitSolutio
                     visitTyar (env,tp)
     
     | TType_tuple (_,tys) -> CheckTypesDeep f g env tys
-    | TType_fun (s,t) -> CheckTypeDeep f g env true s; CheckTypeDeep f g env true t
+    | TType_fun (s,t) -> CheckTypeDeep f g env false s; CheckTypeDeep f g env false t
 
 and CheckTypesDeep f g env tys = 
     tys |> List.iter (CheckTypeDeep f g env true)
