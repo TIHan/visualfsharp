@@ -347,14 +347,11 @@ let rec CheckTypeDeep ((visitTy,visitTyconRefOpt,visitAppTyOpt,visitTraitSolutio
               | Some visitTyar -> 
                     visitTyar (env,tp)
     
-    | TType_tuple (_,tys) -> CheckTypesDeepNoInner f g env tys
-    | TType_fun (s,t) -> CheckTypeDeep f g env false s; CheckTypeDeep f g env false t
+    | TType_tuple (_,tys) -> CheckTypesDeep f g env tys
+    | TType_fun (s,t) -> CheckTypeDeep f g env true s; CheckTypeDeep f g env true t
 
 and CheckTypesDeep f g env tys = 
     tys |> List.iter (CheckTypeDeep f g env true)
-
-and CheckTypesDeepNoInner f g env tys = 
-    tys |> List.iter (CheckTypeDeep f g env false)
 
 and CheckTypeConstraintDeep f g env x =
      match x with 
@@ -613,6 +610,19 @@ let CheckTypePermitSpanLike (cenv:cenv) env m ty = CheckType PermitByRefType.Spa
 /// Check types occurring in TAST but allow all byrefs.  Only used on internally-generated types
 let CheckTypePermitAllByrefs (cenv:cenv) env m ty = CheckType PermitByRefType.All cenv env m ty
 
+let CheckFunTypePermitAllByrefs cenv env m ty =
+    let argTys, returnTy = stripFunTy cenv.g ty
+
+    argTys 
+    |> List.iter (fun argTy ->
+        match stripTyparEqns argTy with
+        | TType_tuple(_, tys) ->
+            tys |> List.iter (CheckTypePermitAllByrefs cenv env m)
+        | argTy ->    
+            CheckTypePermitAllByrefs cenv env m argTy)
+
+    CheckTypePermitAllByrefs cenv env m returnTy
+
 let CheckTypeInstNoByrefs cenv env m tyargs =
     tyargs |> List.iter (CheckTypeNoByrefs cenv env m)
 
@@ -658,19 +668,24 @@ let rec CheckExprNoByrefs cenv env expr =
     CheckExpr cenv env expr PermitByRefExpr.No |> ignore
 
 /// Check a value
-and CheckValRef (cenv:cenv) (env:env) v m (context: PermitByRefExpr) = 
+and CheckValRef (cenv:cenv) (env:env) (vref: ValRef) m (context: PermitByRefExpr) = 
+    let ty = vref.Type
 
     if cenv.reportErrors then 
-        if isSpliceOperator cenv.g v && not env.quote then errorR(Error(FSComp.SR.chkSplicingOnlyInQuotations(), m))
-        if isSpliceOperator cenv.g v then errorR(Error(FSComp.SR.chkNoFirstClassSplicing(), m))
-        if valRefEq cenv.g v cenv.g.addrof_vref  then errorR(Error(FSComp.SR.chkNoFirstClassAddressOf(), m))
-        if valRefEq cenv.g v cenv.g.reraise_vref then errorR(Error(FSComp.SR.chkNoFirstClassRethrow(), m))
+        if isSpliceOperator cenv.g vref && not env.quote then errorR(Error(FSComp.SR.chkSplicingOnlyInQuotations(), m))
+        if isSpliceOperator cenv.g vref then errorR(Error(FSComp.SR.chkNoFirstClassSplicing(), m))
+        if valRefEq cenv.g vref cenv.g.addrof_vref  then errorR(Error(FSComp.SR.chkNoFirstClassAddressOf(), m))
+        if valRefEq cenv.g vref cenv.g.reraise_vref then errorR(Error(FSComp.SR.chkNoFirstClassRethrow(), m))
 
         // ByRefLike-typed values can only occur in permitting contexts 
-        if context.Disallow && isByrefLikeTy cenv.g m v.Type then 
-            errorR(Error(FSComp.SR.chkNoByrefAtThisPoint(v.DisplayName), m))
+        if context.Disallow && isByrefLikeTy cenv.g m ty then 
+            errorR(Error(FSComp.SR.chkNoByrefAtThisPoint(vref.DisplayName), m))
 
-    CheckTypePermitAllByrefs cenv env m v.Type // the byref checks are done at the actual binding of the value 
+    // the byref checks are done at the actual binding of the value 
+    if isFunTy cenv.g ty then
+        CheckFunTypePermitAllByrefs cenv env m ty
+    else
+        CheckTypePermitAllByrefs cenv env m ty
 
 /// Check a use of a value
 and CheckValUse (cenv: cenv) (env: env) (vref: ValRef, vFlags, m) (context: PermitByRefExpr) = 
@@ -1362,6 +1377,7 @@ and CheckLambdas isTop (memInfo: ValMemberInfo option) cenv env inlined topValIn
 
         syntacticArgs |> List.iter (CheckValSpec cenv env)
         syntacticArgs |> List.iter (BindVal cenv env)
+        CheckTypePermitAllByrefs cenv env m bodyty // check return type
 
         // Trigger a test hook
         match memInfo with 
@@ -1591,7 +1607,10 @@ and CheckBinding cenv env alwaysCheckNoReraise context (TBind(v,bindRhs,_) as bi
          errorR(Error(FSComp.SR.chkMemberUsedInInvalidWay(nm, nm, stringOfRange m), v.Range))
 
     // Byrefs allowed for x in 'let x = ...'
-    v.Type |> CheckTypePermitAllByrefs cenv env v.Range
+    if isFunTy cenv.g v.Type then
+        CheckFunTypePermitAllByrefs cenv env v.Range v.Type
+    else
+        CheckTypePermitAllByrefs cenv env v.Range v.Type
     v.Attribs |> CheckAttribs cenv env
     v.ValReprInfo |> Option.iter (CheckValInfo cenv env)
 
