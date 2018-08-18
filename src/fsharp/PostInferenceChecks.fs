@@ -348,7 +348,7 @@ let rec CheckTypeDeep ((visitTy,visitTyconRefOpt,visitAppTyOpt,visitTraitSolutio
                     visitTyar (env,tp)
     
     | TType_tuple (_,tys) -> CheckTypesDeep f g env tys
-    | TType_fun (s,t) -> CheckTypeDeep f g env false s; CheckTypeDeep f g env false t
+    | TType_fun (s,t) -> CheckTypeDeep f g env true s; CheckTypeDeep f g env true t
 
 and CheckTypesDeep f g env tys = 
     tys |> List.iter (CheckTypeDeep f g env true)
@@ -610,15 +610,15 @@ let CheckTypePermitSpanLike (cenv:cenv) env m ty = CheckType PermitByRefType.Spa
 /// Check types occurring in TAST but allow all byrefs.  Only used on internally-generated types
 let CheckTypePermitAllByrefs (cenv:cenv) env m ty = CheckType PermitByRefType.All cenv env m ty
 
-let CheckFunTypePermitAllByrefs cenv env m ty =
+let CheckFunTypePermitAllByrefs cenv env m isMember (infoOpt: ValReprInfo option) ty =
     let argTys, returnTy = stripFunTy cenv.g ty
 
     argTys 
     |> List.iter (fun argTy ->
-        match stripTyparEqns argTy with
-        | TType_tuple(_, tys) ->
+        match stripTyparEqns argTy, infoOpt with
+        | TType_tuple(_, tys), Some(info) when isMember && info.AritiesOfArgs.Length = 1 ->
             tys |> List.iter (CheckTypePermitAllByrefs cenv env m)
-        | argTy ->    
+        | argTy, _ ->    
             CheckTypePermitAllByrefs cenv env m argTy)
 
     CheckTypePermitAllByrefs cenv env m returnTy
@@ -683,7 +683,7 @@ and CheckValRef (cenv:cenv) (env:env) (vref: ValRef) m (context: PermitByRefExpr
 
     // the byref checks are done at the actual binding of the value 
     if isFunTy cenv.g ty then
-        CheckFunTypePermitAllByrefs cenv env m ty
+        CheckFunTypePermitAllByrefs cenv env m vref.IsMember vref.ValReprInfo ty
     else
         CheckTypePermitAllByrefs cenv env m ty
 
@@ -1608,7 +1608,7 @@ and CheckBinding cenv env alwaysCheckNoReraise context (TBind(v,bindRhs,_) as bi
 
     // Byrefs allowed for x in 'let x = ...'
     if isFunTy cenv.g v.Type then
-        CheckFunTypePermitAllByrefs cenv env v.Range v.Type
+        CheckFunTypePermitAllByrefs cenv env v.Range v.IsMember v.ValReprInfo v.Type
     else
         CheckTypePermitAllByrefs cenv env v.Range v.Type
     v.Attribs |> CheckAttribs cenv env
