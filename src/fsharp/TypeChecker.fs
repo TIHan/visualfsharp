@@ -10061,16 +10061,6 @@ and TcMethodApplication
     // Make the call expression 
     let expr, exprty = 
         BuildPossiblyConditionalMethodCall cenv env mut mMethExpr isProp finalCalledMethInfo isSuperInit finalCalledMethInst objArgs allArgsCoerced
-        
-    // Handle byref returns
-    let expr = 
-        // byref-typed returns get implicitly dereferenced 
-        let vty = tyOfExpr cenv.g expr
-        if isByrefTy cenv.g vty then 
-            let v, _ = mkCompGenLocal mMethExpr "byrefReturn" vty
-            mkCompGenLet mMethExpr v expr (mkAddrGet mMethExpr (mkLocalValRef v))
-        else 
-            expr
 
     // Bind "out" parameters as part of the result tuple 
     let expr, exprty = 

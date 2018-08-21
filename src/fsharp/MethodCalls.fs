@@ -626,7 +626,7 @@ let TakeObjAddrForMethodCall g amap (minfo:MethInfo) isMutable m objArgs f =
         | _ -> 
             id, objArgs
     let e, ety = f ccallInfo objArgs
-    wrap e, ety
+    wrap, e, ety
 
 //-------------------------------------------------------------------------
 // Build method calls.
@@ -762,7 +762,7 @@ let TryImportProvidedMethodBaseAsLibraryIntrinsic (amap:Import.ImportMap, m:rang
 let BuildMethodCall tcVal g amap isMutable m isProp minfo valUseFlags minst objArgs args =
     let direct = IsBaseCall objArgs
 
-    TakeObjAddrForMethodCall g amap minfo isMutable m objArgs (fun ccallInfo objArgs -> 
+    let wrap, e, ty = TakeObjAddrForMethodCall g amap minfo isMutable m objArgs (fun ccallInfo objArgs -> 
         let allArgs = objArgs @ args
         let valUseFlags = 
             if direct && (match valUseFlags with NormalValUse -> true | _ -> false) then 
@@ -837,6 +837,14 @@ let BuildMethodCall tcVal g amap isMutable m isProp minfo valUseFlags minst objA
             if not (TypeHasDefaultValue g m ty) then 
                 errorR(Error(FSComp.SR.tcDefaultStructConstructorCall(), m))
             mkDefault (m, ty), ty)
+
+    // Handle byref returns
+    // byref-typed returns get implicitly dereferenced
+    if isByrefTy g ty then 
+        let v, _ = mkCompGenLocal m "byrefReturn" ty
+        mkCompGenLet m v e (mkAddrGet m (mkLocalValRef v)) |> wrap, ty
+    else 
+        wrap e, ty
 
 //-------------------------------------------------------------------------
 // Build delegate constructions (lambdas/functions to delegates)
