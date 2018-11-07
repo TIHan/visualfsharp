@@ -15,6 +15,8 @@ open System.Diagnostics
 open System.IO
 open System.Runtime.InteropServices
 open System.Text
+open System.Reflection.Metadata
+open System.Reflection.PortableExecutable
 open Internal.Utilities
 open Internal.Utilities.Collections
 open Microsoft.FSharp.Compiler.AbstractIL 
@@ -1139,7 +1141,9 @@ type ILMetadataReader =
     securityDeclsReader_TypeDef : ILSecurityDeclsStored
     securityDeclsReader_MethodDef : ILSecurityDeclsStored
     securityDeclsReader_Assembly : ILSecurityDeclsStored
-    typeDefReader : ILTypeDefStored }
+    typeDefReader : ILTypeDefStored
+    peReader: System.Reflection.PortableExecutable.PEReader
+    reader: MetadataReader }
    
 
 let seekReadUInt16Adv mdv (addr: byref<int>) =  
@@ -1628,11 +1632,37 @@ let isSorted (ctxt: ILMetadataReader) (tab:TableName) = ((ctxt.sorted &&& (int64
 
 // Note, pectxtEager and pevEager must not be captured by the results of this function
 let rec seekReadModule (ctxt: ILMetadataReader) (pectxtEager: PEReader) pevEager peinfo ilMetadataVersion idx =
-    let (subsys, subsysversion, useHighEntropyVA, ilOnly, only32, is32bitpreferred, only64, platform, isDll, alignVirt, alignPhys, imageBaseReal) = peinfo
+    let (_subsys, _subsysversion, _useHighEntropyVA, _ilOnly, only32, _is32bitpreferred, only64, _platform, isDll, alignVirt, alignPhys, imageBaseReal) = peinfo
     let mdv = ctxt.mdfile.GetView()
-    let (_generation, nameIdx, _mvidIdx, _encidIdx, _encbaseidIdx) = seekReadModuleRow ctxt mdv idx
-    let ilModuleName = readStringHeap ctxt nameIdx
     let nativeResources = readNativeResources pectxtEager
+
+    let reader = ctxt.reader
+    let peReader = ctxt.peReader
+
+    let subsys =
+        int16 peReader.PEHeaders.PEHeader.Subsystem
+
+    let subsysversion =
+        (int32 peReader.PEHeaders.PEHeader.MajorSubsystemVersion, int32 peReader.PEHeaders.PEHeader.MinorSubsystemVersion)
+
+    let useHighEntropyVA =
+        int (peReader.PEHeaders.PEHeader.DllCharacteristics &&& DllCharacteristics.HighEntropyVirtualAddressSpace) <> 0
+
+    let ilOnly =
+        int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.ILOnly) <> 0
+
+    let is32bitpreferred =
+        int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.Prefers32Bit) <> 0
+
+    let platform = 
+        match peReader.PEHeaders.CoffHeader.Machine with
+        | Machine.Amd64 -> Some(AMD64)
+        | Machine.IA64 -> Some(IA64)
+        | _ -> Some(X86)
+
+    let moduleDef = reader.GetModuleDefinition()
+    let ilModuleName = reader.GetString(moduleDef.Name)
+    
 
     { Manifest =
          if ctxt.getNumRows (TableNames.Assembly) > 0 then Some (seekReadAssemblyManifest ctxt pectxtEager 1) 
@@ -3629,6 +3659,12 @@ let openMetadataReader (fileName, mdfile: BinaryFile, metadataPhysLoc, peinfo, p
 
     let rowAddr (tab:TableName) idx = tablePhysLocations.[tab.Index] + (idx - 1) * tableRowSizes.[tab.Index]
 
+    let bytes = File.ReadAllBytes(fileName)
+    let bytes = System.Collections.Immutable.ImmutableArray.Create<byte>(bytes)
+    let peFile = new System.Reflection.PortableExecutable.PEReader(bytes)
+
+    let metadataReader = peFile.GetMetadataReader()
+
     // Build the reader context
     // Use an initialization hole 
     let ctxtH = ref None
@@ -3701,7 +3737,9 @@ let openMetadataReader (fileName, mdfile: BinaryFile, metadataPhysLoc, peinfo, p
           stringsBigness=stringsBigness
           guidsBigness=guidsBigness
           blobsBigness=blobsBigness
-          tableBigness=tableBigness } 
+          tableBigness=tableBigness
+          peReader = peFile
+          reader = metadataReader } 
     ctxtH := Some ctxt
      
     let ilModule = seekReadModule ctxt pectxtEager pevEager peinfo (System.Text.Encoding.UTF8.GetString (ilMetadataVersion, 0, ilMetadataVersion.Length)) 1
