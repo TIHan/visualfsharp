@@ -1549,7 +1549,22 @@ let readBlobHeapAsDouble ctxt vidx = fst (sigptrGetDouble (readBlobHeap ctxt vid
 // noFileOnDisk indicates that the PE file was read from Memory using OpenILModuleReaderFromBytes
 // For example the assembly came from a type provider
 // In this case we eagerly read the native resources into memory
-let readNativeResources (pectxt: PEReader) = 
+let readNativeResources (pectxt: PEReader) (_peReader: System.Reflection.PortableExecutable.PEReader) _fileName =
+    //let res =
+    //    peReader.PEHeaders.SectionHeaders
+    //    |> Seq.choose (fun s ->
+    //        if s.Name = ".rsrc" then
+    //            if peReader.IsEntireImageAvailable then
+    //                None
+    //            else
+    //                ILNativeResource.In (fileName, s.VirtualAddress, s.PointerToRawData, s.VirtualSize)
+    //                |> Some
+    //        else
+    //            None
+    //    )
+    //    |> Seq.toList
+
+    //printfn "%A" res
     [ if pectxt.nativeResourcesSize <> 0x0  && pectxt.nativeResourcesAddr <> 0x0 then 
         let start = pectxt.anyV2P (pectxt.fileName + ": native resources", pectxt.nativeResourcesAddr)
         if pectxt.noFileOnDisk then
@@ -1631,7 +1646,7 @@ let isSorted (ctxt: ILMetadataReader) (tab:TableName) = ((ctxt.sorted &&& (int64
 // Note, pectxtEager and pevEager must not be captured by the results of this function
 let rec seekReadModule (peReader: System.Reflection.PortableExecutable.PEReader) (ctxt: ILMetadataReader) (pectxtEager: PEReader) pevEager idx =
     let mdv = ctxt.mdfile.GetView()
-    let nativeResources = readNativeResources pectxtEager
+    let nativeResources = readNativeResources pectxtEager peReader ctxt.fileName
 
     let subsys =
         int16 peReader.PEHeaders.PEHeader.Subsystem
@@ -4048,9 +4063,19 @@ let openPEReader fileName =
 
     peFile, dispose
 
+let openPEReaderFromBytes (bytes: byte []) =
+    let stream = new MemoryStream(bytes)
+    let peFile = new System.Reflection.PortableExecutable.PEReader(stream)
+
+    let dispose = fun () ->
+        peFile.Dispose()
+        stream.Dispose()
+
+    peFile, dispose
+
 let OpenILModuleReaderFromBytes fileName bytes opts = 
     let pefile = ByteFile(fileName, bytes) :> BinaryFile
-    let peReader, dispose = openPEReader fileName
+    let peReader, dispose = openPEReaderFromBytes bytes
     let ilModule, ilAssemblyRefs, pdb = openPE (fileName, peReader, pefile, opts.pdbDirPath, (opts.reduceMemoryUsage = ReduceMemoryFlag.Yes), opts.ilGlobals, true)
     new ILModuleReaderImpl(ilModule, ilAssemblyRefs, (fun () -> ClosePdbReader pdb; dispose())) :> ILModuleReader
 
