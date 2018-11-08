@@ -1141,9 +1141,7 @@ type ILMetadataReader =
     securityDeclsReader_TypeDef : ILSecurityDeclsStored
     securityDeclsReader_MethodDef : ILSecurityDeclsStored
     securityDeclsReader_Assembly : ILSecurityDeclsStored
-    typeDefReader : ILTypeDefStored
-    peReader: System.Reflection.PortableExecutable.PEReader
-    reader: MetadataReader }
+    typeDefReader : ILTypeDefStored }
    
 
 let seekReadUInt16Adv mdv (addr: byref<int>) =  
@@ -1631,13 +1629,9 @@ let rvaToData (ctxt: ILMetadataReader) (pectxt: PEReader) nm rva =
 let isSorted (ctxt: ILMetadataReader) (tab:TableName) = ((ctxt.sorted &&& (int64 1 <<< tab.Index)) <> int64 0x0) 
 
 // Note, pectxtEager and pevEager must not be captured by the results of this function
-let rec seekReadModule (ctxt: ILMetadataReader) (pectxtEager: PEReader) pevEager peinfo ilMetadataVersion idx =
-    let (_subsys, _subsysversion, _useHighEntropyVA, _ilOnly, only32, _is32bitpreferred, only64, _platform, isDll, alignVirt, alignPhys, imageBaseReal) = peinfo
+let rec seekReadModule (peReader: System.Reflection.PortableExecutable.PEReader) (ctxt: ILMetadataReader) (pectxtEager: PEReader) pevEager ilMetadataVersion idx =
     let mdv = ctxt.mdfile.GetView()
     let nativeResources = readNativeResources pectxtEager
-
-    let reader = ctxt.reader
-    let peReader = ctxt.peReader
 
     let subsys =
         int16 peReader.PEHeaders.PEHeader.Subsystem
@@ -1651,8 +1645,14 @@ let rec seekReadModule (ctxt: ILMetadataReader) (pectxtEager: PEReader) pevEager
     let ilOnly =
         int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.ILOnly) <> 0
 
+    let only32 =
+        int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.Requires32Bit) <> 0
+
     let is32bitpreferred =
         int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.Prefers32Bit) <> 0
+
+    let only64 =
+        peReader.PEHeaders.CoffHeader.SizeOfOptionalHeader = 240s (* May want to read in the optional header Magic number and check that as well... *)
 
     let platform = 
         match peReader.PEHeaders.CoffHeader.Machine with
@@ -1660,8 +1660,19 @@ let rec seekReadModule (ctxt: ILMetadataReader) (pectxtEager: PEReader) pevEager
         | Machine.IA64 -> Some(IA64)
         | _ -> Some(X86)
 
-    let moduleDef = reader.GetModuleDefinition()
-    let ilModuleName = reader.GetString(moduleDef.Name)
+    let isDll = peReader.PEHeaders.IsDll
+
+    let alignVirt =
+        peReader.PEHeaders.PEHeader.SectionAlignment
+
+    let alignPhys =
+        peReader.PEHeaders.PEHeader.FileAlignment
+
+    let imageBaseReal = int peReader.PEHeaders.PEHeader.ImageBase
+
+    let mdReader = peReader.GetMetadataReader()
+    let moduleDef = mdReader.GetModuleDefinition()
+    let ilModuleName = mdReader.GetString(moduleDef.Name)
     
 
     { Manifest =
@@ -3357,7 +3368,7 @@ let getPdbReader pdbDirPath fileName =
 #endif
       
 // Note, pectxtEager and pevEager must not be captured by the results of this function
-let openMetadataReader (fileName, mdfile: BinaryFile, metadataPhysLoc, peinfo, pectxtEager: PEReader, pevEager: BinaryView, pectxtCaptured, reduceMemoryUsage, ilGlobals) = 
+let openMetadataReader (fileName, peReader: System.Reflection.PortableExecutable.PEReader, mdfile: BinaryFile, metadataPhysLoc, pectxtEager: PEReader, pevEager: BinaryView, pectxtCaptured, reduceMemoryUsage, ilGlobals) = 
     let mdv = mdfile.GetView()
     let magic = seekReadUInt16AsInt32 mdv metadataPhysLoc
     if magic <> 0x5342 then failwith (fileName + ": bad metadata magic number: " + string magic)
@@ -3659,12 +3670,6 @@ let openMetadataReader (fileName, mdfile: BinaryFile, metadataPhysLoc, peinfo, p
 
     let rowAddr (tab:TableName) idx = tablePhysLocations.[tab.Index] + (idx - 1) * tableRowSizes.[tab.Index]
 
-    let bytes = File.ReadAllBytes(fileName)
-    let bytes = System.Collections.Immutable.ImmutableArray.Create<byte>(bytes)
-    let peFile = new System.Reflection.PortableExecutable.PEReader(bytes)
-
-    let metadataReader = peFile.GetMetadataReader()
-
     // Build the reader context
     // Use an initialization hole 
     let ctxtH = ref None
@@ -3737,12 +3742,10 @@ let openMetadataReader (fileName, mdfile: BinaryFile, metadataPhysLoc, peinfo, p
           stringsBigness=stringsBigness
           guidsBigness=guidsBigness
           blobsBigness=blobsBigness
-          tableBigness=tableBigness
-          peReader = peFile
-          reader = metadataReader } 
+          tableBigness=tableBigness } 
     ctxtH := Some ctxt
      
-    let ilModule = seekReadModule ctxt pectxtEager pevEager peinfo (System.Text.Encoding.UTF8.GetString (ilMetadataVersion, 0, ilMetadataVersion.Length)) 1
+    let ilModule = seekReadModule peReader ctxt pectxtEager pevEager (System.Text.Encoding.UTF8.GetString (ilMetadataVersion, 0, ilMetadataVersion.Length)) 1
     let ilAssemblyRefs = lazy [ for i in 1 .. getNumRows TableNames.AssemblyRef do yield seekReadAssemblyRef ctxt i ]
 
     ilModule, ilAssemblyRefs
@@ -3772,11 +3775,11 @@ let openPEFileReader (fileName, pefile: BinaryFile, pdbDirPath, noFileOnDisk) =
        optHeaderSize <> 0xf0 then failwith "not a PE file - bad optional header size"
     let x64adjust = optHeaderSize - 0xe0
     let only64 = (optHeaderSize = 0xf0)    (* May want to read in the optional header Magic number and check that as well... *)
-    let platform = match machine with | 0x8664 -> Some(AMD64) | 0x200 -> Some(IA64) | _ -> Some(X86) 
+    let _platform = match machine with | 0x8664 -> Some(AMD64) | 0x200 -> Some(IA64) | _ -> Some(X86) 
     let sectionHeadersStartPhysLoc = peOptionalHeaderPhysLoc + optHeaderSize
 
     let flags = seekReadUInt16AsInt32 pev (peFileHeaderPhysLoc + 18)
-    let isDll = (flags &&& 0x2000) <> 0x0
+    let _isDll = (flags &&& 0x2000) <> 0x0
 
    (* OPTIONAL PE HEADER *)
     let _textPhysSize = seekReadInt32 pev (peOptionalHeaderPhysLoc + 4)  (* Size of the code (text) section, or the sum of all code sections if there are multiple sections. *)
@@ -3789,21 +3792,21 @@ let openPEFileReader (fileName, pefile: BinaryFile, pdbDirPath, noFileOnDisk) =
     let dataSegmentAddr       = seekReadInt32 pev (peOptionalHeaderPhysLoc + 24) (* e.g. 0x0000c000 *)
     (*  REVIEW: For now, we'll use the DWORD at offset 24 for x64.  This currently ok since fsc doesn't support true 64-bit image bases, 
         but we'll have to fix this up when such support is added. *)    
-    let imageBaseReal = if only64 then dataSegmentAddr else seekReadInt32 pev (peOptionalHeaderPhysLoc + 28)  (* Image Base Always 0x400000 (see Section 23.1). - QUERY : no it's not always 0x400000, e.g. 0x034f0000 *)
-    let alignVirt      = seekReadInt32 pev (peOptionalHeaderPhysLoc + 32)   (*  Section Alignment Always 0x2000 (see Section 23.1). *)
-    let alignPhys      = seekReadInt32 pev (peOptionalHeaderPhysLoc + 36)  (* File Alignment Either 0x200 or 0x1000. *)
+    let _imageBaseReal = if only64 then dataSegmentAddr else seekReadInt32 pev (peOptionalHeaderPhysLoc + 28)  (* Image Base Always 0x400000 (see Section 23.1). - QUERY : no it's not always 0x400000, e.g. 0x034f0000 *)
+    let _alignVirt      = seekReadInt32 pev (peOptionalHeaderPhysLoc + 32)   (*  Section Alignment Always 0x2000 (see Section 23.1). *)
+    let _alignPhys      = seekReadInt32 pev (peOptionalHeaderPhysLoc + 36)  (* File Alignment Either 0x200 or 0x1000. *)
      (* x86: 000000c0 *) 
     let _osMajor     = seekReadUInt16 pev (peOptionalHeaderPhysLoc + 40)   (*  OS Major Always 4 (see Section 23.1). *)
     let _osMinor     = seekReadUInt16 pev (peOptionalHeaderPhysLoc + 42)   (* OS Minor Always 0 (see Section 23.1). *)
     let _userMajor   = seekReadUInt16 pev (peOptionalHeaderPhysLoc + 44)   (* User Major Always 0 (see Section 23.1). *)
     let _userMinor   = seekReadUInt16 pev (peOptionalHeaderPhysLoc + 46)   (* User Minor Always 0 (see Section 23.1). *)
-    let subsysMajor = seekReadUInt16AsInt32 pev (peOptionalHeaderPhysLoc + 48)   (* SubSys Major Always 4 (see Section 23.1). *)
-    let subsysMinor = seekReadUInt16AsInt32 pev (peOptionalHeaderPhysLoc + 50)   (* SubSys Minor Always 0 (see Section 23.1). *)
+    let _subsysMajor = seekReadUInt16AsInt32 pev (peOptionalHeaderPhysLoc + 48)   (* SubSys Major Always 4 (see Section 23.1). *)
+    let _subsysMinor = seekReadUInt16AsInt32 pev (peOptionalHeaderPhysLoc + 50)   (* SubSys Minor Always 0 (see Section 23.1). *)
      (* x86: 000000d0 *) 
     let _imageEndAddr   = seekReadInt32 pev (peOptionalHeaderPhysLoc + 56)  (* Image Size: Size, in bytes, of image, including all headers and padding; shall be a multiple of Section Alignment. e.g. 0x0000e000 *)
     let _headerPhysSize = seekReadInt32 pev (peOptionalHeaderPhysLoc + 60)  (* Header Size Combined size of MS-DOS Header, PE Header, PE Optional Header and padding; shall be a multiple of the file alignment. *)
-    let subsys           = seekReadUInt16 pev (peOptionalHeaderPhysLoc + 68)   (* SubSystem Subsystem required to run this image. Shall be either IMAGE_SUBSYSTEM_WINDOWS_CE_GUI (!0x3) or IMAGE_SUBSYSTEM_WINDOWS_GUI (!0x2). QUERY: Why is this 3 on the images ILASM produces??? *)
-    let useHighEnthropyVA = 
+    let _subsys           = seekReadUInt16 pev (peOptionalHeaderPhysLoc + 68)   (* SubSystem Subsystem required to run this image. Shall be either IMAGE_SUBSYSTEM_WINDOWS_CE_GUI (!0x3) or IMAGE_SUBSYSTEM_WINDOWS_GUI (!0x2). QUERY: Why is this 3 on the images ILASM produces??? *)
+    let _useHighEnthropyVA = 
         let n = seekReadUInt16 pev (peOptionalHeaderPhysLoc + 70)
         let highEnthropyVA = 0x20us
         (n &&& highEnthropyVA) = highEnthropyVA
@@ -3894,9 +3897,9 @@ let openPEFileReader (fileName, pefile: BinaryFile, pdbDirPath, noFileOnDisk) =
     let metadataSize         = seekReadInt32 pev (cliHeaderPhysLoc + 12)
     let cliFlags             = seekReadInt32 pev (cliHeaderPhysLoc + 16)
     
-    let ilOnly             = (cliFlags &&& 0x01) <> 0x00
-    let only32             = (cliFlags &&& 0x02) <> 0x00
-    let is32bitpreferred   = (cliFlags &&& 0x00020003) <> 0x00
+    let _ilOnly             = (cliFlags &&& 0x01) <> 0x00
+    let _only32             = (cliFlags &&& 0x02) <> 0x00
+    let _is32bitpreferred   = (cliFlags &&& 0x00020003) <> 0x00
     let _strongnameSigned  = (cliFlags &&& 0x08) <> 0x00
     let _trackdebugdata     = (cliFlags &&& 0x010000) <> 0x00
     
@@ -3947,16 +3950,15 @@ let openPEFileReader (fileName, pefile: BinaryFile, pdbDirPath, noFileOnDisk) =
           entryPointToken=entryPointToken
           noFileOnDisk=noFileOnDisk
         }
-    let peinfo = (subsys, (subsysMajor, subsysMinor), useHighEnthropyVA, ilOnly, only32, is32bitpreferred, only64, platform, isDll, alignVirt, alignPhys, imageBaseReal)
-    (metadataPhysLoc, metadataSize, peinfo, pectxt, pev, pdb)
+    (metadataPhysLoc, metadataSize, pectxt, pev, pdb)
 
-let openPE (fileName, pefile, pdbDirPath, reduceMemoryUsage, ilGlobals, noFileOnDisk) = 
-    let (metadataPhysLoc, _metadataSize, peinfo, pectxt, pev, pdb) = openPEFileReader (fileName, pefile, pdbDirPath, noFileOnDisk) 
-    let ilModule, ilAssemblyRefs = openMetadataReader (fileName, pefile, metadataPhysLoc, peinfo, pectxt, pev, Some pectxt, reduceMemoryUsage, ilGlobals)
+let openPE (fileName, peReader, pefile, pdbDirPath, reduceMemoryUsage, ilGlobals, noFileOnDisk) = 
+    let (metadataPhysLoc, _metadataSize, pectxt, pev, pdb) = openPEFileReader (fileName, pefile, pdbDirPath, noFileOnDisk) 
+    let ilModule, ilAssemblyRefs = openMetadataReader (fileName, peReader, pefile, metadataPhysLoc, pectxt, pev, Some pectxt, reduceMemoryUsage, ilGlobals)
     ilModule, ilAssemblyRefs, pdb
 
-let openPEMetadataOnly (fileName, peinfo, pectxtEager, pev, mdfile: BinaryFile, reduceMemoryUsage, ilGlobals) = 
-    openMetadataReader (fileName, mdfile, 0, peinfo, pectxtEager, pev, None, reduceMemoryUsage, ilGlobals)
+let openPEMetadataOnly (fileName, peReader, pectxtEager, pev, mdfile: BinaryFile, reduceMemoryUsage, ilGlobals) = 
+    openMetadataReader (fileName, peReader, mdfile, 0, pectxtEager, pev, None, reduceMemoryUsage, ilGlobals)
   
 let ClosePdbReader pdb =  
 #if FX_NO_PDB_READER
@@ -4035,10 +4037,21 @@ let tryMemoryMapWholeFile opts fileName =
             | _ -> () }
     disposer, file
 
+let openPEReader fileName =
+    let stream = File.OpenRead(fileName)
+    let peFile = new System.Reflection.PortableExecutable.PEReader(stream)
+
+    let dispose = fun () ->
+        peFile.Dispose()
+        stream.Dispose()
+
+    peFile, dispose
+
 let OpenILModuleReaderFromBytes fileName bytes opts = 
     let pefile = ByteFile(fileName, bytes) :> BinaryFile
-    let ilModule, ilAssemblyRefs, pdb = openPE (fileName, pefile, opts.pdbDirPath, (opts.reduceMemoryUsage = ReduceMemoryFlag.Yes), opts.ilGlobals, true)
-    new ILModuleReaderImpl(ilModule, ilAssemblyRefs, (fun () -> ClosePdbReader pdb)) :> ILModuleReader
+    let peReader, dispose = openPEReader fileName
+    let ilModule, ilAssemblyRefs, pdb = openPE (fileName, peReader, pefile, opts.pdbDirPath, (opts.reduceMemoryUsage = ReduceMemoryFlag.Yes), opts.ilGlobals, true)
+    new ILModuleReaderImpl(ilModule, ilAssemblyRefs, (fun () -> ClosePdbReader pdb; dispose())) :> ILModuleReader
 
 let OpenILModuleReader fileName opts = 
     // Pseudo-normalize the paths.
@@ -4085,7 +4098,7 @@ let OpenILModuleReader fileName opts =
                 // Then use the metadata blob as the long-lived memory resource.
                 let disposer, pefileEager = tryMemoryMapWholeFile opts fullPath
                 use _disposer = disposer
-                let (metadataPhysLoc, metadataSize, peinfo, pectxtEager, pevEager, _pdb) = openPEFileReader (fullPath, pefileEager, None, false) 
+                let (metadataPhysLoc, metadataSize, pectxtEager, pevEager, _pdb) = openPEFileReader (fullPath, pefileEager, None, false) 
                 let mdfile = 
                     match mdfileOpt with 
                     | Some mdfile -> mdfile
@@ -4093,14 +4106,17 @@ let OpenILModuleReader fileName opts =
                         // If tryGetMetadata doesn't give anything, then just read the metadata chunk out of the binary
                         createByteFileChunk opts fullPath (Some (metadataPhysLoc, metadataSize))
 
-                let ilModule, ilAssemblyRefs = openPEMetadataOnly (fullPath, peinfo, pectxtEager, pevEager, mdfile, reduceMemoryUsage, opts.ilGlobals) 
-                new ILModuleReaderImpl(ilModule, ilAssemblyRefs, ignore)
+                let peReader, dispose = openPEReader fullPath
+
+                let ilModule, ilAssemblyRefs = openPEMetadataOnly (fullPath, peReader, pectxtEager, pevEager, mdfile, reduceMemoryUsage, opts.ilGlobals) 
+                new ILModuleReaderImpl(ilModule, ilAssemblyRefs, dispose)
             else
                 // If we are not doing metadata-only, then just go ahead and read all the bytes and hold them either strongly or weakly
                 // depending on the heuristic
                 let pefile = createByteFileChunk opts fullPath None
-                let ilModule, ilAssemblyRefs, _pdb = openPE (fullPath, pefile, None, reduceMemoryUsage, opts.ilGlobals, false) 
-                new ILModuleReaderImpl(ilModule, ilAssemblyRefs, ignore)
+                let peReader, dispose = openPEReader fullPath
+                let ilModule, ilAssemblyRefs, _pdb = openPE (fullPath, peReader, pefile, None, reduceMemoryUsage, opts.ilGlobals, false) 
+                new ILModuleReaderImpl(ilModule, ilAssemblyRefs, dispose)
 
         if keyOk then 
             ilModuleReaderCacheLock.AcquireLock (fun ltok -> ilModuleReaderCache.Put(ltok, key, ilModuleReader))
@@ -4126,8 +4142,10 @@ let OpenILModuleReader fileName opts =
                 let disposer = { new IDisposable with member __.Dispose() = () }
                 disposer, pefile
 
-        let ilModule, ilAssemblyRefs, pdb = openPE (fullPath, pefile, opts.pdbDirPath, reduceMemoryUsage, opts.ilGlobals, false)
-        let ilModuleReader = new ILModuleReaderImpl(ilModule, ilAssemblyRefs, (fun () -> ClosePdbReader pdb))
+        let peReader, dispose = openPEReader fullPath
+
+        let ilModule, ilAssemblyRefs, pdb = openPE (fullPath, peReader, pefile, opts.pdbDirPath, reduceMemoryUsage, opts.ilGlobals, false)
+        let ilModuleReader = new ILModuleReaderImpl(ilModule, ilAssemblyRefs, (fun () -> ClosePdbReader pdb; dispose()))
 
         // Readers with PDB reader disposal logic don't go in the cache.  Note the PDB reader is only used in static linking.
         if keyOk && opts.pdbDirPath.IsNone then 
