@@ -16,6 +16,7 @@ open System.IO
 open System.Runtime.InteropServices
 open System.Text
 open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open Internal.Utilities
 open Internal.Utilities.Collections
@@ -2622,7 +2623,7 @@ and customAttrsReader ctxtH tag : ILAttributesStored =
 and seekReadCustomAttr ctxt (TaggedIndex(cat, idx), b) = 
     ctxt.seekReadCustomAttr (CustomAttrIdx (cat, idx, b))
 
-and seekReadCustomAttrUncached ctxtH (CustomAttrIdx (cat, idx, valIdx)) = 
+and seekReadCustomAttrUncached ctxtH (mdReader: System.Reflection.Metadata.MetadataReader) (CustomAttrIdx (cat, idx, valIdx)) = 
     let ctxt = getHole ctxtH
     let method = seekReadCustomAttrType ctxt (TaggedIndex(cat, idx))
     let data =
@@ -2630,6 +2631,64 @@ and seekReadCustomAttrUncached ctxtH (CustomAttrIdx (cat, idx, valIdx)) =
         | Some bytes -> bytes
         | None -> Bytes.ofInt32Array [| |]
     let elements = []
+    try
+        mdReader.CustomAttributes
+        |> Seq.tryFind (fun x ->
+            let attr = mdReader.GetCustomAttribute(x)
+            let parent =
+                match attr.Constructor.Kind with
+                | HandleKind.MemberReference ->
+                    let memberHandle = MemberReferenceHandle.op_Explicit(attr.Constructor)
+                    let memberDef = mdReader.GetMemberReference(memberHandle)
+                    memberDef.Parent
+                | HandleKind.MethodDefinition ->
+                    let methodHandle = MethodDefinitionHandle.op_Explicit(attr.Constructor)
+                    let methodDef = mdReader.GetMethodDefinition(methodHandle)
+                    TypeDefinitionHandle.op_Implicit(methodDef.GetDeclaringType())
+                | _ ->
+                    failwith "invalid metadata"
+
+            match parent.Kind with
+            | HandleKind.TypeReference ->
+                let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(parent))
+                printfn "%A" (mdReader.GetString(typeRef.Namespace))
+                printfn "%A" (mdReader.GetString(typeRef.Name))
+                (mdReader.GetString(typeRef.Namespace) + "." + mdReader.GetString(typeRef.Name)).Contains(method.Name)
+            | HandleKind.TypeDefinition ->
+                let typeRef = mdReader.GetTypeDefinition(TypeDefinitionHandle.op_Explicit(parent))
+                (mdReader.GetString(typeRef.Namespace) + "." + mdReader.GetString(typeRef.Name)).Contains(method.Name)
+            | _ -> failwith "invalid metadata"
+        )
+        |> Option.iter (fun x ->
+            printfn "found it: %A" x
+        )
+
+        let attrHandle = MetadataTokens.CustomAttributeHandle(idx)
+        let attr = mdReader.GetCustomAttribute(attrHandle)
+    
+        match attr.Constructor.Kind with
+        | HandleKind.MemberReference ->
+            let memberHandle = MemberReferenceHandle.op_Explicit(attr.Constructor)
+            let memberDef = mdReader.GetMemberReference(memberHandle)
+            printfn "%A" (mdReader.GetString(memberDef.Name))
+        | HandleKind.MethodDefinition ->
+            let methodHandle = MethodDefinitionHandle.op_Explicit(attr.Constructor)
+            let methodDef = mdReader.GetMethodDefinition(methodHandle)
+            printfn "%A" (mdReader.GetString(methodDef.Name))
+        | _ ->
+            failwith "invalid metadata"
+
+        //let enclTy =
+        //    let typeDef = methodDef.GetDeclaringType() |> mdReader.GetTypeDefinition
+        //    match mdReader.GetString(typeDef.Name) with
+        //    | "void" -> ILType.Void
+        //    | _ -> ILType.Void
+    with
+    | ex ->
+        printfn "%A" ex
+        printfn "%A" (method.DeclaringType.BasicQualifiedName)
+    //let method = mkILMethSpecInTy (enclTy, cc, nm, argtys, retty, minst)
+  //  mdReader.GetCustomAttribute(CustomAttributeHandle.op_Explicit(Handle()))
     ILAttribute.Encoded (method, data, elements)
 
 and securityDeclsReader ctxtH tag = 
@@ -3686,6 +3745,7 @@ let openMetadataReader (fileName, peReader: System.Reflection.PortableExecutable
 
     let rowAddr (tab:TableName) idx = tablePhysLocations.[tab.Index] + (idx - 1) * tableRowSizes.[tab.Index]
 
+    let mdReader = peReader.GetMetadataReader()
     // Build the reader context
     // Use an initialization hole 
     let ctxtH = ref None
@@ -3714,7 +3774,7 @@ let openMetadataReader (fileName, peReader: System.Reflection.PortableExecutable
           seekReadMethodSpecAsMethodData = cacheMethodSpecAsMethodData  (seekReadMethodSpecAsMethodDataUncached ctxtH)
           seekReadMemberRefAsMethodData  = cacheMemberRefAsMemberData  (seekReadMemberRefAsMethodDataUncached ctxtH)
           seekReadMemberRefAsFieldSpec   = seekReadMemberRefAsFieldSpecUncached ctxtH
-          seekReadCustomAttr             = cacheCustomAttr  (seekReadCustomAttrUncached ctxtH)
+          seekReadCustomAttr             = cacheCustomAttr  (seekReadCustomAttrUncached ctxtH mdReader)
           seekReadTypeRef                = cacheTypeRef (seekReadTypeRefUncached ctxtH)
           readBlobHeapAsPropertySig      = cacheBlobHeapAsPropertySig (readBlobHeapAsPropertySigUncached ctxtH)
           readBlobHeapAsFieldSig         = cacheBlobHeapAsFieldSig (readBlobHeapAsFieldSigUncached ctxtH)
@@ -4057,9 +4117,10 @@ let openPEReader fileName =
     let stream = File.OpenRead(fileName)
     let peFile = new System.Reflection.PortableExecutable.PEReader(stream)
 
-    let dispose = fun () ->
-        peFile.Dispose()
-        stream.Dispose()
+    //let dispose = fun () ->
+    //    peFile.Dispose()
+    //    stream.Dispose()
+    let dispose = id // we need to dispose stream + peFile
 
     peFile, dispose
 
@@ -4067,9 +4128,10 @@ let openPEReaderFromBytes (bytes: byte []) =
     let stream = new MemoryStream(bytes)
     let peFile = new System.Reflection.PortableExecutable.PEReader(stream)
 
-    let dispose = fun () ->
-        peFile.Dispose()
-        stream.Dispose()
+    //let dispose = fun () ->
+    //    peFile.Dispose()
+    //    stream.Dispose()
+    let dispose = id // we need to dispose stream + peFile
 
     peFile, dispose
 
