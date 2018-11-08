@@ -2623,7 +2623,7 @@ and customAttrsReader ctxtH tag : ILAttributesStored =
 and seekReadCustomAttr ctxt (TaggedIndex(cat, idx), b) = 
     ctxt.seekReadCustomAttr (CustomAttrIdx (cat, idx, b))
 
-and seekReadCustomAttrUncached ctxtH (mdReader: System.Reflection.Metadata.MetadataReader) (CustomAttrIdx (cat, idx, valIdx)) = 
+and seekReadCustomAttrUncached ctxtH (_mdReader: System.Reflection.Metadata.MetadataReader) (CustomAttrIdx (cat, idx, valIdx)) = 
     let ctxt = getHole ctxtH
     let method = seekReadCustomAttrType ctxt (TaggedIndex(cat, idx))
     let data =
