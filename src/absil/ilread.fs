@@ -2631,62 +2631,61 @@ and seekReadCustomAttrUncached ctxtH (mdReader: System.Reflection.Metadata.Metad
         | Some bytes -> bytes
         | None -> Bytes.ofInt32Array [| |]
     let elements = []
-    try
-        mdReader.CustomAttributes
-        |> Seq.tryFind (fun x ->
-            let attr = mdReader.GetCustomAttribute(x)
-            let parent =
-                match attr.Constructor.Kind with
-                | HandleKind.MemberReference ->
-                    let memberHandle = MemberReferenceHandle.op_Explicit(attr.Constructor)
-                    let memberDef = mdReader.GetMemberReference(memberHandle)
-                    memberDef.Parent
-                | HandleKind.MethodDefinition ->
-                    let methodHandle = MethodDefinitionHandle.op_Explicit(attr.Constructor)
-                    let methodDef = mdReader.GetMethodDefinition(methodHandle)
-                    TypeDefinitionHandle.op_Implicit(methodDef.GetDeclaringType())
-                | _ ->
-                    failwith "invalid metadata"
+    //try
+    //    mdReader.CustomAttributes
+    //    |> Seq.tryFind (fun x ->
+    //        let attr = mdReader.GetCustomAttribute(x)
+    //        let parent =
+    //            match attr.Constructor.Kind with
+    //            | HandleKind.MemberReference ->
+    //                let memberHandle = MemberReferenceHandle.op_Explicit(attr.Constructor)
+    //                let memberDef = mdReader.GetMemberReference(memberHandle)
+    //                memberDef.Parent
+    //            | HandleKind.MethodDefinition ->
+    //                let methodHandle = MethodDefinitionHandle.op_Explicit(attr.Constructor)
+    //                let methodDef = mdReader.GetMethodDefinition(methodHandle)
+    //                TypeDefinitionHandle.op_Implicit(methodDef.GetDeclaringType())
+    //            | _ ->
+    //                failwith "invalid metadata"
 
-            match parent.Kind with
-            | HandleKind.TypeReference ->
-                let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(parent))
-                printfn "%A" (mdReader.GetString(typeRef.Namespace))
-                printfn "%A" (mdReader.GetString(typeRef.Name))
-                (mdReader.GetString(typeRef.Namespace) + "." + mdReader.GetString(typeRef.Name)).Contains(method.Name)
-            | HandleKind.TypeDefinition ->
-                let typeRef = mdReader.GetTypeDefinition(TypeDefinitionHandle.op_Explicit(parent))
-                (mdReader.GetString(typeRef.Namespace) + "." + mdReader.GetString(typeRef.Name)).Contains(method.Name)
-            | _ -> failwith "invalid metadata"
-        )
-        |> Option.iter (fun x ->
-            printfn "found it: %A" x
-        )
+    //        match parent.Kind with
+    //        | HandleKind.TypeReference ->
+    //            let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(parent))
+    //            (mdReader.GetString(typeRef.Namespace) + "." + mdReader.GetString(typeRef.Name)).Contains(method.DeclaringType.BasicQualifiedName)
+    //        | HandleKind.TypeDefinition ->
+    //            let typeRef = mdReader.GetTypeDefinition(TypeDefinitionHandle.op_Explicit(parent))
+    //            (mdReader.GetString(typeRef.Namespace) + "." + mdReader.GetString(typeRef.Name)).Contains(method.DeclaringType.BasicQualifiedName)
+    //        | _ -> failwith "invalid metadata"
+    //    )
+    //    |> Option.iter (fun x ->
+    //        printfn "found it: %A" x
+    //        printfn "Real: %i Cat: %i  Idx: %i  ValIdex: %i" (x.GetType().GetField("_rowId", BindingFlags.Instance ||| BindingFlags.NonPublic).GetValue(x) :?> int) cat.Tag idx valIdx
+    //    )
 
-        let attrHandle = MetadataTokens.CustomAttributeHandle(idx)
-        let attr = mdReader.GetCustomAttribute(attrHandle)
+    //    let attrHandle = MetadataTokens.CustomAttributeHandle(idx)
+    //    let attr = mdReader.GetCustomAttribute(attrHandle)
     
-        match attr.Constructor.Kind with
-        | HandleKind.MemberReference ->
-            let memberHandle = MemberReferenceHandle.op_Explicit(attr.Constructor)
-            let memberDef = mdReader.GetMemberReference(memberHandle)
-            printfn "%A" (mdReader.GetString(memberDef.Name))
-        | HandleKind.MethodDefinition ->
-            let methodHandle = MethodDefinitionHandle.op_Explicit(attr.Constructor)
-            let methodDef = mdReader.GetMethodDefinition(methodHandle)
-            printfn "%A" (mdReader.GetString(methodDef.Name))
-        | _ ->
-            failwith "invalid metadata"
+    //    match attr.Constructor.Kind with
+    //    | HandleKind.MemberReference ->
+    //        let memberHandle = MemberReferenceHandle.op_Explicit(attr.Constructor)
+    //        let memberDef = mdReader.GetMemberReference(memberHandle)
+    //        printfn "%A" (mdReader.GetString(memberDef.Name))
+    //    | HandleKind.MethodDefinition ->
+    //        let methodHandle = MethodDefinitionHandle.op_Explicit(attr.Constructor)
+    //        let methodDef = mdReader.GetMethodDefinition(methodHandle)
+    //        printfn "%A" (mdReader.GetString(methodDef.Name))
+    //    | _ ->
+    //        failwith "invalid metadata"
 
-        //let enclTy =
-        //    let typeDef = methodDef.GetDeclaringType() |> mdReader.GetTypeDefinition
-        //    match mdReader.GetString(typeDef.Name) with
-        //    | "void" -> ILType.Void
-        //    | _ -> ILType.Void
-    with
-    | ex ->
-        printfn "%A" ex
-        printfn "%A" (method.DeclaringType.BasicQualifiedName)
+    //    //let enclTy =
+    //    //    let typeDef = methodDef.GetDeclaringType() |> mdReader.GetTypeDefinition
+    //    //    match mdReader.GetString(typeDef.Name) with
+    //    //    | "void" -> ILType.Void
+    //    //    | _ -> ILType.Void
+    //with
+    //| ex ->
+    //    printfn "%A" ex
+    //    printfn "%A" (method.DeclaringType.BasicQualifiedName)
     //let method = mkILMethSpecInTy (enclTy, cc, nm, argtys, retty, minst)
   //  mdReader.GetCustomAttribute(CustomAttributeHandle.op_Explicit(Handle()))
     ILAttribute.Encoded (method, data, elements)
