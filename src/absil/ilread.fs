@@ -1629,7 +1629,7 @@ let rvaToData (ctxt: ILMetadataReader) (pectxt: PEReader) nm rva =
 let isSorted (ctxt: ILMetadataReader) (tab:TableName) = ((ctxt.sorted &&& (int64 1 <<< tab.Index)) <> int64 0x0) 
 
 // Note, pectxtEager and pevEager must not be captured by the results of this function
-let rec seekReadModule (peReader: System.Reflection.PortableExecutable.PEReader) (ctxt: ILMetadataReader) (pectxtEager: PEReader) pevEager ilMetadataVersion idx =
+let rec seekReadModule (peReader: System.Reflection.PortableExecutable.PEReader) (ctxt: ILMetadataReader) (pectxtEager: PEReader) pevEager idx =
     let mdv = ctxt.mdfile.GetView()
     let nativeResources = readNativeResources pectxtEager
 
@@ -1673,6 +1673,7 @@ let rec seekReadModule (peReader: System.Reflection.PortableExecutable.PEReader)
     let mdReader = peReader.GetMetadataReader()
     let moduleDef = mdReader.GetModuleDefinition()
     let ilModuleName = mdReader.GetString(moduleDef.Name)
+    let ilMetadataVersion = mdReader.MetadataVersion
     
 
     { Manifest =
@@ -3378,7 +3379,7 @@ let openMetadataReader (fileName, peReader: System.Reflection.PortableExecutable
     let _minorMetadataVersion = seekReadUInt16 mdv (metadataPhysLoc + 6)
 
     let versionLength = seekReadInt32 mdv (metadataPhysLoc + 12)
-    let ilMetadataVersion = seekReadBytes mdv (metadataPhysLoc + 16) versionLength |> Array.filter (fun b -> b <> 0uy)
+    let _ilMetadataVersion = seekReadBytes mdv (metadataPhysLoc + 16) versionLength |> Array.filter (fun b -> b <> 0uy)
     let x = align 0x04 (16 + versionLength)
     let numStreams = seekReadUInt16AsInt32 mdv (metadataPhysLoc + x + 2)
     let streamHeadersStart = (metadataPhysLoc + x + 4)
@@ -3745,7 +3746,7 @@ let openMetadataReader (fileName, peReader: System.Reflection.PortableExecutable
           tableBigness=tableBigness } 
     ctxtH := Some ctxt
      
-    let ilModule = seekReadModule peReader ctxt pectxtEager pevEager (System.Text.Encoding.UTF8.GetString (ilMetadataVersion, 0, ilMetadataVersion.Length)) 1
+    let ilModule = seekReadModule peReader ctxt pectxtEager pevEager 1
     let ilAssemblyRefs = lazy [ for i in 1 .. getNumRows TableNames.AssemblyRef do yield seekReadAssemblyRef ctxt i ]
 
     ilModule, ilAssemblyRefs
