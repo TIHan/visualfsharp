@@ -11,6 +11,7 @@ open Microsoft.CodeAnalysis.Host
 open Microsoft.FSharp.Compiler.Ast
 open Microsoft.FSharp.Compiler.SourceCodeServices
 
+open FSharp.Compiler.Server
 
 type Path with
     static member GetFullPathSafe path =
@@ -40,6 +41,20 @@ type Document with
             | languageServices ->
                 languageServices.GetService<'T>()
                 |> Some
+
+    member this.GetCheckerData(cancellationToken, options, userOpName) = asyncMaybe {
+            let! sourceText = this.GetTextAsync(cancellationToken)
+            let! textVersion = this.GetTextVersionAsync(cancellationToken)
+
+            return {
+                FilePath = this.FilePath
+                TextVersionHash = textVersion.GetHashCode()
+                SourceText = sourceText.ToString()
+                Options = options
+                UserOpName = Some(userOpName)
+            }
+        }
+        
 
 type FSharpNavigationDeclarationItem with
     member x.RoslynGlyph : Glyph =

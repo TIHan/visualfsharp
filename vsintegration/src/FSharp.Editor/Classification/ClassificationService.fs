@@ -14,6 +14,8 @@ open Microsoft.CodeAnalysis.Editor
 open Microsoft.CodeAnalysis.Host.Mef
 open Microsoft.CodeAnalysis.Text
 
+open FSharp.Compiler.Server
+
 // IEditorClassificationService is marked as Obsolete, but is still supported. The replacement (IClassificationService)
 // is internal to Microsoft.CodeAnalysis.Workspaces which we don't have internals visible to. Rather than add yet another
 // IVT, we'll maintain the status quo.
@@ -46,16 +48,28 @@ type internal FSharpClassificationService
         member __.AddSemanticClassificationsAsync(document: Document, textSpan: TextSpan, result: List<ClassifiedSpan>, cancellationToken: CancellationToken) =
             asyncMaybe {
                 use _logBlock = Logger.LogBlock(LogEditorFunctionId.Classification_Semantic)
-
-                let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document)
                 let! sourceText = document.GetTextAsync(cancellationToken)
-                let! _, _, checkResults = checkerProvider.Checker.ParseAndCheckDocument(document, projectOptions, sourceText = sourceText, allowStaleResults = false, userOpName=userOpName) 
                 // it's crucial to not return duplicated or overlapping `ClassifiedSpan`s because Find Usages service crashes.
                 let targetRange = RoslynHelpers.TextSpanToFSharpRange(document.FilePath, textSpan, sourceText)
-                let classificationData = checkResults.GetSemanticClassification (Some targetRange) |> Array.distinctBy fst
+
+                let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document)
+                let! checkerData = document.GetCheckerData(cancellationToken, ProjectOptions.FromFSharpProjectOptions(projectOptions), "FSharpClassificationService.AddSemanticClassificationsAsync")
+                let cmd =
+                    {
+                        CheckerData = checkerData
+                        RangeToClassify = 
+                            { 
+                                StartLine = targetRange.StartLine
+                                StartColumn = targetRange.StartColumn
+                                EndLine = targetRange.EndLine
+                                EndColumn = targetRange.EndColumn
+                            }
+                    }
+
+                let! sc = FSharpCompilerServer(checkerProvider.Checker).GetSemanticClassification(cmd)
                 
-                for (range, classificationType) in classificationData do
-                    match RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, range) with
+                for { Range = range; Type = classificationType } in sc.Items do
+                    match RoslynHelpers.FSharpCompilerServerRangeToTextSpan(sourceText, range) with
                     | None -> ()
                     | Some span -> 
                         let span = 

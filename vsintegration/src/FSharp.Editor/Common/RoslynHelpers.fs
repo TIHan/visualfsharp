@@ -19,6 +19,14 @@ open Microsoft.VisualStudio.FSharp.Editor.Logging
 [<RequireQualifiedAccess>]
 module internal RoslynHelpers =
 
+    let FSharpCompilerServerRangeToTextSpan(sourceText: SourceText, range: FSharp.Compiler.Server.Range) =
+        try
+            let startPosition = sourceText.Lines.[max 0 (range.StartLine - 1)].Start + range.StartColumn
+            let endPosition = sourceText.Lines.[min (range.EndLine - 1) (sourceText.Lines.Count - 1)].Start + range.EndColumn
+            Some(TextSpan(startPosition, endPosition - startPosition))
+        with
+        | _ -> None
+
     let FSharpRangeToTextSpan(sourceText: SourceText, range: range) =
         // Roslyn TextLineCollection is zero-based, F# range lines are one-based
         let startPosition = sourceText.Lines.[max 0 (range.StartLine - 1)].Start + range.StartColumn
