@@ -64,11 +64,6 @@ type SemanticClassificationItem =
         Type: SemanticClassificationType
     }
 
-type SemanticClassification =
-    {
-        Items: SemanticClassificationItem []
-    }
-
 type CheckerData =
     {
         FilePath: string
@@ -76,10 +71,4 @@ type CheckerData =
         SourceText: string
         Options: ProjectOptions
         UserOpName: string option
-    }
-
-type GetSemanticClassificationCommand =
-    {
-        CheckerData: CheckerData
-        RangeToClassify: Range
     }

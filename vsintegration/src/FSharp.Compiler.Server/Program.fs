@@ -1,8 +1,8 @@
-﻿// Learn more about F# at http://fsharp.org
+﻿open System
 
-open System
+open FSharp.Compiler.Server
 
 [<EntryPoint>]
-let main argv =
-    printfn "Hello World from F#!"
-    0 // return an integer exit code
+let main _argv =
+    CompilerServer.Run()
+    0
