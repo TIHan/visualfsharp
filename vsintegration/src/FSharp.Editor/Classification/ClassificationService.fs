@@ -66,7 +66,7 @@ type internal FSharpClassificationService
                             }
                     }
 
-                let! sc = CompilerServer.CreateInProcess(checkerProvider.Checker).GetSemanticClassificationAsync(cmd)
+                let! sc = checkerProvider.Server.GetSemanticClassificationAsync(cmd)
                 
                 for { Range = range; Type = classificationType } in sc.Items do
                     match RoslynHelpers.FSharpCompilerServerRangeToTextSpan(sourceText, range) with

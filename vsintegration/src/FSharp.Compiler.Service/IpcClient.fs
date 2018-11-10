@@ -21,37 +21,43 @@ type IpcMessageClient<'Send, 'Receive>() =
 
     let mutable agent = Unchecked.defaultof<_>
 
-    member __.Start() =
+    member this.Start() =
         agent <- MailboxProcessor<IpcMessage<'Send, 'Receive>>.Start(fun agent -> async {
-            use fcs = new NamedPipeClientStream(".", "fsharpcompilerserver", PipeDirection.InOut, PipeOptions.Asynchronous)
-            fcs.Connect()
-            fcs.ReadMode <- PipeTransmissionMode.Message
+            try
+                use fcs = new NamedPipeClientStream(".", "fsharpcompilerserver", PipeDirection.InOut, PipeOptions.Asynchronous)
+                fcs.Connect()
+                fcs.ReadMode <- PipeTransmissionMode.Message
 
-            use writer = new StreamWriter(fcs)
-            writer.AutoFlush <- true
+                use writer = new StreamWriter(fcs)
+                writer.AutoFlush <- true
 
-            use reader = new StreamReader(fcs)
+                use reader = new StreamReader(fcs)
 
-            writer.Write("Client Connected")
-
-            let count = reader.Read(buffer, 0, buffer.Length)
-            let msg = String(buffer, 0, count)
-            printfn "%A" msg
-            printfn "You are CONNECTED"
-
-            while true do
-                
-                let! msg = agent.Receive()
-
-                if not fcs.IsConnected then
-                    failwith "Disconnected"
-
-                writer.Write(JsonConvert.SerializeObject(msg.Data))
+                writer.Write("Client Connected")
 
                 let count = reader.Read(buffer, 0, buffer.Length)
-                let msgString = String(buffer, 0, count)
+                let msg = String(buffer, 0, count)
+                printfn "%A" msg
+                printfn "You are CONNECTED"
 
-                msg.Reply.Reply(JsonConvert.DeserializeObject<'Receive>(msgString))
+                while true do
+                
+                    let! msg = agent.Receive()
+
+                    if not fcs.IsConnected then
+                        failwith "Disconnected"
+
+                    writer.Write(JsonConvert.SerializeObject(msg.Data))
+
+                    let count = reader.Read(buffer, 0, buffer.Length)
+                    let msgString = String(buffer, 0, count)
+
+                    msg.Reply.Reply(JsonConvert.DeserializeObject<'Receive>(msgString))
+            with
+            | ex ->
+                (agent :> IDisposable).Dispose()
+                printfn "[FSharp Compiler Client] - Restarting due to: %s" ex.Message
+                this.Start()
         })
 
     member __.Send(msg) =

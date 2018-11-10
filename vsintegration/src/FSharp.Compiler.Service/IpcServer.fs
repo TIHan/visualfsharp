@@ -43,7 +43,7 @@ type IpcMessageServer<'Receive, 'Response>(f : 'Receive -> Async<'Response>) =
 
                     let receivedMsg = JsonConvert.DeserializeObject<'Receive>(msgString)
 
-                    printfn "Received: %A" receivedMsg
+                    printfn "Received: %A" (receivedMsg.GetType().Name)
 
                     let responseMsg = f receivedMsg |> Async.RunSynchronously
 

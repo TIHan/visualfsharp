@@ -13,6 +13,7 @@ open Microsoft.VisualStudio.FSharp.Editor
 open Microsoft.VisualStudio.LanguageServices
 open Microsoft.VisualStudio.LanguageServices.Implementation.ProjectSystem
 open FSharp.NativeInterop
+open FSharp.Compiler.Server
 
 #nowarn "9" // NativePtr.toNativeInt
 
@@ -82,5 +83,9 @@ type internal FSharpCheckerProvider
             )
             checker
 
+    let server = CompilerServer.CreateOutOfProcess()
+
     member this.Checker = checker.Value
+
+    member this.Server = server
 
