@@ -15,6 +15,7 @@
     <ProjectFiles Include="src\FSharp.VS.FSI\FSharp.VS.FSI.fsproj" />
     <ProjectFiles Include="src\FSharp.LanguageService.Base\FSharp.LanguageService.Base.csproj" />
     <ProjectFiles Include="src\FSharp.PatternMatcher\FSharp.PatternMatcher.csproj" />
+	<ProjectFiles Include="src\FSharp.Compiler.Service\FSharp.Compiler.Service.fsproj" />
   </ItemGroup>
 
   <Import Project="..\src\root.traversal.targets"/>
