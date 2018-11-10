@@ -3,7 +3,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Library</OutputType>
+    <OutputType>Exe</OutputType>
     <CreateVsixContainer>false</CreateVsixContainer>
     <NoWarn>$(NoWarn);75</NoWarn>
     <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
@@ -15,26 +15,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="ServicePrototype.fs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <InternalsVisibleTo Include="VisualFSharp.UnitTests" />
+    <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="$(FSharpSourcesRoot)\fsharp\FSharp.Core\FSharp.Core.fsproj" />
     <ProjectReference Include="$(FSharpSourcesRoot)\fsharp\FSharp.Compiler.Private\FSharp.Compiler.Private.fsproj" />
+    <ProjectReference Include="..\FSharp.Compiler.Service\FSharp.Compiler.Server.Private.fsproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="$(NewtonsoftJsonPackageVersion)" PrivateAssets="all" ExcludeAssets="runtime;contentFiles;build;analyzers;native" />
-    <PackageReference Include="System.Collections.Immutable" Version="$(SystemCollectionsImmutablePackageVersion)" />
     <PackageReference Include="System.ValueTuple" Version="$(SystemValueTuplePackageVersion)" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Reference Include="System.Runtime.Caching" />
   </ItemGroup>
 
 </Project>
