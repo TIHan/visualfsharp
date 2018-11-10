@@ -51,15 +51,20 @@ let doubleOfBits (x:int64) = System.BitConverter.Int64BitsToDouble(x)
     
 module rec ILReader = 
 
+    //[<Sealed>]
     //type SignatureTypeProvider() =
     //    interface ISignatureTypeProvider<ILType, int> with
 
-    //        member __.GetFunctionPointerType(sign) = 
-    //            {
-    //                CallingConv = ILCallingConv.Callconv(ILThisConvention.Static, ILArgConvention.Default)
-    //                ArgTypes = 
-    //            }
-    //            ILType.FunctionPointer(ILCallingSignature)
+    //        member __.GetFunctionPointerType(s) = 
+    //            let callingSig =
+    //                {
+    //                    CallingConv = ILCallingConv.Callconv(ILThisConvention.Static, ILArgConvention.Default)
+    //                    ArgTypes = s.ParameterTypes |> Seq.toList
+    //                    ReturnType = s.ReturnType
+    //                }
+    //            ILType.FunctionPointer(callingSig)
+
+    //        member __.
 
     let rec convertAssemblyReferenceToILAssemblyRef (mdReader: System.Reflection.Metadata.MetadataReader) (asmRef: AssemblyReference) =
         let name = mdReader.GetString(asmRef.Name)
@@ -229,7 +234,7 @@ module rec ILReader =
         | HandleKind.MethodDefinition ->
             let methodHandle = MethodDefinitionHandle.op_Explicit(handle)
             let methodDef = mdReader.GetMethodDefinition(methodHandle)
-
+          //  methodDef.ImplAttributes = MethodImplAttributes.
             let _ilType = convertEntityHandleToILType mdReader (TypeDefinitionHandle.op_Implicit(methodDef.GetDeclaringType()))
             //ILMethodSpec.Create(ilType,)
             failwith "not impl"
