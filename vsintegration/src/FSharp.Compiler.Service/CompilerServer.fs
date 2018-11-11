@@ -11,6 +11,7 @@ open Microsoft.FSharp.Compiler.SourceCodeServices
 [<RequireQualifiedAccess>]
 type CompilerCommand =
     | GetSemanticClassification of GetSemanticClassificationCommand
+    | GetMatchBraces
 
 [<RequireQualifiedAccess>]
 type CompilerResult =
