@@ -13,11 +13,11 @@ open Microsoft.FSharp.Compiler.SourceCodeServices
 [<RequireQualifiedAccess>]
 module CompilerServer =
 
-    let Run () =
+    let Run uniqueName =
         let checker = FSharpChecker.Create()
         let server = new CompilerServerInProcess(checker) :> ICompilerServer
 
-        let ipcServer = IpcMessageServer<CompilerCommand, CompilerResult>(fun cmd -> async {
+        let ipcServer = IpcMessageServer<CompilerCommand, CompilerResult>(uniqueName, fun cmd -> async {
                 match cmd with
                 | CompilerCommand.GetSemanticClassification(cmd) ->
                     let! result = server.GetSemanticClassificationAsync(cmd)
@@ -34,6 +34,7 @@ module CompilerServer =
         new CompilerServerInProcess(checker) :> ICompilerServer
 
     let CreateOutOfProcess () =
-        let client = new CompilerServerOutOfProcess()
+        let uniqueName = "FSharpCompilerServer_" + (Guid.NewGuid().ToString())
+        let client = new CompilerServerOutOfProcess(uniqueName)
         client.Start()
         client :> ICompilerServer

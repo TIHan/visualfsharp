@@ -15,7 +15,7 @@ type IpcMessage<'Send, 'Receive> =
         Reply: AsyncReplyChannel<'Receive>
     }
 
-type IpcMessageClient<'Send, 'Receive>() =
+type IpcMessageClient<'Send, 'Receive>(name) =
 
     let buffer = Array.zeroCreate<char> Constants.IpcBufferSize
 
@@ -35,7 +35,7 @@ type IpcMessageClient<'Send, 'Receive>() =
 
             while true do
                 try
-                    use fcs = new NamedPipeClientStream(".", "fsharpcompilerserver", PipeDirection.InOut, PipeOptions.None)
+                    use fcs = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.None)
                     fcs.Connect()
                     fcs.ReadMode <- PipeTransmissionMode.Message
 

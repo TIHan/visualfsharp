@@ -11,7 +11,7 @@ open Microsoft.FSharp.Compiler.Range
 open Microsoft.FSharp.Compiler.SourceCodeServices
 
 [<Sealed>]
-type internal CompilerServerOutOfProcess() =
+type internal CompilerServerOutOfProcess(uniqueName) =
 
     let mutable procOpt : Process option = None
     let mutable isStarted = false
@@ -30,6 +30,7 @@ type internal CompilerServerOutOfProcess() =
         try
             let p = new Process()
             p.StartInfo.UseShellExecute <- true
+            p.StartInfo.Arguments <- uniqueName
             p.StartInfo.FileName <- Path.Combine(getAssemblyDirectory (Assembly.GetExecutingAssembly()), "FSharp.Compiler.Server.exe")
 
             procOpt <- Some(p)
@@ -42,7 +43,7 @@ type internal CompilerServerOutOfProcess() =
             reraise()
         
 
-    let ipcClient = new IpcMessageClient<CompilerCommand, CompilerResult>()
+    let ipcClient = new IpcMessageClient<CompilerCommand, CompilerResult>(uniqueName)
 
     do
         restartingHandler <- ipcClient.Restarting.Subscribe(fun () ->

@@ -9,12 +9,12 @@ open System.IO.Pipes
 
 open Newtonsoft.Json
 
-type IpcMessageServer<'Receive, 'Response>(f : 'Receive -> Async<'Response>) =
+type IpcMessageServer<'Receive, 'Response>(name, f : 'Receive -> Async<'Response>) =
 
     let buffer = Array.zeroCreate<char> Constants.IpcBufferSize
 
     member this.Run() =
-        use fcs = new NamedPipeServerStream("fsharpcompilerserver", PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.None)
+        use fcs = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.None)
 
         printfn "[FSharp Compiler Server] - Transmission Mode: %A" fcs.TransmissionMode
         printfn "[FSharp Compiler Server] - Waiting for connection"
