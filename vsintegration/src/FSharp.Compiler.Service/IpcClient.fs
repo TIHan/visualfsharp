@@ -57,7 +57,6 @@ type IpcMessageClient<'Send, 'Receive>() =
                     msg.Reply.Reply(JsonConvert.DeserializeObject<'Receive>(msgString))
             with
             | ex ->
-                (agent :> IDisposable).Dispose()
                 printfn "[FSharp Compiler Client] - Restarting due to: %s" ex.Message
                 restartingEvent.Trigger()
                 this.Start()
@@ -71,4 +70,10 @@ type IpcMessageClient<'Send, 'Receive>() =
 
     [<CLIEvent>]
     member __.Restarting = restartingEvent.Publish
+
+    interface IDisposable with
+
+        member __.Dispose() =
+            if not (obj.ReferenceEquals(agent, null)) then
+                (agent :> IDisposable).Dispose()
 

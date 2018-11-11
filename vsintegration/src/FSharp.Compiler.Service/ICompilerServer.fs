@@ -1,5 +1,7 @@
 ﻿namespace FSharp.Compiler.Server
 
+open System
+
 type GetSemanticClassificationCommand =
     {
         CheckerData: CheckerData
@@ -12,6 +14,7 @@ type GetSemanticClassificationResult =
     }
 
 type ICompilerServer =
+    inherit IDisposable
 
     abstract GetSemanticClassificationAsync : GetSemanticClassificationCommand -> Async<GetSemanticClassificationResult option>
 
