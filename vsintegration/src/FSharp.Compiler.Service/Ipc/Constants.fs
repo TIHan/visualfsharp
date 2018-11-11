@@ -1,5 +1,5 @@
 ﻿[<RequireQualifiedAccess>]
-module FSharp.Compiler.Server.Constants
+module Microsoft.FSharp.Compiler.Server.Constants
 
 [<Literal>]
 let IpcMegabyteSize = 10

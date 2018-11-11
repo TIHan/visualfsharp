@@ -14,12 +14,13 @@ open Microsoft.FSharp.Compiler
 open Microsoft.FSharp.Compiler.Layout
 open Microsoft.FSharp.Compiler.SourceCodeServices
 open Microsoft.FSharp.Compiler.Range
+open Microsoft.FSharp.Compiler.Server
 open Microsoft.VisualStudio.FSharp.Editor.Logging
 
 [<RequireQualifiedAccess>]
 module internal RoslynHelpers =
 
-    let FSharpCompilerServerRangeToTextSpan(sourceText: SourceText, range: FSharp.Compiler.Server.Range) =
+    let FSharpCompilerServerRangeToTextSpan(sourceText: SourceText, range: Microsoft.FSharp.Compiler.Server.Range) =
         try
             let startPosition = sourceText.Lines.[max 0 (range.StartLine - 1)].Start + range.StartColumn
             let endPosition = sourceText.Lines.[min (range.EndLine - 1) (sourceText.Lines.Count - 1)].Start + range.EndColumn
@@ -47,14 +48,22 @@ module internal RoslynHelpers =
             (Pos.fromZ startLine.LineNumber (textSpan.Start - startLine.Start))
             (Pos.fromZ endLine.LineNumber (textSpan.End - endLine.Start))
 
+    let TextSpanToFSharpCompilerServerRange(textSpan: TextSpan, sourceText: SourceText) : Range =
+        let startLine = sourceText.Lines.GetLineFromPosition textSpan.Start
+        let endLine = sourceText.Lines.GetLineFromPosition textSpan.End
+        {
+            StartLine = startLine.LineNumber + 1
+            StartColumn = (textSpan.Start - startLine.Start)
+            EndLine = endLine.LineNumber + 1
+            EndColumn = (textSpan.End - endLine.Start)
+        }
+
     let GetCompletedTaskResult(task: Task<'TResult>) =
         if task.Status = TaskStatus.RanToCompletion then
             task.Result
         else
             Assert.Exception(task.Exception.GetBaseException())
             raise(task.Exception.GetBaseException())
-
-
 
     /// maps from `LayoutTag` of the F# Compiler to Roslyn `TextTags` for use in tooltips
     let roslynTag = function
@@ -145,18 +154,18 @@ module internal RoslynHelpers =
 
     let SupportedDiagnostics() = TheSupportedDiagnostics
 
-    let ConvertError(error: FSharpErrorInfo, location: Location) =
+    let ConvertError(error: ErrorInfo, location: Location) =
         // Normalize the error message into the same format that we will receive it from the compiler.
         // This ensures that IntelliSense and Compiler errors in the 'Error List' are de-duplicated.
         // (i.e the same error does not appear twice, where the only difference is the line endings.)
         let normalizedMessage = error.Message |> ErrorLogger.NormalizeErrorString |> ErrorLogger.NewlineifyErrorString
 
-        let id = "FS" + error.ErrorNumber.ToString("0000")
+        let id = "FS" + error.Number.ToString("0000")
         let emptyString = LocalizableString.op_Implicit("")
         let description = LocalizableString.op_Implicit(normalizedMessage)
-        let severity = if error.Severity = FSharpErrorSeverity.Error then DiagnosticSeverity.Error else DiagnosticSeverity.Warning
+        let severity = if error.Severity = ErrorSeverity.Error then DiagnosticSeverity.Error else DiagnosticSeverity.Warning
         let customTags = 
-            match error.ErrorNumber with
+            match error.Number with
             | 1182 -> DiagnosticCustomTags.Unnecessary
             | _ -> null
         let descriptor = new DiagnosticDescriptor(id, emptyString, description, error.Subcategory, severity, true, emptyString, String.Empty, customTags)

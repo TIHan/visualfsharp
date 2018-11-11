@@ -14,7 +14,7 @@ open Microsoft.CodeAnalysis.Editor
 open Microsoft.CodeAnalysis.Host.Mef
 open Microsoft.CodeAnalysis.Text
 
-open FSharp.Compiler.Server
+open Microsoft.FSharp.Compiler.Server
 
 // IEditorClassificationService is marked as Obsolete, but is still supported. The replacement (IClassificationService)
 // is internal to Microsoft.CodeAnalysis.Workspaces which we don't have internals visible to. Rather than add yet another
@@ -30,7 +30,6 @@ type internal FSharpClassificationService
         checkerProvider: FSharpCheckerProvider,
         projectInfoManager: FSharpProjectOptionsManager
     ) =
-    static let userOpName = "SemanticColorization"
 
     interface IEditorClassificationService with
         // Do not perform classification if we don't have project options (#defines matter)
@@ -50,21 +49,11 @@ type internal FSharpClassificationService
                 use _logBlock = Logger.LogBlock(LogEditorFunctionId.Classification_Semantic)
                 let! sourceText = document.GetTextAsync(cancellationToken)
                 // it's crucial to not return duplicated or overlapping `ClassifiedSpan`s because Find Usages service crashes.
-                let targetRange = RoslynHelpers.TextSpanToFSharpRange(document.FilePath, textSpan, sourceText)
+                let targetRange = RoslynHelpers.TextSpanToFSharpCompilerServerRange(textSpan, sourceText)
 
                 let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document)
-                let! checkerData = document.GetCheckerData(cancellationToken, ProjectOptions.FromFSharpProjectOptions(projectOptions), "FSharpClassificationService.AddSemanticClassificationsAsync")
-                let cmd =
-                    {
-                        CheckerData = checkerData
-                        RangeToClassify = 
-                            { 
-                                StartLine = targetRange.StartLine
-                                StartColumn = targetRange.StartColumn
-                                EndLine = targetRange.EndLine
-                                EndColumn = targetRange.EndColumn
-                            }
-                    }
+                let! checkerOptions = document.GetCheckerOptions(cancellationToken, ProjectOptions.FromFSharpProjectOptions(projectOptions), "FSharpClassificationService.AddSemanticClassificationsAsync")
+                let cmd = Command.GetSemanticClassification.Create(checkerOptions, targetRange)
 
                 let! sc = checkerProvider.Server.GetSemanticClassificationAsync(cmd)
                 
@@ -74,7 +63,7 @@ type internal FSharpClassificationService
                     | Some span -> 
                         let span = 
                             match classificationType with
-                            | SemanticClassificationType.Printf -> span
+                            | SemanticClassificationItemType.Printf -> span
                             | _ -> Tokenizer.fixupSpan(sourceText, span)
                         result.Add(ClassifiedSpan(span, FSharpClassificationTypes.getClassificationTypeName(classificationType)))
             } 

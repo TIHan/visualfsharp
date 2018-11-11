@@ -1,4 +1,4 @@
-﻿namespace FSharp.Compiler.Server
+﻿namespace Microsoft.FSharp.Compiler.Server
 
 open System
 open System.IO
@@ -14,7 +14,7 @@ type IpcMessageServer<'Receive, 'Response>(f : 'Receive -> Async<'Response>) =
     let buffer = Array.zeroCreate<char> Constants.IpcBufferSize
 
     member this.Run() =
-        use fcs = new NamedPipeServerStream("fsharpcompilerserver", PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.Asynchronous)
+        use fcs = new NamedPipeServerStream("fsharpcompilerserver", PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.None)
 
         printfn "[FSharp Compiler Server] - Transmission Mode: %A" fcs.TransmissionMode
         printfn "[FSharp Compiler Server] - Waiting for connection"

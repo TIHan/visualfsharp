@@ -18,6 +18,7 @@ open Microsoft.VisualStudio.Utilities
 open Microsoft.CodeAnalysis.Classification
 
 open Microsoft.FSharp.Compiler.SourceCodeServices
+open Microsoft.FSharp.Compiler.Server
 
 [<RequireQualifiedAccess>]
 module internal FSharpClassificationTypes =
@@ -36,21 +37,21 @@ module internal FSharpClassificationTypes =
     let [<Literal>] Disposable = "FSharp.Disposable"
 
     let getClassificationTypeName = function
-        | SemanticClassificationType.ReferenceType -> ReferenceType
-        | SemanticClassificationType.Module -> Module
-        | SemanticClassificationType.ValueType -> ValueType
-        | SemanticClassificationType.Function -> Function
-        | SemanticClassificationType.MutableVar -> MutableVar
-        | SemanticClassificationType.Printf -> Printf
-        | SemanticClassificationType.ComputationExpression
-        | SemanticClassificationType.IntrinsicFunction -> Keyword
-        | SemanticClassificationType.UnionCase
-        | SemanticClassificationType.Enumeration -> Enum
-        | SemanticClassificationType.Property -> Property
-        | SemanticClassificationType.Interface -> Interface
-        | SemanticClassificationType.TypeArgument -> TypeArgument
-        | SemanticClassificationType.Operator -> Operator 
-        | SemanticClassificationType.Disposable -> Disposable
+        | SemanticClassificationItemType.ReferenceType -> ReferenceType
+        | SemanticClassificationItemType.Module -> Module
+        | SemanticClassificationItemType.ValueType -> ValueType
+        | SemanticClassificationItemType.Function -> Function
+        | SemanticClassificationItemType.MutableVar -> MutableVar
+        | SemanticClassificationItemType.Printf -> Printf
+        | SemanticClassificationItemType.ComputationExpression
+        | SemanticClassificationItemType.IntrinsicFunction -> Keyword
+        | SemanticClassificationItemType.UnionCase
+        | SemanticClassificationItemType.Enumeration -> Enum
+        | SemanticClassificationItemType.Property -> Property
+        | SemanticClassificationItemType.Interface -> Interface
+        | SemanticClassificationItemType.TypeArgument -> TypeArgument
+        | SemanticClassificationItemType.Operator -> Operator 
+        | SemanticClassificationItemType.Disposable -> Disposable
 
 module internal ClassificationDefinitions =
 

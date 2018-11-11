@@ -17,9 +17,13 @@
   <ItemGroup>
     <Compile Include="Types.fs" />
     <Compile Include="ICompilerServer.fs" />
-    <Compile Include="Constants.fs" />
-    <Compile Include="IpcClient.fs" />
-    <Compile Include="IpcServer.fs" />
+    <Compile Include="CommandBehavior\GetErrorInfos.fs" />
+    <Compile Include="Ipc\Constants.fs" />
+    <Compile Include="Ipc\IpcClient.fs" />
+    <Compile Include="Ipc\IpcServer.fs" />
+    <Compile Include="CompilerServerTypes.fs" />
+    <Compile Include="CompilerServerOutOfProcess.fs" />
+    <Compile Include="CompilerServerInProcess.fs" />
     <Compile Include="CompilerServer.fs" />
   </ItemGroup>
 

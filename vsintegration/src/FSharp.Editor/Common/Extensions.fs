@@ -10,8 +10,7 @@ open Microsoft.CodeAnalysis
 open Microsoft.CodeAnalysis.Host
 open Microsoft.FSharp.Compiler.Ast
 open Microsoft.FSharp.Compiler.SourceCodeServices
-
-open FSharp.Compiler.Server
+open Microsoft.FSharp.Compiler.Server
 
 type Path with
     static member GetFullPathSafe path =
@@ -42,17 +41,20 @@ type Document with
                 languageServices.GetService<'T>()
                 |> Some
 
-    member this.GetCheckerData(cancellationToken, options, userOpName) = asyncMaybe {
+    member this.GetCheckerOptions(cancellationToken, options, userOpName) = asyncMaybe {
             let! sourceText = this.GetTextAsync(cancellationToken)
             let! textVersion = this.GetTextVersionAsync(cancellationToken)
 
-            return {
-                FilePath = this.FilePath
-                TextVersionHash = textVersion.GetHashCode()
-                SourceText = sourceText.ToString()
-                Options = options
-                UserOpName = Some(userOpName)
-            }
+            let checkerOptions : CheckerOptions =
+                {
+                    FilePath = this.FilePath
+                    TextVersionHash = textVersion.GetHashCode()
+                    SourceText = sourceText.ToString()
+                    ProjectOptions = options
+                    UserOpName = Some(userOpName)
+                }
+
+            return checkerOptions
         }
         
 

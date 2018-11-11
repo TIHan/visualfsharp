@@ -1,6 +1,6 @@
 ﻿open System
 
-open FSharp.Compiler.Server
+open Microsoft.FSharp.Compiler.Server
 
 [<EntryPoint>]
 let main _argv =

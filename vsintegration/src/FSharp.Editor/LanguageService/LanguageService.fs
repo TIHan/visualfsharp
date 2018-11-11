@@ -47,6 +47,7 @@ type internal FSharpCheckerWorkspaceService =
     inherit Microsoft.CodeAnalysis.Host.IWorkspaceService
     abstract Checker: FSharpChecker
     abstract FSharpProjectOptionsManager: FSharpProjectOptionsManager
+    abstract Server : Microsoft.FSharp.Compiler.Server.ICompilerServer
 
 type internal RoamingProfileStorageLocation(keyName: string) =
     inherit OptionStorageLocation()
@@ -71,7 +72,8 @@ type internal FSharpCheckerWorkspaceServiceFactory
         member this.CreateService(_workspaceServices) =
             upcast { new FSharpCheckerWorkspaceService with
                 member this.Checker = checkerProvider.Checker
-                member this.FSharpProjectOptionsManager = projectInfoManager }
+                member this.FSharpProjectOptionsManager = projectInfoManager
+                member this.Server = checkerProvider.Server }
 
 [<Microsoft.CodeAnalysis.Host.Mef.ExportWorkspaceServiceFactory(typeof<EditorOptions>, Microsoft.CodeAnalysis.Host.Mef.ServiceLayer.Default)>]
 type internal FSharpSettingsFactory

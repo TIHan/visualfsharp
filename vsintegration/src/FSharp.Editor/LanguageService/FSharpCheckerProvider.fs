@@ -13,7 +13,7 @@ open Microsoft.VisualStudio.FSharp.Editor
 open Microsoft.VisualStudio.LanguageServices
 open Microsoft.VisualStudio.LanguageServices.Implementation.ProjectSystem
 open FSharp.NativeInterop
-open FSharp.Compiler.Server
+open Microsoft.FSharp.Compiler.Server
 
 #nowarn "9" // NativePtr.toNativeInt
 
