@@ -1,6 +1,9 @@
 ﻿namespace FSharp.Compiler.Server
 
 open System
+open System.IO
+open System.Reflection
+open System.Diagnostics
 
 open Newtonsoft.Json
 
@@ -19,7 +22,46 @@ type CompilerResult =
     | GetSemanticClassification of GetSemanticClassificationResult option
 
 [<Sealed>]
-type internal CompilerServerOut(ipcClient: IpcMessageClient<CompilerCommand, CompilerResult>) =
+type internal CompilerServerOut() =
+
+    let mutable currentProcOpt : Process option = None
+    let mutable isStarted = false
+
+    let getAssemblyDirectory (asm: Assembly) =
+        Path.GetDirectoryName(asm.Location)
+
+    let startProcess () =
+        match currentProcOpt with
+        | Some(proc) -> try proc.Kill() with | _ -> ()
+        | _ -> ()
+
+        try
+            let p = new Process()
+            p.StartInfo.UseShellExecute <- true
+            p.StartInfo.FileName <- Path.Combine(getAssemblyDirectory (Assembly.GetExecutingAssembly()), "FSharp.Compiler.Server.exe")
+
+            p.Start() |> ignore
+            currentProcOpt <- Some(p)
+        with
+        | ex ->
+            printfn "failed: %s" ex.Message
+            reraise()
+        
+
+    let ipcClient = IpcMessageClient<CompilerCommand, CompilerResult>()
+
+    do
+        ipcClient.Restarting.Add(fun () ->
+            startProcess ()
+        )
+
+    member __.Start() =
+        if not isStarted then
+            startProcess ()
+            ipcClient.Start ()
+            isStarted <- true
+        else
+            failwith "FSharp Compiler Server Client already started."
 
     interface ICompilerServer with
 
@@ -61,6 +103,7 @@ module CompilerServer =
                 | CompilerCommand.GetSemanticClassification(cmd) ->
                     let! result = server.GetSemanticClassificationAsync(cmd)
                     return CompilerResult.GetSemanticClassification(result)
+                | _ -> return CompilerResult.GetSemanticClassification(None)
         })
        
         ipcServer.Run()
@@ -69,10 +112,6 @@ module CompilerServer =
         CompilerServerIn(checker) :> ICompilerServer
 
     let CreateOutOfProcess () =
-        let ipcClient = IpcMessageClient<CompilerCommand, CompilerResult>()
-        ipcClient.Start()
-        CompilerServerOut(ipcClient) :> ICompilerServer
-//type CompilerServer(ls: CompilerListenServer, ipcServer: IpcMessageServer<CompilerCommand, CompilerResult>) =
-
-//    member __.Run() =
-//        ipcServer.S
+        let client = CompilerServerOut()
+        client.Start()
+        client :> ICompilerServer

@@ -19,6 +19,8 @@ type IpcMessageClient<'Send, 'Receive>() =
 
     let buffer = Array.zeroCreate<char> Constants.IpcBufferSize
 
+    let restartingEvent = Event<unit>()
+
     let mutable agent = Unchecked.defaultof<_>
 
     member this.Start() =
@@ -57,9 +59,16 @@ type IpcMessageClient<'Send, 'Receive>() =
             | ex ->
                 (agent :> IDisposable).Dispose()
                 printfn "[FSharp Compiler Client] - Restarting due to: %s" ex.Message
+                restartingEvent.Trigger()
                 this.Start()
         })
 
     member __.Send(msg) =
-        agent.PostAndAsyncReply(fun reply -> { Data = msg; Reply = reply })
+        if not (obj.ReferenceEquals(agent, null)) then
+            agent.PostAndAsyncReply(fun reply -> { Data = msg; Reply = reply })
+        else
+            failwith "IpcClient not started."
+
+    [<CLIEvent>]
+    member __.Restarting = restartingEvent.Publish
 
