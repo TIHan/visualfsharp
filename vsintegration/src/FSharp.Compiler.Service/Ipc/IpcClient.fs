@@ -39,19 +39,13 @@ type IpcMessageClient<'Send, 'Receive>(name) =
                     fcs.Connect()
                     fcs.ReadMode <- PipeTransmissionMode.Message
 
-                    use writer = new StreamWriter(fcs)
-                    writer.AutoFlush <- true
-
-                    use reader = new StreamReader(fcs)
-
-                    writer.Write("Client Connected")
-
-                    let count = reader.Read(buffer, 0, buffer.Length)
-                    let msg = String(buffer, 0, count)
-                    printfn "%A" msg
-                    printfn "You are CONNECTED"
+                    let writer = new StreamWriter(fcs, AutoFlush = true)
+                    let reader = new StreamReader(fcs)
 
                     while true do
+                        if not fcs.IsConnected then
+                            failwith "Disconnected"
+
                         let! msg = getMsg ()
 
                         currentMsgOpt <- Some(msg)

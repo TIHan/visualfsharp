@@ -40,6 +40,7 @@
     <PackageReference Include="Newtonsoft.Json" Version="$(NewtonsoftJsonPackageVersion)" PrivateAssets="all" ExcludeAssets="runtime;contentFiles;build;analyzers;native" />
     <PackageReference Include="System.Collections.Immutable" Version="$(SystemCollectionsImmutablePackageVersion)" />
     <PackageReference Include="System.ValueTuple" Version="$(SystemValueTuplePackageVersion)" />
+    <PackageReference Include="Microsoft.ServiceHub.Host.CLR" Version="1.0.226-rc" />
   </ItemGroup>
 
   <ItemGroup>

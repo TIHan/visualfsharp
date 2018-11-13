@@ -16,34 +16,34 @@ type IpcMessageServer<'Receive, 'Response>(name, f : 'Receive -> Async<'Response
     member this.Run() =
         use fcs = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.None)
 
-        printfn "[FSharp Compiler Server] - Transmission Mode: %A" fcs.TransmissionMode
         printfn "[FSharp Compiler Server] - Waiting for connection"
 
         fcs.WaitForConnection()
 
-        printfn "[FSharp Compiler Server] - Client Connected"
+        printfn "[FSharp Compiler Server] - Client connected"
 
-        use writer = new StreamWriter(fcs, AutoFlush = true)
-        use reader = new StreamReader(fcs)
+        let writer = new StreamWriter(fcs, AutoFlush = true)
+        let reader = new StreamReader(fcs)
 
-        let count = reader.Read(buffer, 0, buffer.Length)
-        let msg = String(buffer, 0, count)
-        printfn "%A" msg
+        try
+            while true do
+                if not fcs.IsConnected then
+                    failwith "Client disconnected"
 
-        writer.Write("Server says hello.")
+                let count = reader.Read(buffer, 0, buffer.Length)
+                if count > 0 then
+                    let msgString = String(buffer, 0, count)
 
-        while true do
-            if not fcs.IsConnected then
-                failwith "Disconnected"
+                    let receivedMsg = JsonConvert.DeserializeObject<'Receive>(msgString)
 
-            let count = reader.Read(buffer, 0, buffer.Length)
-            if count > 0 then
-                let msgString = String(buffer, 0, count)
+                    printfn "Received: %A" (receivedMsg.GetType().Name)
 
-                let receivedMsg = JsonConvert.DeserializeObject<'Receive>(msgString)
+                    let responseMsg = f receivedMsg |> Async.RunSynchronously
 
-                printfn "Received: %A" (receivedMsg.GetType().Name)
+                    if not fcs.IsConnected then
+                        failwith "Client disconnected"
 
-                let responseMsg = f receivedMsg |> Async.RunSynchronously
-
-                writer.Write(JsonConvert.SerializeObject(responseMsg))
+                    writer.Write(JsonConvert.SerializeObject(responseMsg))
+        with
+        | ex -> 
+            printfn "[FSharp Compiler Server] - Closing due to: %s" ex.Message
