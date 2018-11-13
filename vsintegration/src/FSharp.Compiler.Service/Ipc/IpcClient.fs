@@ -12,7 +12,7 @@ open Newtonsoft.Json
 type IpcMessage<'Send, 'Receive> =
     {
         Data: 'Send
-        Reply: AsyncReplyChannel<'Receive>
+        Reply: AsyncReplyChannel<Result<'Receive, string>>
     }
 
 type IpcMessageClient<'Send, 'Receive>(name) =
@@ -49,18 +49,25 @@ type IpcMessageClient<'Send, 'Receive>(name) =
                         let! msg = getMsg ()
 
                         currentMsgOpt <- Some(msg)
+                    
+                        try
+                            if not fcs.IsConnected then
+                                failwith "Disconnected"
 
-                        if not fcs.IsConnected then
-                            failwith "Disconnected"
+                            writer.Write(JsonConvert.SerializeObject(msg.Data))
 
-                        writer.Write(JsonConvert.SerializeObject(msg.Data))
+                            currentMsgOpt <- None
 
-                        currentMsgOpt <- None
+                            let count = reader.Read(buffer, 0, buffer.Length)
+                            if count > 0 then
+                                let msgString = String(buffer, 0, count)
 
-                        let count = reader.Read(buffer, 0, buffer.Length)
-                        let msgString = String(buffer, 0, count)
-
-                        msg.Reply.Reply(JsonConvert.DeserializeObject<'Receive>(msgString))
+                                msg.Reply.Reply(Result.Ok(JsonConvert.DeserializeObject<'Receive>(msgString)))
+                            else
+                                msg.Reply.Reply(Result.Error("Unable to get response"))
+                        with
+                        | ex -> msg.Reply.Reply(Result.Error(ex.Message))
+                        
                 with
                 | ex ->
                     printfn "[FSharp Compiler Client] - Restarting due to: %s" ex.Message

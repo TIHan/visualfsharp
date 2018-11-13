@@ -19,8 +19,8 @@ module CompilerServer =
 
         let ipcServer = IpcMessageServer<CompilerCommand, CompilerResult>(uniqueName, fun cmd -> async {
                 match cmd with
-                | CompilerCommand.GetSemanticClassification(cmd) ->
-                    let! result = server.GetSemanticClassificationAsync(cmd)
+                | CompilerCommand.GetSemanticClassification(checkerOptions, classifyRange) ->
+                    let! result = server.GetSemanticClassificationAsync(checkerOptions, classifyRange)
                     return CompilerResult.GetSemanticClassification(result)
 
                 | CompilerCommand.GetErrorInfos(cmd) ->

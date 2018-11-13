@@ -15,9 +15,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="Types.fs" />
     <Compile Include="ICompilerServer.fs" />
-    <Compile Include="CommandBehavior\GetErrorInfos.fs" />
+    <Compile Include="Behavior\GetErrorInfos.fs" />
     <Compile Include="Ipc\Constants.fs" />
     <Compile Include="Ipc\IpcClient.fs" />
     <Compile Include="Ipc\IpcServer.fs" />

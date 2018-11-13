@@ -2,10 +2,10 @@
 
 [<RequireQualifiedAccess>]
 type CompilerCommand =
-    | GetSemanticClassification of Command.GetSemanticClassification
+    | GetSemanticClassification of checkerOptions: CheckerOptions * range: Range
     | GetErrorInfos of Command.GetErrorInfos
 
 [<RequireQualifiedAccess>]
 type CompilerResult =
-    | GetSemanticClassification of CommandResult.GetSemanticClassification option
+    | GetSemanticClassification of SemanticClassificationItem []
     | GetErrorInfosResult of CommandResult.GetErrorInfos option

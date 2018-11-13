@@ -15,18 +15,15 @@ type internal CompilerServerInProcess(checker: FSharpChecker) =
 
     interface ICompilerServer with 
 
-        member __.GetSemanticClassificationAsync(cmd) = async {
-            let data = cmd.CheckerOptions
-            let! _, fileAnswer = checker.ParseAndCheckFileInProject(data.FilePath, data.TextVersionHash, data.SourceText, data.ProjectOptions.ToFSharpProjectOptions(), data.UserOpName)
+        member __.GetSemanticClassificationAsync(checkerOptions, classifyRange) = async {
+            let! _, fileAnswer = checker.ParseAndCheckFileInProject(checkerOptions.FilePath, checkerOptions.TextVersionHash, checkerOptions.SourceText, checkerOptions.ProjectOptions.ToFSharpProjectOptions(), checkerOptions.UserOpName)
             match fileAnswer with
-            | FSharpCheckFileAnswer.Aborted -> return None
+            | FSharpCheckFileAnswer.Aborted -> return [||]
             | FSharpCheckFileAnswer.Succeeded(fileResults) ->
-                let targetRange = cmd.ClassifyRange.ToFSharpRange(cmd.CheckerOptions.FilePath)
+                let targetRange = classifyRange.ToFSharpRange(checkerOptions.FilePath)
                 return
-                    Some { Items =
-                        fileResults.GetSemanticClassification(Some(targetRange))
-                        |> Array.map (fun (m, t) -> SemanticClassificationItem.FromFSharp(m, t))
-                    } 
+                    fileResults.GetSemanticClassification(Some(targetRange))
+                    |> Array.map (fun (m, t) -> SemanticClassificationItem.FromFSharp(m, t))
         }
 
         member __.GetErrorInfosAsync(cmd) = async {

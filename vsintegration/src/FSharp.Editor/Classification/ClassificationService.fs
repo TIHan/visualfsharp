@@ -53,11 +53,11 @@ type internal FSharpClassificationService
 
                 let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document)
                 let! checkerOptions = document.GetCheckerOptions(cancellationToken, ProjectOptions.FromFSharpProjectOptions(projectOptions), "FSharpClassificationService.AddSemanticClassificationsAsync")
-                let cmd = Command.GetSemanticClassification.Create(checkerOptions, targetRange)
+             //   let cmd = Command.GetSemanticClassification.Create(checkerOptions, targetRange)
 
-                let! sc = checkerProvider.Server.GetSemanticClassificationAsync(cmd)
+                let! items = checkerProvider.Server.GetSemanticClassificationAsync(checkerOptions, targetRange) |> liftAsync
                 
-                for { Range = range; Type = classificationType } in sc.Items do
+                for { Range = range; Type = classificationType } in items do
                     match RoslynHelpers.FSharpCompilerServerRangeToTextSpan(sourceText, range) with
                     | None -> ()
                     | Some span -> 

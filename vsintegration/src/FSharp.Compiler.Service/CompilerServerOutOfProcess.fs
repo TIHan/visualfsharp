@@ -58,18 +58,24 @@ type internal CompilerServerOutOfProcess(uniqueName) =
         else
             failwith "FSharp Compiler Server Client already started."
 
+    member __.SendCommand<'Result>(cmd: CompilerCommand) : Async<'Result> = async {
+        let! result = ipcClient.Send(cmd)
+        let result =
+            match cmd, result with
+            | CompilerCommand.GetSemanticClassification _, Ok(CompilerResult.GetSemanticClassification(result)) -> result :> obj
+            | CompilerCommand.GetErrorInfos _, Ok(CompilerResult.GetErrorInfosResult(result)) -> result :> obj
+            | _ -> failwith "Bad result"
+        return result :?> 'Result
+    }
+
     interface ICompilerServer with
 
-        member __.GetSemanticClassificationAsync(cmd) = async {
-            match! ipcClient.Send(CompilerCommand.GetSemanticClassification(cmd)) with
-            | CompilerResult.GetSemanticClassification(result) -> return result
-            | _ -> return None
+        member this.GetSemanticClassificationAsync(checkerOptions, classifyRange) = async {
+            return! this.SendCommand(CompilerCommand.GetSemanticClassification(checkerOptions, classifyRange))
         }
 
-        member __.GetErrorInfosAsync(cmd) = async {
-            match! ipcClient.Send(CompilerCommand.GetErrorInfos(cmd)) with
-            | CompilerResult.GetErrorInfosResult(result) -> return result
-            | _ -> return None
+        member this.GetErrorInfosAsync(cmd) = async {
+            return! this.SendCommand(CompilerCommand.GetErrorInfos(cmd))
         }
 
     interface IDisposable with
