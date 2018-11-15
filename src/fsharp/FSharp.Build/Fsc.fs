@@ -547,7 +547,6 @@ type public Fsc () as this =
 
     override fsc.GenerateCommandLineCommands() =
         let builder = new FSharpCommandLineBuilder()
-        if not (String.IsNullOrEmpty(dotnetFscCompilerPath)) then builder.AppendSwitch(dotnetFscCompilerPath)
         builder.ToString()
 
     override fsc.GenerateResponseFileCommands() =
