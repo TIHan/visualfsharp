@@ -5,17 +5,37 @@ open System.Reflection
 open System.Reflection.PortableExecutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
-open Microsoft.FSharp.Compiler.AbstractIL.Internal 
-#if !FX_NO_PDB_READER
-open Microsoft.FSharp.Compiler.AbstractIL.Internal.Support 
-#endif
-open Microsoft.FSharp.Compiler.AbstractIL.Diagnostics 
-open Microsoft.FSharp.Compiler.AbstractIL.Internal.BinaryConstants 
 open Microsoft.FSharp.Compiler.AbstractIL.IL  
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
 
 let createVersionTuple (v: Version) =
-    (uint16 v.Major, uint16 v.Minor, uint16 v.Build, uint16 v.Revision)    
+    (uint16 v.Major, uint16 v.Minor, uint16 v.Build, uint16 v.Revision)
+    
+let createILMemberAccess (attributes: TypeAttributes) =
+    if int (attributes &&& TypeAttributes.Public) <> 0 then
+        ILMemberAccess.Public
+    elif int (attributes &&& TypeAttributes.NestedFamily) <> 0 then
+        ILMemberAccess.Family
+    elif int (attributes &&& TypeAttributes.NestedFamANDAssem) <> 0 then
+        ILMemberAccess.FamilyAndAssembly
+    elif int (attributes &&& TypeAttributes.NestedFamORAssem) <> 0 then
+        ILMemberAccess.FamilyOrAssembly
+    elif int (attributes &&& TypeAttributes.NestedAssembly) <> 0 then
+        ILMemberAccess.Assembly
+    else
+        ILMemberAccess.Private
+
+let createILTypeDefAccess (attributes: TypeAttributes) =
+    let ilMemberAccess = createILMemberAccess attributes
+    match ilMemberAccess with
+    | ILMemberAccess.Public -> ILTypeDefAccess.Public
+    | ILMemberAccess.Private ->
+        if int (attributes &&& TypeAttributes.NestedPrivate) <> 0 then
+            ILTypeDefAccess.Nested(ILMemberAccess.Private)
+        else
+            ILTypeDefAccess.Private
+    | _ ->
+        ILTypeDefAccess.Nested(ilMemberAccess)
 
 let rec createILAssemblyRef (mdReader: MetadataReader) (asmRef: AssemblyReference) =
     let name = mdReader.GetString(asmRef.Name)
@@ -52,11 +72,11 @@ let createILType (mdReader: MetadataReader) (handle: EntityHandle) : ILType =
     match handle.Kind with
     | HandleKind.TypeReference ->
         let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(handle))
-        typeRef.ToILType(mdReader)
+        readILTypeFromTypeReference mdReader typeRef
 
     | HandleKind.TypeDefinition ->
         let typeDef = mdReader.GetTypeDefinition(TypeDefinitionHandle.op_Explicit(handle))
-        typeDef.ToILType(mdReader)
+        readILTypeFromTypeDefinition mdReader typeDef
 
     | _ ->
         failwithf "Invalid Handle Kind: %A" handle.Kind
@@ -65,132 +85,97 @@ let createILModuleRef (mdReader: MetadataReader) (modRef: ModuleReference) =
     let name = mdReader.GetString(modRef.Name)
     ILModuleRef.Create(name, hasMetadata = true, hash = None)
 
-let createILGenericParameterDef (mdReader: System.Reflection.Metadata.MetadataReader) (genParamHandle: GenericParameterHandle) : ILGenericParameterDef =
-    let genParam = mdReader.GetGenericParameter(genParamHandle)
-    let attributes = genParam.Attributes
+let readILTypeRefFromTypeReference (mdReader: MetadataReader) (typeRef: TypeReference) =
+    let ilScopeRef =
+        match typeRef.ResolutionScope.Kind with
+        | HandleKind.AssemblyReference ->
+            let asmRef = mdReader.GetAssemblyReference(AssemblyReferenceHandle.op_Explicit(typeRef.ResolutionScope))
+            ILScopeRef.Assembly(createILAssemblyRef mdReader asmRef)
 
-    let constraints =
-        genParam.GetConstraints()
-        |> Seq.map (fun genParamCnstrHandle ->
-            let genParamCnstr = mdReader.GetGenericParameterConstraint(genParamCnstrHandle)
-            createILType mdReader genParamCnstr.Type
-        )
-        |> List.ofSeq     
+        | HandleKind.ModuleReference ->
+            let modRef = mdReader.GetModuleReference(ModuleReferenceHandle.op_Explicit(typeRef.ResolutionScope))
+            ILScopeRef.Module(createILModuleRef mdReader modRef)
 
-    let variance = 
-        if int (attributes &&& GenericParameterAttributes.Covariant) <> 0 then
-            ILGenericVariance.CoVariant
-        elif int (attributes &&& GenericParameterAttributes.Contravariant) <> 0 then
-            ILGenericVariance.ContraVariant
+        | HandleKind.LocalScope ->
+            ILScopeRef.Local
+
+        | _ ->
+            failwithf "Invalid Resolution Scope Handle Kind: %A" typeRef.ResolutionScope.Kind
+
+    let name = mdReader.GetString(typeRef.Name)
+    let namespac = mdReader.GetString(typeRef.Namespace)
+
+    ILTypeRef.Create(ilScopeRef, [], namespac + "." + name)
+
+let readILTypeFromTypeReference (mdReader: MetadataReader) (typeRef: TypeReference) =
+    let ilTypeRef = readILTypeRefFromTypeReference mdReader typeRef
+    let ilTypeSpec = ILTypeSpec.Create(ilTypeRef, ILGenericArgs.Empty)
+    mkILTy AsObject (* AsObject probably not nok *) ilTypeSpec
+
+let rec readILTypeRefFromTypeDefinition (mdReader: MetadataReader) (typeDef: TypeDefinition) : ILTypeRef =
+    let enclosing =
+        if typeDef.IsNested then
+            let parentTypeDefHandle = typeDef.GetDeclaringType()
+            let parentTypeDef = mdReader.GetTypeDefinition(parentTypeDefHandle)
+            let ilTypeRef = readILTypeRefFromTypeDefinition mdReader parentTypeDef
+            ilTypeRef.Enclosing @ [ ilTypeRef.Name ]
         else
-            ILGenericVariance.NonVariant
-
-    {
-        Name = mdReader.GetString(genParam.Name)
-        Constraints = constraints
-        Variance = variance
-        HasReferenceTypeConstraint = int (attributes &&& GenericParameterAttributes.ReferenceTypeConstraint) <> 0
-        HasNotNullableValueTypeConstraint = int (attributes &&& GenericParameterAttributes.NotNullableValueTypeConstraint) <> 0
-        HasDefaultConstructorConstraint = int (attributes &&& GenericParameterAttributes.DefaultConstructorConstraint) <> 0
-        CustomAttrsStored = storeILCustomAttrs emptyILCustomAttrs // TODO:
-        MetadataIndex = MetadataTokens.GetRowNumber(GenericParameterHandle.op_Implicit(genParamHandle))
-    }
-
-type TypeReference with
-
-    member typeRef.ToILTypeRef(mdReader: MetadataReader) : ILTypeRef =
-        let ilScopeRef =
-            match typeRef.ResolutionScope.Kind with
-            | HandleKind.AssemblyReference ->
-                let asmRef = mdReader.GetAssemblyReference(AssemblyReferenceHandle.op_Explicit(typeRef.ResolutionScope))
-                ILScopeRef.Assembly(createILAssemblyRef mdReader asmRef)
-
-            | HandleKind.ModuleReference ->
-                let modRef = mdReader.GetModuleReference(ModuleReferenceHandle.op_Explicit(typeRef.ResolutionScope))
-                ILScopeRef.Module(createILModuleRef mdReader modRef)
-
-            | HandleKind.LocalScope ->
-                ILScopeRef.Local
-
-            | _ ->
-                failwithf "Invalid Resolution Scope Handle Kind: %A" typeRef.ResolutionScope.Kind
-
-        let name = mdReader.GetString(typeRef.Name)
-        let namespac = mdReader.GetString(typeRef.Namespace)
-
-        ILTypeRef.Create(ilScopeRef, [], namespac + "." + name)
-
-    member typeRef.ToILType(mdReader) =
-        let ilTypeRef = typeRef.ToILTypeRef(mdReader)
-        let ilTypeSpec = ILTypeSpec.Create(ilTypeRef, ILGenericArgs.Empty)
-        mkILTy AsObject (* AsObject probably not nok *) ilTypeSpec
-
-type TypeDefinition with
-
-    member typeDef.ToILTypeRef(mdReader: MetadataReader) : ILTypeRef =
-        let enclosing =
-            if typeDef.IsNested then
-                let parentTypeDefHandle = typeDef.GetDeclaringType()
-                let parentTypeDef = mdReader.GetTypeDefinition(parentTypeDefHandle)
-                let ilTypeRef = parentTypeDef.ToILTypeRef(mdReader)
-                ilTypeRef.Enclosing @ [ ilTypeRef.Name ]
-            else
-                []
+            []
   
-        let name =
-            let name = mdReader.GetString(typeDef.Name)
-            if enclosing.Length > 0 then 
-                name
-            else
-                let namespac = mdReader.GetString(typeDef.Namespace)
-                namespac + "." + name
+    let name =
+        let name = mdReader.GetString(typeDef.Name)
+        if enclosing.Length > 0 then 
+            name
+        else
+            let namespac = mdReader.GetString(typeDef.Namespace)
+            namespac + "." + name
 
-        ILTypeRef.Create(ILScopeRef.Local, enclosing, name)
+    ILTypeRef.Create(ILScopeRef.Local, enclosing, name)
 
-    member typeDef.ToILType(mdReader) =
-        let ilTypeRef = typeDef.ToILTypeRef(mdReader)
+let readILTypeFromTypeDefinition (mdReader: MetadataReader) (typeDef: TypeDefinition) =
+    let ilTypeRef = readILTypeRefFromTypeDefinition mdReader typeDef
 
-        let ilGenericParameterDefs =
-            typeDef.GetGenericParameters()
-            |> Seq.map (createILGenericParameterDef mdReader)
-            |> List.ofSeq
+    let ilGenericArgs = 
+        // TODO: Confirm if this is right?
+        typeDef.GetGenericParameters()
+        |> Seq.mapi (fun i _ -> mkILTyvarTy (uint16 i))
+        |> List.ofSeq
 
-        let ilGenericArgs = mkILFormalGenericArgs 0 ilGenericParameterDefs
+    let ilTypeSpec = ILTypeSpec.Create(ilTypeRef, ilGenericArgs)
 
-        let ilTypeSpec = ILTypeSpec.Create(ilTypeRef, ilGenericArgs)
+    let boxity = 
+        if int (typeDef.Attributes &&& TypeAttributes.Class) <> 0 then AsObject
+        else AsValue
 
-        let boxity = 
-            if int (typeDef.Attributes &&& TypeAttributes.Class) <> 0 then AsObject
-            else AsValue
+    mkILTy boxity ilTypeSpec
 
-        mkILTy boxity ilTypeSpec
+let readILCallingConv (sigHeader: SignatureHeader) =
+    let ilThisConvention =
+        if sigHeader.IsInstance then
+            if sigHeader.HasExplicitThis then ILThisConvention.InstanceExplicit
+            else ILThisConvention.Instance
+        else ILThisConvention.Static
+
+    let ilArgConvention =
+        match sigHeader.CallingConvention with
+        | SignatureCallingConvention.Default -> ILArgConvention.Default
+        | SignatureCallingConvention.CDecl -> ILArgConvention.CDecl
+        | SignatureCallingConvention.StdCall -> ILArgConvention.StdCall
+        | SignatureCallingConvention.ThisCall -> ILArgConvention.ThisCall
+        | SignatureCallingConvention.FastCall -> ILArgConvention.FastCall
+        | SignatureCallingConvention.VarArgs -> ILArgConvention.VarArg
+        | _ -> failwithf "Invalid Signature Calling Convention: %A" sigHeader.CallingConvention
+
+    ILCallingConv.Callconv(ilThisConvention, ilArgConvention)
 
 [<Sealed>]
 type SignatureTypeProvider(ilg: ILGlobals) =
-    interface ISignatureTypeProvider<ILType, ILGlobals> with
+    interface ISignatureTypeProvider<ILType, unit> with
 
         member __.GetFunctionPointerType(si) =
-            let sigHeader = si.Header
-
-            let ilThisConvention =
-                if sigHeader.IsInstance then
-                    if sigHeader.HasExplicitThis then ILThisConvention.InstanceExplicit
-                    else ILThisConvention.Instance
-                else ILThisConvention.Static
-
-            let ilArgConvention =
-                match sigHeader.CallingConvention with
-                | SignatureCallingConvention.Default -> ILArgConvention.Default
-                | SignatureCallingConvention.CDecl -> ILArgConvention.CDecl
-                | SignatureCallingConvention.StdCall -> ILArgConvention.StdCall
-                | SignatureCallingConvention.ThisCall -> ILArgConvention.ThisCall
-                | SignatureCallingConvention.FastCall -> ILArgConvention.FastCall
-                | SignatureCallingConvention.VarArgs -> ILArgConvention.VarArg
-                | _ -> failwithf "Invalid Signature Calling Convention: %A" sigHeader.CallingConvention
-
             let callingSig =
                 {
-                    CallingConv = ILCallingConv.Callconv(ilThisConvention, ilArgConvention)
+                    CallingConv = readILCallingConv si.Header
                     ArgTypes = si.ParameterTypes |> Seq.toList
                     ReturnType = si.ReturnType
                 }
@@ -237,16 +222,17 @@ type SignatureTypeProvider(ilg: ILGlobals) =
 
         member __.GetTypeFromDefinition(mdReader, typeDefHandle, _) =
             let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
-            typeDef.ToILType(mdReader)
+            readILTypeFromTypeDefinition mdReader typeDef
 
         member __.GetTypeFromReference(mdReader, typeRefHandle, _) =
             let typeRef = mdReader.GetTypeReference(typeRefHandle)
-            typeRef.ToILType(mdReader)
+            readILTypeFromTypeReference mdReader typeRef
 
     interface IConstructedTypeProvider<ILType> with
 
-        member __.GetGenericInstantiation(genericType, _typeArguments) =
-            genericType // TODO
+        member __.GetGenericInstantiation(genericType, typeArgs) =
+            let ilTypeSpec = ILTypeSpec.Create(genericType.TypeRef, typeArgs |> List.ofSeq)
+            mkILTy genericType.Boxity ilTypeSpec
 
         member __.GetArrayType(elementType, shape) =
             let lowerBounds = shape.LowerBounds
@@ -270,49 +256,89 @@ type SignatureTypeProvider(ilg: ILGlobals) =
         member __.GetSZArrayType(elementType) =
             mkILArr1DTy elementType
 
-let rec createILMethodSpec (mdReader: MetadataReader) (handle: EntityHandle) : ILMethodSpec =
+[<Sealed>]
+type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType, unit>) =
+
+    member __.MetadataReader = mdReader
+
+    member __.SignatureTypeProvider = sigTyProvider
+
+let createILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHandle) : ILGenericParameterDef =
+    let mdReader = cenv.MetadataReader
+    let genParam = mdReader.GetGenericParameter(genParamHandle)
+    let attributes = genParam.Attributes
+
+    let constraints =
+        genParam.GetConstraints()
+        |> Seq.map (fun genParamCnstrHandle ->
+            let genParamCnstr = mdReader.GetGenericParameterConstraint(genParamCnstrHandle)
+            createILType mdReader genParamCnstr.Type
+        )
+        |> List.ofSeq     
+
+    let variance = 
+        if int (attributes &&& GenericParameterAttributes.Covariant) <> 0 then
+            ILGenericVariance.CoVariant
+        elif int (attributes &&& GenericParameterAttributes.Contravariant) <> 0 then
+            ILGenericVariance.ContraVariant
+        else
+            ILGenericVariance.NonVariant
+
+    {
+        Name = mdReader.GetString(genParam.Name)
+        Constraints = constraints
+        Variance = variance
+        HasReferenceTypeConstraint = int (attributes &&& GenericParameterAttributes.ReferenceTypeConstraint) <> 0
+        HasNotNullableValueTypeConstraint = int (attributes &&& GenericParameterAttributes.NotNullableValueTypeConstraint) <> 0
+        HasDefaultConstructorConstraint = int (attributes &&& GenericParameterAttributes.DefaultConstructorConstraint) <> 0
+        CustomAttrsStored = createILAttributesStored cenv (genParam.GetCustomAttributes())
+        MetadataIndex = MetadataTokens.GetRowNumber(GenericParameterHandle.op_Implicit(genParamHandle))
+    }
+
+let rec createILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
+    let mdReader = cenv.MetadataReader
     match handle.Kind with
-    //| HandleKind.MemberReference ->
-    //    let memberRef = mdReader.GetMemberReference(MemberReferenceHandle.op_Explicit(handle))
+    | HandleKind.MemberReference ->
+        let memberRef = mdReader.GetMemberReference(MemberReferenceHandle.op_Explicit(handle))
+        let si = memberRef.DecodeMethodSignature(cenv.SignatureTypeProvider, ())
         
-    //    let memberEnclType = createILType mdReader memberRef.Parent
+        let name = mdReader.GetString(memberRef.Name)
+        let enclILTy = createILType mdReader memberRef.Parent
+        let ilCallingConv = readILCallingConv si.Header
+        let genericArity = 0
 
-    //    let memberName = mdReader.GetString(memberRef.Name)
+        let ilMethodRef = ILMethodRef.Create(enclILTy.TypeRef, ilCallingConv, name, genericArity, si.ParameterTypes |> List.ofSeq, si.ReturnType)
 
-    //    memberRef.
+        ILMethodSpec.Create(enclILTy, ilMethodRef, [])
 
-        //let memberSigHeader, memberSigTypeCode =
-        //    let blobReader = mdReader.GetBlobReader(memberRef.Signature)
-        //    blobReader.ReadSignatureHeader(), blobReader.ReadSignatureTypeCode()
-
-        //let _memberCallConv =
-        //    if memberSigHeader.IsInstance && memberSigTypeCode &&& SignatureTypeCode. then
-        //        ILCallingConv.Instance
-        //    else
-        //        ILCallingConv.Static
-
-        //let memberSig =
-        //    memberRef.DecodeMethodSignature(SignatureTypeProvider(), ())
-
-        //let memberRetTy = memberSig.ReturnType
-
-        //let ilMethodRef = ILMethodRef.Create(memberEnclType, memberCallConv, memberName, 0, [],)
-
-        //// let _ilMethRef = ILMethodRef.Create(memberEnclType, ILCallingConv.Instance, memberName, 0, [], )
-        //ILMethodSpec.Create(memberEnclType, ILMethodRef, mkILFormalGenericArgs 0 )
-     //   failwith "not impl"
     | HandleKind.MethodDefinition ->
         let methodDefHandle = MethodDefinitionHandle.op_Explicit(handle)
         let methodDef = mdReader.GetMethodDefinition(methodDefHandle)
+        let si = methodDef.DecodeSignature(cenv.SignatureTypeProvider, ())
 
         let name = mdReader.GetString(methodDef.Name)
+        let enclTypeDef = mdReader.GetTypeDefinition(methodDef.GetDeclaringType())
+        let enclILTy = readILTypeFromTypeDefinition mdReader enclTypeDef
+        let ilCallingConv =
+            if int (methodDef.Attributes &&& MethodAttributes.Static) <> 0 then
+                ILCallingConv.Static
+            else
+                ILCallingConv.Instance
+        let genericArity = si.GenericParameterCount
 
-        //  methodDef.ImplAttributes = MethodImplAttributes.
-     //   let _ilType = convertEntityHandleToILType mdReader (TypeDefinitionHandle.op_Implicit(methodDef.GetDeclaringType()))
-        //ILMethodSpec.Create(ilType,)
-        failwith "not impl"
+        let ilMethodRef = ILMethodRef.Create(enclILTy.TypeRef, ilCallingConv, name, genericArity, si.ParameterTypes |> List.ofSeq, si.ReturnType)
+
+        let ilGenericArgs =
+            // TODO: Confirm if this is right?
+            let enclILGenericArgCount = enclILTy.GenericArgs.Length
+            methodDef.GetGenericParameters()
+            |> Seq.mapi (fun i _ -> mkILTyvarTy (uint16 (enclILGenericArgCount + i)))
+            |> List.ofSeq
+        
+        ILMethodSpec.Create(enclILTy, ilMethodRef, ilGenericArgs)
+
     | _ ->
-        failwith "invalid metadata"
+        failwithf "Invalid Entity Handle Kind: %A" handle.Kind
 
 let createILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
     match declSecurityAction with
@@ -370,20 +396,70 @@ let createILAssemblyLongevity (flags: AssemblyFlags) =
     elif masked = 0x0008 then ILAssemblyLongevity.PlatformSystem
     else                      ILAssemblyLongevity.Unspecified
 
-let createILAttribute (mdReader: MetadataReader) (customAttrHandle: CustomAttributeHandle) =
-    let customAttr = mdReader.GetCustomAttribute(customAttrHandle)
+let createILAttribute (cenv: cenv) (customAttrHandle: CustomAttributeHandle) =
+    let customAttr = cenv.MetadataReader.GetCustomAttribute(customAttrHandle)
 
-    ILAttribute.Encoded(createILMethodSpec mdReader customAttr.Constructor, [||], [])
+    ILAttribute.Encoded(createILMethodSpec cenv customAttr.Constructor, [||], [])
 
-let createILAttributesStored (mdReader: MetadataReader) =
+let createILAttributesStored (cenv: cenv) (customAttrs: CustomAttributeHandleCollection) =
     [
-        for customAttrHandle in mdReader.CustomAttributes do
-            yield createILAttribute mdReader customAttrHandle
+        for customAttrHandle in customAttrs do
+            yield createILAttribute cenv customAttrHandle
     ]
     |> mkILCustomAttrs
     |> storeILCustomAttrs
 
-let createILAssemblyManifest (mdReader: MetadataReader) =
+let rec readILNestedExportedTypes (cenv: cenv) (handle: EntityHandle) =
+    let mdReader = cenv.MetadataReader
+    match handle.Kind with
+    | HandleKind.TypeDefinition ->
+        let typeDefHandle = TypeDefinitionHandle.op_Explicit(handle)
+        let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
+
+        let nested =
+            typeDef.GetNestedTypes()
+            |> Seq.map (fun typeDefHandle ->
+                let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
+                
+                {
+                    Name = mdReader.GetString(typeDef.Name)
+                    Access = createILMemberAccess typeDef.Attributes
+                    Nested = readILNestedExportedTypes cenv (TypeDefinitionHandle.op_Implicit(typeDefHandle))
+                    CustomAttrsStored = createILAttributesStored cenv (typeDef.GetCustomAttributes())
+                    MetadataIndex = MetadataTokens.GetRowNumber(TypeDefinitionHandle.op_Implicit(typeDefHandle))
+                }
+            )
+            |> List.ofSeq
+
+        mkILNestedExportedTypes nested
+
+    | _ ->
+        mkILNestedExportedTypes []
+
+let readILExportedType (cenv: cenv) (exportedTyHandle: ExportedTypeHandle) =
+    let mdReader = cenv.MetadataReader
+    let exportedTy = mdReader.GetExportedType(exportedTyHandle)
+
+    let ilTy = createILType mdReader exportedTy.Implementation
+
+    {
+        ScopeRef = ilTy.TypeRef.Scope
+        Name = mdReader.GetString(exportedTy.Name)
+        Attributes = exportedTy.Attributes
+        Nested = readILNestedExportedTypes cenv exportedTy.Implementation
+        CustomAttrsStored = createILAttributesStored cenv (exportedTy.GetCustomAttributes())
+        MetadataIndex = MetadataTokens.GetRowNumber(ExportedTypeHandle.op_Implicit(exportedTyHandle))
+    }
+
+let readILExportedTypes (cenv: cenv) (exportedTys: ExportedTypeHandleCollection) =
+    [
+        for exportedTyHandle in exportedTys do
+            yield readILExportedType cenv exportedTyHandle
+    ]
+    |> mkILExportedTypes
+
+let createILAssemblyManifest (cenv: cenv) =
+    let mdReader = cenv.MetadataReader
     let asmDef = mdReader.GetAssemblyDefinition()
 
     let publicKey =
@@ -409,19 +485,16 @@ let createILAssemblyManifest (mdReader: MetadataReader) =
         PublicKey = publicKey
         Version = Some(createVersionTuple asmDef.Version)
         Locale = locale
-        CustomAttrsStored = createILAttributesStored mdReader
+        CustomAttrsStored = createILAttributesStored cenv mdReader.CustomAttributes
         AssemblyLongevity = createILAssemblyLongevity flags
-        DisableJitOptimizations = int flags &&& int AssemblyFlags.DisableJitCompileOptimizer <> 0
-        JitTracking = int flags &&& int AssemblyFlags.EnableJitCompileTracking <> 0
-        IgnoreSymbolStoreSequencePoints = false // TODO
-        Retargetable = int flags &&& int AssemblyFlags.Retargetable <> 0
-        ExportedTypes = mkILExportedTypes [] // TODO:
+        DisableJitOptimizations = int (flags &&& AssemblyFlags.DisableJitCompileOptimizer) <> 0
+        JitTracking = int (flags &&& AssemblyFlags.EnableJitCompileTracking) <> 0
+        IgnoreSymbolStoreSequencePoints = (int flags &&& 0x2000) <> 0 // Not listed in AssemblyFlags
+        Retargetable = int (flags &&& AssemblyFlags.Retargetable) <> 0
+        ExportedTypes = readILExportedTypes cenv mdReader.ExportedTypes
         EntrypointElsewhere = None // TODO:
-        MetadataIndex = 1 // always one because we reading the assembly definition from the first index
+        MetadataIndex = 1 // always one
     }
-        
-let tryCreateILAssemblyManifest (peReader: PEReader) =
-    Some(peReader.GetMetadataReader())
 
 //let readModuleDef (peReader: PEReader) =
 //    let mdv = ctxt.mdfile.GetView()
