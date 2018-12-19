@@ -272,7 +272,7 @@
     <Compile Include="..\..\absil\ilreflect.fs">
       <Link>AbsIL\ilreflect.fs</Link>
     </Compile>
-    <Compile Include="ilread_sfm.fs" />
+    <Compile Include="ilread_srm.fs" />
     <Compile Include="..\..\utils\CompilerLocationUtils.fs">
       <Link>CompilerLocation\CompilerLocationUtils.fs</Link>
     </Compile>
