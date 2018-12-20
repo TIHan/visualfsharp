@@ -1,6 +1,7 @@
 ﻿module rec Microsoft.FSharp.Compiler.AbstractIL.ILReader
 
 open System
+open System.IO
 open System.Reflection
 open System.Reflection.PortableExecutable
 open System.Reflection.Metadata
@@ -8,10 +9,10 @@ open System.Reflection.Metadata.Ecma335
 open Microsoft.FSharp.Compiler.AbstractIL.IL  
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
 
-let createVersionTuple (v: Version) =
+let mkVersionTuple (v: Version) =
     (uint16 v.Major, uint16 v.Minor, uint16 v.Build, uint16 v.Revision)
     
-let createILMemberAccess (attributes: TypeAttributes) =
+let mkILMemberAccess (attributes: TypeAttributes) =
     if int (attributes &&& TypeAttributes.Public) <> 0 then
         ILMemberAccess.Public
     elif int (attributes &&& TypeAttributes.NestedFamily) <> 0 then
@@ -25,8 +26,8 @@ let createILMemberAccess (attributes: TypeAttributes) =
     else
         ILMemberAccess.Private
 
-let createILTypeDefAccess (attributes: TypeAttributes) =
-    let ilMemberAccess = createILMemberAccess attributes
+let mkILTypeDefAccess (attributes: TypeAttributes) =
+    let ilMemberAccess = mkILMemberAccess attributes
     match ilMemberAccess with
     | ILMemberAccess.Public -> ILTypeDefAccess.Public
     | ILMemberAccess.Private ->
@@ -37,7 +38,26 @@ let createILTypeDefAccess (attributes: TypeAttributes) =
     | _ ->
         ILTypeDefAccess.Nested(ilMemberAccess)
 
-let rec createILAssemblyRef (mdReader: MetadataReader) (asmRef: AssemblyReference) =
+let rec readILScopeRef (mdReader: MetadataReader) (handle: EntityHandle) =
+    match handle.Kind with
+    | HandleKind.AssemblyReference ->
+        let asmRef = mdReader.GetAssemblyReference(AssemblyReferenceHandle.op_Explicit(handle))
+        ILScopeRef.Assembly(readILAssemblyRef mdReader asmRef)
+
+    | HandleKind.ModuleReference ->
+        let modRef = mdReader.GetModuleReference(ModuleReferenceHandle.op_Explicit(handle))
+        ILScopeRef.Module(readILModuleRef mdReader modRef)
+
+    | HandleKind.TypeReference ->
+        let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(handle))
+        readILScopeRef mdReader typeRef.ResolutionScope
+
+    | HandleKind.ExportedType -> ILScopeRef.Local
+
+    | _ ->
+        failwithf "Invalid Handle Kind: %A" handle.Kind
+
+let rec readILAssemblyRef (mdReader: MetadataReader) (asmRef: AssemblyReference) =
     let name = mdReader.GetString(asmRef.Name)
     let flags = asmRef.Flags
 
@@ -59,7 +79,7 @@ let rec createILAssemblyRef (mdReader: MetadataReader) (asmRef: AssemblyReferenc
 
     let retargetable = int (flags &&& AssemblyFlags.Retargetable) <> 0
 
-    let version = Some(createVersionTuple asmRef.Version)
+    let version = Some(mkVersionTuple asmRef.Version)
 
     let locale =
         let locale = mdReader.GetString(asmRef.Culture)
@@ -68,7 +88,7 @@ let rec createILAssemblyRef (mdReader: MetadataReader) (asmRef: AssemblyReferenc
 
     ILAssemblyRef.Create(name, hash, publicKey, retargetable, version, locale)
 
-let createILType (mdReader: MetadataReader) (handle: EntityHandle) : ILType =
+let readILType (mdReader: MetadataReader) (handle: EntityHandle) : ILType =
     match handle.Kind with
     | HandleKind.TypeReference ->
         let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(handle))
@@ -81,26 +101,12 @@ let createILType (mdReader: MetadataReader) (handle: EntityHandle) : ILType =
     | _ ->
         failwithf "Invalid Handle Kind: %A" handle.Kind
 
-let createILModuleRef (mdReader: MetadataReader) (modRef: ModuleReference) =
+let readILModuleRef (mdReader: MetadataReader) (modRef: ModuleReference) =
     let name = mdReader.GetString(modRef.Name)
     ILModuleRef.Create(name, hasMetadata = true, hash = None)
 
 let readILTypeRefFromTypeReference (mdReader: MetadataReader) (typeRef: TypeReference) =
-    let ilScopeRef =
-        match typeRef.ResolutionScope.Kind with
-        | HandleKind.AssemblyReference ->
-            let asmRef = mdReader.GetAssemblyReference(AssemblyReferenceHandle.op_Explicit(typeRef.ResolutionScope))
-            ILScopeRef.Assembly(createILAssemblyRef mdReader asmRef)
-
-        | HandleKind.ModuleReference ->
-            let modRef = mdReader.GetModuleReference(ModuleReferenceHandle.op_Explicit(typeRef.ResolutionScope))
-            ILScopeRef.Module(createILModuleRef mdReader modRef)
-
-        | HandleKind.LocalScope ->
-            ILScopeRef.Local
-
-        | _ ->
-            failwithf "Invalid Resolution Scope Handle Kind: %A" typeRef.ResolutionScope.Kind
+    let ilScopeRef = readILScopeRef mdReader typeRef.ResolutionScope
 
     let name = mdReader.GetString(typeRef.Name)
     let namespac = mdReader.GetString(typeRef.Namespace)
@@ -263,7 +269,7 @@ type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType
 
     member __.SignatureTypeProvider = sigTyProvider
 
-let createILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHandle) : ILGenericParameterDef =
+let readILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHandle) : ILGenericParameterDef =
     let mdReader = cenv.MetadataReader
     let genParam = mdReader.GetGenericParameter(genParamHandle)
     let attributes = genParam.Attributes
@@ -272,7 +278,7 @@ let createILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHa
         genParam.GetConstraints()
         |> Seq.map (fun genParamCnstrHandle ->
             let genParamCnstr = mdReader.GetGenericParameterConstraint(genParamCnstrHandle)
-            createILType mdReader genParamCnstr.Type
+            readILType mdReader genParamCnstr.Type
         )
         |> List.ofSeq     
 
@@ -291,11 +297,11 @@ let createILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHa
         HasReferenceTypeConstraint = int (attributes &&& GenericParameterAttributes.ReferenceTypeConstraint) <> 0
         HasNotNullableValueTypeConstraint = int (attributes &&& GenericParameterAttributes.NotNullableValueTypeConstraint) <> 0
         HasDefaultConstructorConstraint = int (attributes &&& GenericParameterAttributes.DefaultConstructorConstraint) <> 0
-        CustomAttrsStored = createILAttributesStored cenv (genParam.GetCustomAttributes())
+        CustomAttrsStored = readILAttributesStored cenv (genParam.GetCustomAttributes())
         MetadataIndex = MetadataTokens.GetRowNumber(GenericParameterHandle.op_Implicit(genParamHandle))
     }
 
-let rec createILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
+let rec readILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
     let mdReader = cenv.MetadataReader
     match handle.Kind with
     | HandleKind.MemberReference ->
@@ -303,7 +309,7 @@ let rec createILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
         let si = memberRef.DecodeMethodSignature(cenv.SignatureTypeProvider, ())
         
         let name = mdReader.GetString(memberRef.Name)
-        let enclILTy = createILType mdReader memberRef.Parent
+        let enclILTy = readILType mdReader memberRef.Parent
         let ilCallingConv = readILCallingConv si.Header
         let genericArity = 0
 
@@ -340,7 +346,7 @@ let rec createILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
     | _ ->
         failwithf "Invalid Entity Handle Kind: %A" handle.Kind
 
-let createILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
+let readILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
     match declSecurityAction with
     | DeclarativeSecurityAction.Demand -> ILSecurityAction.Demand
     | DeclarativeSecurityAction.Assert -> ILSecurityAction.Assert
@@ -373,21 +379,21 @@ let createILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
         | 0x0012 -> ILSecurityAction.DemandChoice
         | x -> failwithf "Invalid DeclarativeSecurityAction: %i" x
 
-let createILSecurityDecl (mdReader: MetadataReader) (declSecurityAttributeHandle: DeclarativeSecurityAttributeHandle) =
+let readILSecurityDecl (mdReader: MetadataReader) (declSecurityAttributeHandle: DeclarativeSecurityAttributeHandle) =
     let declSecurityAttribute = mdReader.GetDeclarativeSecurityAttribute(declSecurityAttributeHandle)
 
     let bytes = mdReader.GetBlobBytes(declSecurityAttribute.PermissionSet)
-    ILSecurityDecl(createILSecurityAction declSecurityAttribute.Action, bytes)
+    ILSecurityDecl(readILSecurityAction declSecurityAttribute.Action, bytes)
 
-let createILSecurityDeclsStored (mdReader: MetadataReader) =
+let readILSecurityDeclsStored (mdReader: MetadataReader) (declSecurityAttributeHandles: DeclarativeSecurityAttributeHandleCollection) =
     [
-        for declSecurityAttributeHandle in mdReader.DeclarativeSecurityAttributes do
-            yield createILSecurityDecl mdReader declSecurityAttributeHandle
+        for declSecurityAttributeHandle in declSecurityAttributeHandles do
+            yield readILSecurityDecl mdReader declSecurityAttributeHandle
     ]
     |> mkILSecurityDecls
     |> storeILSecurityDecls
 
-let createILAssemblyLongevity (flags: AssemblyFlags) =
+let readILAssemblyLongevity (flags: AssemblyFlags) =
     let  masked = int flags &&& 0x000e
     if   masked = 0x0000 then ILAssemblyLongevity.Unspecified
     elif masked = 0x0002 then ILAssemblyLongevity.Library
@@ -396,15 +402,15 @@ let createILAssemblyLongevity (flags: AssemblyFlags) =
     elif masked = 0x0008 then ILAssemblyLongevity.PlatformSystem
     else                      ILAssemblyLongevity.Unspecified
 
-let createILAttribute (cenv: cenv) (customAttrHandle: CustomAttributeHandle) =
+let readILAttribute (cenv: cenv) (customAttrHandle: CustomAttributeHandle) =
     let customAttr = cenv.MetadataReader.GetCustomAttribute(customAttrHandle)
 
-    ILAttribute.Encoded(createILMethodSpec cenv customAttr.Constructor, [||], [])
+    ILAttribute.Encoded(readILMethodSpec cenv customAttr.Constructor, [||], [])
 
-let createILAttributesStored (cenv: cenv) (customAttrs: CustomAttributeHandleCollection) =
+let readILAttributesStored (cenv: cenv) (customAttrs: CustomAttributeHandleCollection) =
     [
         for customAttrHandle in customAttrs do
-            yield createILAttribute cenv customAttrHandle
+            yield readILAttribute cenv customAttrHandle
     ]
     |> mkILCustomAttrs
     |> storeILCustomAttrs
@@ -423,9 +429,9 @@ let rec readILNestedExportedTypes (cenv: cenv) (handle: EntityHandle) =
                 
                 {
                     Name = mdReader.GetString(typeDef.Name)
-                    Access = createILMemberAccess typeDef.Attributes
+                    Access = mkILMemberAccess typeDef.Attributes
                     Nested = readILNestedExportedTypes cenv (TypeDefinitionHandle.op_Implicit(typeDefHandle))
-                    CustomAttrsStored = createILAttributesStored cenv (typeDef.GetCustomAttributes())
+                    CustomAttrsStored = readILAttributesStored cenv (typeDef.GetCustomAttributes())
                     MetadataIndex = MetadataTokens.GetRowNumber(TypeDefinitionHandle.op_Implicit(typeDefHandle))
                 }
             )
@@ -440,14 +446,12 @@ let readILExportedType (cenv: cenv) (exportedTyHandle: ExportedTypeHandle) =
     let mdReader = cenv.MetadataReader
     let exportedTy = mdReader.GetExportedType(exportedTyHandle)
 
-    let ilTy = createILType mdReader exportedTy.Implementation
-
     {
-        ScopeRef = ilTy.TypeRef.Scope
+        ScopeRef = readILScopeRef mdReader exportedTy.Implementation
         Name = mdReader.GetString(exportedTy.Name)
         Attributes = exportedTy.Attributes
         Nested = readILNestedExportedTypes cenv exportedTy.Implementation
-        CustomAttrsStored = createILAttributesStored cenv (exportedTy.GetCustomAttributes())
+        CustomAttrsStored = readILAttributesStored cenv (exportedTy.GetCustomAttributes())
         MetadataIndex = MetadataTokens.GetRowNumber(ExportedTypeHandle.op_Implicit(exportedTyHandle))
     }
 
@@ -458,7 +462,7 @@ let readILExportedTypes (cenv: cenv) (exportedTys: ExportedTypeHandleCollection)
     ]
     |> mkILExportedTypes
 
-let createILAssemblyManifest (cenv: cenv) =
+let readILAssemblyManifest (cenv: cenv) =
     let mdReader = cenv.MetadataReader
     let asmDef = mdReader.GetAssemblyDefinition()
 
@@ -481,12 +485,12 @@ let createILAssemblyManifest (cenv: cenv) =
     {
         Name = mdReader.GetString(asmDef.Name)
         AuxModuleHashAlgorithm = int asmDef.HashAlgorithm
-        SecurityDeclsStored = createILSecurityDeclsStored mdReader
+        SecurityDeclsStored = readILSecurityDeclsStored mdReader (asmDef.GetDeclarativeSecurityAttributes())
         PublicKey = publicKey
-        Version = Some(createVersionTuple asmDef.Version)
+        Version = Some(mkVersionTuple asmDef.Version)
         Locale = locale
-        CustomAttrsStored = createILAttributesStored cenv mdReader.CustomAttributes
-        AssemblyLongevity = createILAssemblyLongevity flags
+        CustomAttrsStored = readILAttributesStored cenv (asmDef.GetCustomAttributes())
+        AssemblyLongevity = readILAssemblyLongevity flags
         DisableJitOptimizations = int (flags &&& AssemblyFlags.DisableJitCompileOptimizer) <> 0
         JitTracking = int (flags &&& AssemblyFlags.EnableJitCompileTracking) <> 0
         IgnoreSymbolStoreSequencePoints = (int flags &&& 0x2000) <> 0 // Not listed in AssemblyFlags
@@ -496,73 +500,86 @@ let createILAssemblyManifest (cenv: cenv) =
         MetadataIndex = 1 // always one
     }
 
-//let readModuleDef (peReader: PEReader) =
-//    let mdv = ctxt.mdfile.GetView()
-//    let nativeResources = readNativeResources pectxtEager peReader ctxt.fileName
+let readModuleDef ilGlobals (peReader: PEReader) =
+  //  let nativeResources = readNativeResources pectxtEager peReader ctxt.fileName
 
-//    let subsys =
-//        int16 peReader.PEHeaders.PEHeader.Subsystem
+    let subsys =
+        int16 peReader.PEHeaders.PEHeader.Subsystem
 
-//    let subsysversion =
-//        (int32 peReader.PEHeaders.PEHeader.MajorSubsystemVersion, int32 peReader.PEHeaders.PEHeader.MinorSubsystemVersion)
+    let subsysversion =
+        (int32 peReader.PEHeaders.PEHeader.MajorSubsystemVersion, int32 peReader.PEHeaders.PEHeader.MinorSubsystemVersion)
 
-//    let useHighEntropyVA =
-//        int (peReader.PEHeaders.PEHeader.DllCharacteristics &&& DllCharacteristics.HighEntropyVirtualAddressSpace) <> 0
+    let useHighEntropyVA =
+        int (peReader.PEHeaders.PEHeader.DllCharacteristics &&& DllCharacteristics.HighEntropyVirtualAddressSpace) <> 0
 
-//    let ilOnly =
-//        int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.ILOnly) <> 0
+    let ilOnly =
+        int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.ILOnly) <> 0
 
-//    let only32 =
-//        int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.Requires32Bit) <> 0
+    let only32 =
+        int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.Requires32Bit) <> 0
 
-//    let is32bitpreferred =
-//        int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.Prefers32Bit) <> 0
+    let is32bitpreferred =
+        int (peReader.PEHeaders.CorHeader.Flags &&& CorFlags.Prefers32Bit) <> 0
 
-//    let only64 =
-//        peReader.PEHeaders.CoffHeader.SizeOfOptionalHeader = 240s (* May want to read in the optional header Magic number and check that as well... *)
+    let only64 =
+        peReader.PEHeaders.CoffHeader.SizeOfOptionalHeader = 240s (* May want to read in the optional header Magic number and check that as well... *)
 
-//    let platform = 
-//        match peReader.PEHeaders.CoffHeader.Machine with
-//        | Machine.Amd64 -> Some(AMD64)
-//        | Machine.IA64 -> Some(IA64)
-//        | _ -> Some(X86)
+    let platform = 
+        match peReader.PEHeaders.CoffHeader.Machine with
+        | Machine.Amd64 -> Some(AMD64)
+        | Machine.IA64 -> Some(IA64)
+        | _ -> Some(X86)
 
-//    let isDll = peReader.PEHeaders.IsDll
+    let isDll = peReader.PEHeaders.IsDll
 
-//    let alignVirt =
-//        peReader.PEHeaders.PEHeader.SectionAlignment
+    let alignVirt =
+        peReader.PEHeaders.PEHeader.SectionAlignment
 
-//    let alignPhys =
-//        peReader.PEHeaders.PEHeader.FileAlignment
+    let alignPhys =
+        peReader.PEHeaders.PEHeader.FileAlignment
 
-//    let imageBaseReal = int peReader.PEHeaders.PEHeader.ImageBase
+    let imageBaseReal = int peReader.PEHeaders.PEHeader.ImageBase
 
-//    let mdReader = peReader.GetMetadataReader()
-//    let moduleDef = mdReader.GetModuleDefinition()
-//    let ilModuleName = mdReader.GetString(moduleDef.Name)
-//    let ilMetadataVersion = mdReader.MetadataVersion
+    let mdReader = peReader.GetMetadataReader()
+    let moduleDef = mdReader.GetModuleDefinition()
+    let ilModuleName = mdReader.GetString(moduleDef.Name)
+    let ilMetadataVersion = mdReader.MetadataVersion
     
+    let cenv = cenv(mdReader, SignatureTypeProvider(ilGlobals))
 
-//    { Manifest =
-//         if ctxt.getNumRows (TableNames.Assembly) > 0 then Some (seekReadAssemblyManifest ctxt pectxtEager 1) 
-//         else None
-//      CustomAttrsStored = ctxt.customAttrsReader_Module
-//      MetadataIndex = idx
-//      Name = ilModuleName
-//      NativeResources=nativeResources
-//      TypeDefs = mkILTypeDefsComputed (fun () -> seekReadTopTypeDefs ctxt)
-//      SubSystemFlags = int32 subsys
-//      IsILOnly = ilOnly
-//      SubsystemVersion = subsysversion
-//      UseHighEntropyVA = useHighEntropyVA
-//      Platform = platform
-//      StackReserveSize = None  // TODO
-//      Is32Bit = only32
-//      Is32BitPreferred = is32bitpreferred
-//      Is64Bit = only64
-//      IsDLL=isDll
-//      VirtualAlignment = alignVirt
-//      PhysicalAlignment = alignPhys
-//      ImageBase = imageBaseReal
-//      MetadataVersion = ilMetadataVersion
-//      Resources = seekReadManifestResources ctxt mdv pectxtEager pevEager }  
+    { Manifest = Some(readILAssemblyManifest cenv)
+      CustomAttrsStored = storeILCustomAttrs emptyILCustomAttrs //readILAttributesStored cenv (moduleDef.GetCustomAttributes())
+      MetadataIndex = 1 // TODO: Is this right?
+      Name = ilModuleName
+      NativeResources = []
+      TypeDefs = emptyILTypeDefs // TODO //mkILTypeDefsComputed (fun () -> seekReadTopTypeDefs ctxt)
+      SubSystemFlags = int32 subsys
+      IsILOnly = ilOnly
+      SubsystemVersion = subsysversion
+      UseHighEntropyVA = useHighEntropyVA
+      Platform = platform
+      StackReserveSize = None  // TODO
+      Is32Bit = only32
+      Is32BitPreferred = is32bitpreferred
+      Is64Bit = only64
+      IsDLL=isDll
+      VirtualAlignment = alignVirt
+      PhysicalAlignment = alignPhys
+      ImageBase = imageBaseReal
+      MetadataVersion = ilMetadataVersion
+      Resources = mkILResources [] // TODO //seekReadManifestResources ctxt mdv pectxtEager pevEager
+    }  
+
+let openILModuleReader fileName (ilReaderOptions: Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILReaderOptions) =
+    let peReader = new PEReader(new MemoryStream(File.ReadAllBytes(fileName)))
+    { new Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILModuleReader with
+
+        member __.ILModuleDef = 
+            readModuleDef ilReaderOptions.ilGlobals peReader
+
+        member __.ILAssemblyRefs = []
+
+      interface IDisposable with
+
+        member __.Dispose() = ()
+    }

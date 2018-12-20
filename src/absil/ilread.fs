@@ -3966,7 +3966,7 @@ type ILModuleReaderImpl(ilModule: ILModuleDef, ilAssemblyRefs: Lazy<ILAssemblyRe
 type ILModuleReaderCacheLockToken() = interface LockToken
 type ILModuleReaderCacheKey = ILModuleReaderCacheKey of string * DateTime * ILScopeRef * bool * ReduceMemoryFlag * MetadataOnlyFlag
 let ilModuleReaderCache = new AgedLookup<ILModuleReaderCacheLockToken, ILModuleReaderCacheKey, ILModuleReader>(stronglyHeldReaderCacheSize, areSimilar=(fun (x, y) -> x = y))
-let ilModuleReaderCacheLock = Lock()
+let ilModuleReaderCacheLock = Lock<_>()
 
 let stableFileHeuristicApplies fileName = 
     not noStableFileHeuristic && try FileSystem.IsStableFileHeuristic fileName with _ -> false
