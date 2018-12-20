@@ -9,6 +9,13 @@ open System.Reflection.Metadata.Ecma335
 open Microsoft.FSharp.Compiler.AbstractIL.IL  
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
 
+[<Sealed>]
+type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType, unit>) =
+
+    member __.MetadataReader = mdReader
+
+    member __.SignatureTypeProvider = sigTyProvider
+
 let mkVersionTuple (v: Version) =
     (uint16 v.Major, uint16 v.Minor, uint16 v.Build, uint16 v.Revision)
     
@@ -38,28 +45,74 @@ let mkILTypeDefAccess (attributes: TypeAttributes) =
     | _ ->
         ILTypeDefAccess.Nested(ilMemberAccess)
 
-let rec readILScopeRef (mdReader: MetadataReader) (handle: EntityHandle) =
+let mkILAssemblyLongevity (flags: AssemblyFlags) =
+    let  masked = int flags &&& 0x000e
+    if   masked = 0x0000 then ILAssemblyLongevity.Unspecified
+    elif masked = 0x0002 then ILAssemblyLongevity.Library
+    elif masked = 0x0004 then ILAssemblyLongevity.PlatformAppDomain
+    elif masked = 0x0006 then ILAssemblyLongevity.PlatformProcess
+    elif masked = 0x0008 then ILAssemblyLongevity.PlatformSystem
+    else                      ILAssemblyLongevity.Unspecified
+
+let mkILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
+    match declSecurityAction with
+    | DeclarativeSecurityAction.Demand -> ILSecurityAction.Demand
+    | DeclarativeSecurityAction.Assert -> ILSecurityAction.Assert
+    | DeclarativeSecurityAction.Deny -> ILSecurityAction.Deny
+    | DeclarativeSecurityAction.PermitOnly -> ILSecurityAction.PermitOnly
+    | DeclarativeSecurityAction.LinkDemand -> ILSecurityAction.LinkCheck
+    | DeclarativeSecurityAction.InheritanceDemand -> ILSecurityAction.InheritCheck
+    | DeclarativeSecurityAction.RequestMinimum -> ILSecurityAction.ReqMin
+    | DeclarativeSecurityAction.RequestOptional -> ILSecurityAction.ReqOpt
+    | DeclarativeSecurityAction.RequestRefuse -> ILSecurityAction.ReqRefuse
+    | _ ->
+        // Comment below is from System.Reflection.Metadata
+        // Wait for an actual need before exposing these. They all have ilasm keywords, but some are missing from the CLI spec and 
+        // and none are defined in System.Security.Permissions.SecurityAction.
+        //Request = 0x0001,
+        //PrejitGrant = 0x000B,
+        //PrejitDeny = 0x000C,
+        //NonCasDemand = 0x000D,
+        //NonCasLinkDemand = 0x000E,
+        //NonCasInheritanceDemand = 0x000F,
+        match int declSecurityAction with
+        | 0x0001 -> ILSecurityAction.Request
+        | 0x000b -> ILSecurityAction.PreJitGrant
+        | 0x000c -> ILSecurityAction.PreJitDeny
+        | 0x000d -> ILSecurityAction.NonCasDemand
+        | 0x000e -> ILSecurityAction.NonCasLinkDemand
+        | 0x000f -> ILSecurityAction.NonCasInheritance
+        | 0x0010 -> ILSecurityAction.LinkDemandChoice
+        | 0x0011 -> ILSecurityAction.InheritanceDemandChoice
+        | 0x0012 -> ILSecurityAction.DemandChoice
+        | x -> failwithf "Invalid DeclarativeSecurityAction: %i" x
+
+let rec readILScopeRef (cenv: cenv) (handle: EntityHandle) =
+    let mdReader = cenv.MetadataReader
+
     match handle.Kind with
     | HandleKind.AssemblyReference ->
         let asmRef = mdReader.GetAssemblyReference(AssemblyReferenceHandle.op_Explicit(handle))
-        ILScopeRef.Assembly(readILAssemblyRef mdReader asmRef)
+        ILScopeRef.Assembly(readILAssemblyRef cenv asmRef)
 
     | HandleKind.ModuleReference ->
         let modRef = mdReader.GetModuleReference(ModuleReferenceHandle.op_Explicit(handle))
-        ILScopeRef.Module(readILModuleRef mdReader modRef)
+        ILScopeRef.Module(readILModuleRef cenv modRef)
 
     | HandleKind.TypeReference ->
         let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(handle))
-        readILScopeRef mdReader typeRef.ResolutionScope
+        readILScopeRef cenv typeRef.ResolutionScope
 
     | HandleKind.ExportedType ->
         let exportedTy = mdReader.GetExportedType(ExportedTypeHandle.op_Explicit(handle))
-        readILScopeRef mdReader exportedTy.Implementation
+        readILScopeRef cenv exportedTy.Implementation
 
     | _ ->
         failwithf "Invalid Handle Kind: %A" handle.Kind
 
-let rec readILAssemblyRef (mdReader: MetadataReader) (asmRef: AssemblyReference) =
+let rec readILAssemblyRef (cenv: cenv) (asmRef: AssemblyReference) =
+    let mdReader = cenv.MetadataReader
+
     let name = mdReader.GetString(asmRef.Name)
     let flags = asmRef.Flags
 
@@ -90,42 +143,48 @@ let rec readILAssemblyRef (mdReader: MetadataReader) (asmRef: AssemblyReference)
 
     ILAssemblyRef.Create(name, hash, publicKey, retargetable, version, locale)
 
-let readILType (mdReader: MetadataReader) (handle: EntityHandle) : ILType =
+let readILType (cenv: cenv) (handle: EntityHandle) : ILType =
+    let mdReader = cenv.MetadataReader
+
     match handle.Kind with
     | HandleKind.TypeReference ->
         let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(handle))
-        readILTypeFromTypeReference mdReader typeRef
+        readILTypeFromTypeReference cenv typeRef
 
     | HandleKind.TypeDefinition ->
         let typeDef = mdReader.GetTypeDefinition(TypeDefinitionHandle.op_Explicit(handle))
-        readILTypeFromTypeDefinition mdReader typeDef
+        readILTypeFromTypeDefinition cenv typeDef
 
     | _ ->
         failwithf "Invalid Handle Kind: %A" handle.Kind
 
-let readILModuleRef (mdReader: MetadataReader) (modRef: ModuleReference) =
-    let name = mdReader.GetString(modRef.Name)
+let readILModuleRef (cenv: cenv) (modRef: ModuleReference) =
+    let name = cenv.MetadataReader.GetString(modRef.Name)
     ILModuleRef.Create(name, hasMetadata = true, hash = None)
 
-let readILTypeRefFromTypeReference (mdReader: MetadataReader) (typeRef: TypeReference) =
-    let ilScopeRef = readILScopeRef mdReader typeRef.ResolutionScope
+let readILTypeRefFromTypeReference (cenv: cenv) (typeRef: TypeReference) =
+    let mdReader = cenv.MetadataReader
+
+    let ilScopeRef = readILScopeRef cenv typeRef.ResolutionScope
 
     let name = mdReader.GetString(typeRef.Name)
     let namespac = mdReader.GetString(typeRef.Namespace)
 
     ILTypeRef.Create(ilScopeRef, [], namespac + "." + name)
 
-let readILTypeFromTypeReference (mdReader: MetadataReader) (typeRef: TypeReference) =
-    let ilTypeRef = readILTypeRefFromTypeReference mdReader typeRef
+let readILTypeFromTypeReference (cenv: cenv) (typeRef: TypeReference) =
+    let ilTypeRef = readILTypeRefFromTypeReference cenv typeRef
     let ilTypeSpec = ILTypeSpec.Create(ilTypeRef, ILGenericArgs.Empty)
     mkILTy AsObject (* AsObject probably not nok *) ilTypeSpec
 
-let rec readILTypeRefFromTypeDefinition (mdReader: MetadataReader) (typeDef: TypeDefinition) : ILTypeRef =
+let rec readILTypeRefFromTypeDefinition (cenv: cenv) (typeDef: TypeDefinition) : ILTypeRef =
+    let mdReader = cenv.MetadataReader
+
     let enclosing =
         if typeDef.IsNested then
             let parentTypeDefHandle = typeDef.GetDeclaringType()
             let parentTypeDef = mdReader.GetTypeDefinition(parentTypeDefHandle)
-            let ilTypeRef = readILTypeRefFromTypeDefinition mdReader parentTypeDef
+            let ilTypeRef = readILTypeRefFromTypeDefinition cenv parentTypeDef
             ilTypeRef.Enclosing @ [ ilTypeRef.Name ]
         else
             []
@@ -140,8 +199,8 @@ let rec readILTypeRefFromTypeDefinition (mdReader: MetadataReader) (typeDef: Typ
 
     ILTypeRef.Create(ILScopeRef.Local, enclosing, name)
 
-let readILTypeFromTypeDefinition (mdReader: MetadataReader) (typeDef: TypeDefinition) =
-    let ilTypeRef = readILTypeRefFromTypeDefinition mdReader typeDef
+let readILTypeFromTypeDefinition (cenv: cenv) (typeDef: TypeDefinition) =
+    let ilTypeRef = readILTypeRefFromTypeDefinition cenv typeDef
 
     let ilGenericArgs = 
         // TODO: Confirm if this is right?
@@ -178,6 +237,9 @@ let readILCallingConv (sigHeader: SignatureHeader) =
 
 [<Sealed>]
 type SignatureTypeProvider(ilg: ILGlobals) =
+
+    member val cenv : cenv = Unchecked.defaultof<_> with get, set
+
     interface ISignatureTypeProvider<ILType, unit> with
 
         member __.GetFunctionPointerType(si) =
@@ -228,13 +290,13 @@ type SignatureTypeProvider(ilg: ILGlobals) =
             | PrimitiveTypeCode.Void -> ILType.Void
             | _ -> failwithf "Invalid Primitive Type Code: %A" typeCode
 
-        member __.GetTypeFromDefinition(mdReader, typeDefHandle, _) =
-            let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
-            readILTypeFromTypeDefinition mdReader typeDef
+        member this.GetTypeFromDefinition(_, typeDefHandle, _) =
+            let typeDef = this.cenv.MetadataReader.GetTypeDefinition(typeDefHandle)
+            readILTypeFromTypeDefinition this.cenv typeDef
 
-        member __.GetTypeFromReference(mdReader, typeRefHandle, _) =
-            let typeRef = mdReader.GetTypeReference(typeRefHandle)
-            readILTypeFromTypeReference mdReader typeRef
+        member this.GetTypeFromReference(_, typeRefHandle, _) =
+            let typeRef = this.cenv.MetadataReader.GetTypeReference(typeRefHandle)
+            readILTypeFromTypeReference this.cenv typeRef
 
     interface IConstructedTypeProvider<ILType> with
 
@@ -264,15 +326,9 @@ type SignatureTypeProvider(ilg: ILGlobals) =
         member __.GetSZArrayType(elementType) =
             mkILArr1DTy elementType
 
-[<Sealed>]
-type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType, unit>) =
-
-    member __.MetadataReader = mdReader
-
-    member __.SignatureTypeProvider = sigTyProvider
-
 let readILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHandle) : ILGenericParameterDef =
     let mdReader = cenv.MetadataReader
+
     let genParam = mdReader.GetGenericParameter(genParamHandle)
     let attributes = genParam.Attributes
 
@@ -280,7 +336,7 @@ let readILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHand
         genParam.GetConstraints()
         |> Seq.map (fun genParamCnstrHandle ->
             let genParamCnstr = mdReader.GetGenericParameterConstraint(genParamCnstrHandle)
-            readILType mdReader genParamCnstr.Type
+            readILType cenv genParamCnstr.Type
         )
         |> List.ofSeq     
 
@@ -311,7 +367,7 @@ let rec readILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
         let si = memberRef.DecodeMethodSignature(cenv.SignatureTypeProvider, ())
         
         let name = mdReader.GetString(memberRef.Name)
-        let enclILTy = readILType mdReader memberRef.Parent
+        let enclILTy = readILType cenv memberRef.Parent
         let ilCallingConv = readILCallingConv si.Header
         let genericArity = 0
 
@@ -326,7 +382,7 @@ let rec readILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
 
         let name = mdReader.GetString(methodDef.Name)
         let enclTypeDef = mdReader.GetTypeDefinition(methodDef.GetDeclaringType())
-        let enclILTy = readILTypeFromTypeDefinition mdReader enclTypeDef
+        let enclILTy = readILTypeFromTypeDefinition cenv enclTypeDef
         let ilCallingConv =
             if int (methodDef.Attributes &&& MethodAttributes.Static) <> 0 then
                 ILCallingConv.Static
@@ -348,61 +404,21 @@ let rec readILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
     | _ ->
         failwithf "Invalid Entity Handle Kind: %A" handle.Kind
 
-let readILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
-    match declSecurityAction with
-    | DeclarativeSecurityAction.Demand -> ILSecurityAction.Demand
-    | DeclarativeSecurityAction.Assert -> ILSecurityAction.Assert
-    | DeclarativeSecurityAction.Deny -> ILSecurityAction.Deny
-    | DeclarativeSecurityAction.PermitOnly -> ILSecurityAction.PermitOnly
-    | DeclarativeSecurityAction.LinkDemand -> ILSecurityAction.LinkCheck
-    | DeclarativeSecurityAction.InheritanceDemand -> ILSecurityAction.InheritCheck
-    | DeclarativeSecurityAction.RequestMinimum -> ILSecurityAction.ReqMin
-    | DeclarativeSecurityAction.RequestOptional -> ILSecurityAction.ReqOpt
-    | DeclarativeSecurityAction.RequestRefuse -> ILSecurityAction.ReqRefuse
-    | _ ->
-        // Comment below is from System.Reflection.Metadata
-        // Wait for an actual need before exposing these. They all have ilasm keywords, but some are missing from the CLI spec and 
-        // and none are defined in System.Security.Permissions.SecurityAction.
-        //Request = 0x0001,
-        //PrejitGrant = 0x000B,
-        //PrejitDeny = 0x000C,
-        //NonCasDemand = 0x000D,
-        //NonCasLinkDemand = 0x000E,
-        //NonCasInheritanceDemand = 0x000F,
-        match int declSecurityAction with
-        | 0x0001 -> ILSecurityAction.Request
-        | 0x000b -> ILSecurityAction.PreJitGrant
-        | 0x000c -> ILSecurityAction.PreJitDeny
-        | 0x000d -> ILSecurityAction.NonCasDemand
-        | 0x000e -> ILSecurityAction.NonCasLinkDemand
-        | 0x000f -> ILSecurityAction.NonCasInheritance
-        | 0x0010 -> ILSecurityAction.LinkDemandChoice
-        | 0x0011 -> ILSecurityAction.InheritanceDemandChoice
-        | 0x0012 -> ILSecurityAction.DemandChoice
-        | x -> failwithf "Invalid DeclarativeSecurityAction: %i" x
+let readILSecurityDecl (cenv: cenv) (declSecurityAttributeHandle: DeclarativeSecurityAttributeHandle) =
+    let mdReader = cenv.MetadataReader
 
-let readILSecurityDecl (mdReader: MetadataReader) (declSecurityAttributeHandle: DeclarativeSecurityAttributeHandle) =
     let declSecurityAttribute = mdReader.GetDeclarativeSecurityAttribute(declSecurityAttributeHandle)
 
     let bytes = mdReader.GetBlobBytes(declSecurityAttribute.PermissionSet)
-    ILSecurityDecl(readILSecurityAction declSecurityAttribute.Action, bytes)
+    ILSecurityDecl(mkILSecurityAction declSecurityAttribute.Action, bytes)
 
-let readILSecurityDeclsStored (mdReader: MetadataReader) (declSecurityAttributeHandles: DeclarativeSecurityAttributeHandleCollection) =
+let readILSecurityDeclsStored (cenv: cenv) (declSecurityAttributeHandles: DeclarativeSecurityAttributeHandleCollection) =
     [
         for declSecurityAttributeHandle in declSecurityAttributeHandles do
-            yield readILSecurityDecl mdReader declSecurityAttributeHandle
+            yield readILSecurityDecl cenv declSecurityAttributeHandle
     ]
     |> mkILSecurityDecls
     |> storeILSecurityDecls
-
-let readILAssemblyLongevity (flags: AssemblyFlags) =
-    let  masked = int flags &&& 0x000e
-    if   masked = 0x0000 then ILAssemblyLongevity.Unspecified
-    elif masked = 0x0002 then ILAssemblyLongevity.Library
-    elif masked = 0x0004 then ILAssemblyLongevity.PlatformAppDomain
-    elif masked = 0x0006 then ILAssemblyLongevity.PlatformProcess
-    elif masked = 0x0008 then ILAssemblyLongevity.PlatformSystem
-    else                      ILAssemblyLongevity.Unspecified
 
 let readILAttribute (cenv: cenv) (customAttrHandle: CustomAttributeHandle) =
     let customAttr = cenv.MetadataReader.GetCustomAttribute(customAttrHandle)
@@ -449,7 +465,7 @@ let readILExportedType (cenv: cenv) (exportedTyHandle: ExportedTypeHandle) =
     let exportedTy = mdReader.GetExportedType(exportedTyHandle)
 
     {
-        ScopeRef = readILScopeRef mdReader exportedTy.Implementation
+        ScopeRef = readILScopeRef cenv exportedTy.Implementation
         Name = mdReader.GetString(exportedTy.Name)
         Attributes = exportedTy.Attributes
         Nested = readILNestedExportedTypes cenv exportedTy.Implementation
@@ -466,6 +482,7 @@ let readILExportedTypes (cenv: cenv) (exportedTys: ExportedTypeHandleCollection)
 
 let readILAssemblyManifest (cenv: cenv) =
     let mdReader = cenv.MetadataReader
+
     let asmDef = mdReader.GetAssemblyDefinition()
 
     let publicKey =
@@ -487,12 +504,12 @@ let readILAssemblyManifest (cenv: cenv) =
     {
         Name = mdReader.GetString(asmDef.Name)
         AuxModuleHashAlgorithm = int asmDef.HashAlgorithm
-        SecurityDeclsStored = readILSecurityDeclsStored mdReader (asmDef.GetDeclarativeSecurityAttributes())
+        SecurityDeclsStored = readILSecurityDeclsStored cenv (asmDef.GetDeclarativeSecurityAttributes())
         PublicKey = publicKey
         Version = Some(mkVersionTuple asmDef.Version)
         Locale = locale
         CustomAttrsStored = readILAttributesStored cenv (asmDef.GetCustomAttributes())
-        AssemblyLongevity = readILAssemblyLongevity flags
+        AssemblyLongevity = mkILAssemblyLongevity flags
         DisableJitOptimizations = int (flags &&& AssemblyFlags.DisableJitCompileOptimizer) <> 0
         JitTracking = int (flags &&& AssemblyFlags.EnableJitCompileTracking) <> 0
         IgnoreSymbolStoreSequencePoints = (int flags &&& 0x2000) <> 0 // Not listed in AssemblyFlags
@@ -547,7 +564,11 @@ let readModuleDef ilGlobals (peReader: PEReader) =
     let ilModuleName = mdReader.GetString(moduleDef.Name)
     let ilMetadataVersion = mdReader.MetadataVersion
     
-    let cenv = cenv(mdReader, SignatureTypeProvider(ilGlobals))
+    let cenv = 
+        let sigTyProvider = SignatureTypeProvider(ilGlobals)
+        let cenv = cenv(mdReader, sigTyProvider)
+        sigTyProvider.cenv <- cenv
+        cenv
 
     { Manifest = Some(readILAssemblyManifest cenv)
       CustomAttrsStored = storeILCustomAttrs emptyILCustomAttrs //readILAttributesStored cenv (moduleDef.GetCustomAttributes())
