@@ -52,7 +52,9 @@ let rec readILScopeRef (mdReader: MetadataReader) (handle: EntityHandle) =
         let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(handle))
         readILScopeRef mdReader typeRef.ResolutionScope
 
-    | HandleKind.ExportedType -> ILScopeRef.Local
+    | HandleKind.ExportedType ->
+        let exportedTy = mdReader.GetExportedType(ExportedTypeHandle.op_Explicit(handle))
+        readILScopeRef mdReader exportedTy.Implementation
 
     | _ ->
         failwithf "Invalid Handle Kind: %A" handle.Kind
