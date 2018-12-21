@@ -91,13 +91,17 @@ let rec readILScopeRef (cenv: cenv) (handle: EntityHandle) =
     let mdReader = cenv.MetadataReader
 
     match handle.Kind with
+    | HandleKind.AssemblyFile ->
+        let asmFile = mdReader.GetAssemblyFile(AssemblyFileHandle.op_Explicit(handle))
+        ILScopeRef.Module(readILModuleRefFromAssemblyFile cenv asmFile)
+
     | HandleKind.AssemblyReference ->
         let asmRef = mdReader.GetAssemblyReference(AssemblyReferenceHandle.op_Explicit(handle))
-        ILScopeRef.Assembly(readILAssemblyRef cenv asmRef)
+        ILScopeRef.Assembly(readILAssemblyRefFromAssemblyReference cenv asmRef)
 
     | HandleKind.ModuleReference ->
         let modRef = mdReader.GetModuleReference(ModuleReferenceHandle.op_Explicit(handle))
-        ILScopeRef.Module(readILModuleRef cenv modRef)
+        ILScopeRef.Module(readILModuleRefFromModuleReference cenv modRef)
 
     | HandleKind.TypeReference ->
         let typeRef = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit(handle))
@@ -107,10 +111,13 @@ let rec readILScopeRef (cenv: cenv) (handle: EntityHandle) =
         let exportedTy = mdReader.GetExportedType(ExportedTypeHandle.op_Explicit(handle))
         readILScopeRef cenv exportedTy.Implementation
 
+    | HandleKind.ModuleDefinition ->
+        ILScopeRef.Local
+
     | _ ->
         failwithf "Invalid Handle Kind: %A" handle.Kind
 
-let rec readILAssemblyRef (cenv: cenv) (asmRef: AssemblyReference) =
+let readILAssemblyRefFromAssemblyReference (cenv: cenv) (asmRef: AssemblyReference) =
     let mdReader = cenv.MetadataReader
 
     let name = mdReader.GetString(asmRef.Name)
@@ -143,6 +150,18 @@ let rec readILAssemblyRef (cenv: cenv) (asmRef: AssemblyReference) =
 
     ILAssemblyRef.Create(name, hash, publicKey, retargetable, version, locale)
 
+let readILModuleRefFromAssemblyFile (cenv: cenv) (asmFile: AssemblyFile) =
+    let mdReader = cenv.MetadataReader
+
+    let name = mdReader.GetString(asmFile.Name)
+
+    let hash = 
+        let hashValue = asmFile.HashValue
+        if hashValue.IsNil then None
+        else Some(mdReader.GetBlobBytes(hashValue))
+
+    ILModuleRef.Create(name, asmFile.ContainsMetadata, hash) 
+
 let readILType (cenv: cenv) (handle: EntityHandle) : ILType =
     let mdReader = cenv.MetadataReader
 
@@ -158,7 +177,7 @@ let readILType (cenv: cenv) (handle: EntityHandle) : ILType =
     | _ ->
         failwithf "Invalid Handle Kind: %A" handle.Kind
 
-let readILModuleRef (cenv: cenv) (modRef: ModuleReference) =
+let readILModuleRefFromModuleReference (cenv: cenv) (modRef: ModuleReference) =
     let name = cenv.MetadataReader.GetString(modRef.Name)
     ILModuleRef.Create(name, hasMetadata = true, hash = None)
 
@@ -480,7 +499,7 @@ let readILExportedTypes (cenv: cenv) (exportedTys: ExportedTypeHandleCollection)
     ]
     |> mkILExportedTypes
 
-let readILAssemblyManifest (cenv: cenv) =
+let readILAssemblyManifest (cenv: cenv) (entryPointToken: int) =
     let mdReader = cenv.MetadataReader
 
     let asmDef = mdReader.GetAssemblyDefinition()
@@ -501,6 +520,16 @@ let readILAssemblyManifest (cenv: cenv) =
 
     let flags = asmDef.Flags
 
+    let entrypointElsewhere =
+        let handle = MetadataTokens.EntityHandle(entryPointToken)
+        if handle.IsNil then None
+        else
+            match handle.Kind with
+            | HandleKind.AssemblyFile -> 
+                let asmFile = mdReader.GetAssemblyFile(AssemblyFileHandle.op_Explicit(handle))
+                Some(readILModuleRefFromAssemblyFile cenv asmFile)
+            | _ -> None
+
     {
         Name = mdReader.GetString(asmDef.Name)
         AuxModuleHashAlgorithm = int asmDef.HashAlgorithm
@@ -515,7 +544,7 @@ let readILAssemblyManifest (cenv: cenv) =
         IgnoreSymbolStoreSequencePoints = (int flags &&& 0x2000) <> 0 // Not listed in AssemblyFlags
         Retargetable = int (flags &&& AssemblyFlags.Retargetable) <> 0
         ExportedTypes = readILExportedTypes cenv mdReader.ExportedTypes
-        EntrypointElsewhere = None // TODO:
+        EntrypointElsewhere = entrypointElsewhere
         MetadataIndex = 1 // always one
     }
 
@@ -559,6 +588,8 @@ let readModuleDef ilGlobals (peReader: PEReader) =
 
     let imageBaseReal = int peReader.PEHeaders.PEHeader.ImageBase
 
+    let entryPointToken = peReader.PEHeaders.CorHeader.EntryPointTokenOrRelativeVirtualAddress
+
     let mdReader = peReader.GetMetadataReader()
     let moduleDef = mdReader.GetModuleDefinition()
     let ilModuleName = mdReader.GetString(moduleDef.Name)
@@ -570,11 +601,11 @@ let readModuleDef ilGlobals (peReader: PEReader) =
         sigTyProvider.cenv <- cenv
         cenv
 
-    { Manifest = Some(readILAssemblyManifest cenv)
-      CustomAttrsStored = storeILCustomAttrs emptyILCustomAttrs //readILAttributesStored cenv (moduleDef.GetCustomAttributes())
+    { Manifest = Some(readILAssemblyManifest cenv entryPointToken)
+      CustomAttrsStored = readILAttributesStored cenv (moduleDef.GetCustomAttributes())
       MetadataIndex = 1 // TODO: Is this right?
       Name = ilModuleName
-      NativeResources = []
+      NativeResources = [] // TODO:
       TypeDefs = emptyILTypeDefs // TODO //mkILTypeDefsComputed (fun () -> seekReadTopTypeDefs ctxt)
       SubSystemFlags = int32 subsys
       IsILOnly = ilOnly
