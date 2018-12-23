@@ -2,6 +2,7 @@
 
 open System
 open System.IO
+open System.Linq
 open System.Reflection
 open System.Reflection.PortableExecutable
 open System.Reflection.Metadata
@@ -86,6 +87,97 @@ let mkILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
         | 0x0011 -> ILSecurityAction.InheritanceDemandChoice
         | 0x0012 -> ILSecurityAction.DemandChoice
         | x -> failwithf "Invalid DeclarativeSecurityAction: %i" x
+
+[<Sealed>]
+type SignatureTypeProvider(ilg: ILGlobals) =
+
+    member val cenv : cenv = Unchecked.defaultof<_> with get, set
+
+    interface ISignatureTypeProvider<ILType, unit> with
+
+        member __.GetFunctionPointerType(si) =
+            let callingSig =
+                {
+                    CallingConv = readILCallingConv si.Header
+                    ArgTypes = si.ParameterTypes |> Seq.toList
+                    ReturnType = si.ReturnType
+                }
+            ILType.FunctionPointer(callingSig)
+
+        member __.GetGenericMethodParameter(_, index) =
+            ILType.TypeVar(uint16 index)
+
+        member __.GetGenericTypeParameter(_, index) =
+            ILType.TypeVar(uint16 index)
+
+        member __.GetModifiedType(modifier, unmodifiedType, isRequired) =
+            ILType.Modified(isRequired, modifier.TypeRef, unmodifiedType)
+
+        member __.GetPinnedType(elementType) = elementType
+
+        member this.GetTypeFromSpecification(mdReader, ctxt, typeSpecHandle, _) =
+            let typeSpec = mdReader.GetTypeSpecification(typeSpecHandle)
+            typeSpec.DecodeSignature(this, ctxt)
+            
+    interface ISimpleTypeProvider<ILType> with
+
+        member __.GetPrimitiveType(typeCode) =
+            match typeCode with
+            | PrimitiveTypeCode.Boolean -> ilg.typ_Bool
+            | PrimitiveTypeCode.Byte -> ilg.typ_Byte
+            | PrimitiveTypeCode.Char -> ilg.typ_Char
+            | PrimitiveTypeCode.Double -> ilg.typ_Double
+            | PrimitiveTypeCode.Int16 -> ilg.typ_Int16
+            | PrimitiveTypeCode.Int32 -> ilg.typ_Int32
+            | PrimitiveTypeCode.Int64 -> ilg.typ_Int64
+            | PrimitiveTypeCode.IntPtr -> ilg.typ_IntPtr
+            | PrimitiveTypeCode.Object -> ilg.typ_Object
+            | PrimitiveTypeCode.SByte -> ilg.typ_SByte
+            | PrimitiveTypeCode.Single -> ilg.typ_Single
+            | PrimitiveTypeCode.String -> ilg.typ_String
+            | PrimitiveTypeCode.TypedReference -> ilg.typ_Type
+            | PrimitiveTypeCode.UInt16 -> ilg.typ_UInt16
+            | PrimitiveTypeCode.UInt32 -> ilg.typ_UInt32
+            | PrimitiveTypeCode.UInt64 -> ilg.typ_UInt64
+            | PrimitiveTypeCode.UIntPtr -> ilg.typ_UIntPtr
+            | PrimitiveTypeCode.Void -> ILType.Void
+            | _ -> failwithf "Invalid Primitive Type Code: %A" typeCode
+
+        member this.GetTypeFromDefinition(_, typeDefHandle, _) =
+            let typeDef = this.cenv.MetadataReader.GetTypeDefinition(typeDefHandle)
+            readILTypeFromTypeDefinition this.cenv typeDef
+
+        member this.GetTypeFromReference(_, typeRefHandle, _) =
+            let typeRef = this.cenv.MetadataReader.GetTypeReference(typeRefHandle)
+            readILTypeFromTypeReference this.cenv typeRef
+
+    interface IConstructedTypeProvider<ILType> with
+
+        member __.GetGenericInstantiation(genericType, typeArgs) =
+            let ilTypeSpec = ILTypeSpec.Create(genericType.TypeRef, typeArgs |> List.ofSeq)
+            mkILTy genericType.Boxity ilTypeSpec
+
+        member __.GetArrayType(elementType, shape) =
+            let lowerBounds = shape.LowerBounds
+            let sizes = shape.Sizes
+            let rank = shape.Rank
+            let shape = 
+                let dim i =
+                  (if i < lowerBounds.Length then Some (Seq.item i lowerBounds) else None), 
+                  (if i < sizes.Length then Some (Seq.item i sizes) else None)
+                ILArrayShape (List.init rank dim)
+            mkILArrTy (elementType, shape)
+
+        member __.GetByReferenceType(elementType) =
+            ILType.Byref(elementType)
+
+        member __.GetPointerType(elementType) =
+            ILType.Ptr(elementType)
+
+    interface ISZArrayTypeProvider<ILType> with
+
+        member __.GetSZArrayType(elementType) =
+            mkILArr1DTy elementType
 
 let rec readILScopeRef (cenv: cenv) (handle: EntityHandle) =
     let mdReader = cenv.MetadataReader
@@ -253,97 +345,6 @@ let readILCallingConv (sigHeader: SignatureHeader) =
         | _ -> failwithf "Invalid Signature Calling Convention: %A" sigHeader.CallingConvention
 
     ILCallingConv.Callconv(ilThisConvention, ilArgConvention)
-
-[<Sealed>]
-type SignatureTypeProvider(ilg: ILGlobals) =
-
-    member val cenv : cenv = Unchecked.defaultof<_> with get, set
-
-    interface ISignatureTypeProvider<ILType, unit> with
-
-        member __.GetFunctionPointerType(si) =
-            let callingSig =
-                {
-                    CallingConv = readILCallingConv si.Header
-                    ArgTypes = si.ParameterTypes |> Seq.toList
-                    ReturnType = si.ReturnType
-                }
-            ILType.FunctionPointer(callingSig)
-
-        member __.GetGenericMethodParameter(_, index) =
-            ILType.TypeVar(uint16 index)
-
-        member __.GetGenericTypeParameter(_, index) =
-            ILType.TypeVar(uint16 index)
-
-        member __.GetModifiedType(modifier, unmodifiedType, isRequired) =
-            ILType.Modified(isRequired, modifier.TypeRef, unmodifiedType)
-
-        member __.GetPinnedType(elementType) = elementType
-
-        member this.GetTypeFromSpecification(mdReader, ctxt, typeSpecHandle, _) =
-            let typeSpec = mdReader.GetTypeSpecification(typeSpecHandle)
-            typeSpec.DecodeSignature(this, ctxt)
-            
-    interface ISimpleTypeProvider<ILType> with
-
-        member __.GetPrimitiveType(typeCode) =
-            match typeCode with
-            | PrimitiveTypeCode.Boolean -> ilg.typ_Bool
-            | PrimitiveTypeCode.Byte -> ilg.typ_Byte
-            | PrimitiveTypeCode.Char -> ilg.typ_Char
-            | PrimitiveTypeCode.Double -> ilg.typ_Double
-            | PrimitiveTypeCode.Int16 -> ilg.typ_Int16
-            | PrimitiveTypeCode.Int32 -> ilg.typ_Int32
-            | PrimitiveTypeCode.Int64 -> ilg.typ_Int64
-            | PrimitiveTypeCode.IntPtr -> ilg.typ_IntPtr
-            | PrimitiveTypeCode.Object -> ilg.typ_Object
-            | PrimitiveTypeCode.SByte -> ilg.typ_SByte
-            | PrimitiveTypeCode.Single -> ilg.typ_Single
-            | PrimitiveTypeCode.String -> ilg.typ_String
-            | PrimitiveTypeCode.TypedReference -> ilg.typ_Type
-            | PrimitiveTypeCode.UInt16 -> ilg.typ_UInt16
-            | PrimitiveTypeCode.UInt32 -> ilg.typ_UInt32
-            | PrimitiveTypeCode.UInt64 -> ilg.typ_UInt64
-            | PrimitiveTypeCode.UIntPtr -> ilg.typ_UIntPtr
-            | PrimitiveTypeCode.Void -> ILType.Void
-            | _ -> failwithf "Invalid Primitive Type Code: %A" typeCode
-
-        member this.GetTypeFromDefinition(_, typeDefHandle, _) =
-            let typeDef = this.cenv.MetadataReader.GetTypeDefinition(typeDefHandle)
-            readILTypeFromTypeDefinition this.cenv typeDef
-
-        member this.GetTypeFromReference(_, typeRefHandle, _) =
-            let typeRef = this.cenv.MetadataReader.GetTypeReference(typeRefHandle)
-            readILTypeFromTypeReference this.cenv typeRef
-
-    interface IConstructedTypeProvider<ILType> with
-
-        member __.GetGenericInstantiation(genericType, typeArgs) =
-            let ilTypeSpec = ILTypeSpec.Create(genericType.TypeRef, typeArgs |> List.ofSeq)
-            mkILTy genericType.Boxity ilTypeSpec
-
-        member __.GetArrayType(elementType, shape) =
-            let lowerBounds = shape.LowerBounds
-            let sizes = shape.Sizes
-            let rank = shape.Rank
-            let shape = 
-                let dim i =
-                  (if i < lowerBounds.Length then Some (Seq.item i lowerBounds) else None), 
-                  (if i < sizes.Length then Some (Seq.item i sizes) else None)
-                ILArrayShape (List.init rank dim)
-            mkILArrTy (elementType, shape)
-
-        member __.GetByReferenceType(elementType) =
-            ILType.Byref(elementType)
-
-        member __.GetPointerType(elementType) =
-            ILType.Ptr(elementType)
-
-    interface ISZArrayTypeProvider<ILType> with
-
-        member __.GetSZArrayType(elementType) =
-            mkILArr1DTy elementType
 
 let readILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHandle) : ILGenericParameterDef =
     let mdReader = cenv.MetadataReader
@@ -548,8 +549,31 @@ let readILAssemblyManifest (cenv: cenv) (entryPointToken: int) =
         MetadataIndex = 1 // always one
     }
 
-let readModuleDef ilGlobals (peReader: PEReader) =
-  //  let nativeResources = readNativeResources pectxtEager peReader ctxt.fileName
+type PEReaderKind =
+    | OnDisk of fileName: string
+    | InMemory
+
+let readILNativeResources (peReader: PEReader) peReaderKind =
+    peReader.PEHeaders.SectionHeaders
+    |> Seq.choose (fun s ->
+        // TODO: Is this right?
+        if s.Name.EndsWith(".rsrc", StringComparison.OrdinalIgnoreCase) then
+            match peReaderKind with
+            | OnDisk(fileName) ->
+                ILNativeResource.In(fileName, s.VirtualAddress, s.PointerToRawData, s.VirtualSize)
+                |> Some
+            | InMemory ->
+                let memBlock = peReader.GetSectionData(s.VirtualAddress)
+                let bytes = memBlock.GetContent().ToArray() // We should never do this. ILNativeResource.Out should just take an immutable array...
+                ILNativeResource.Out(bytes)
+                |> Some
+        else
+            None
+    )
+    |> Seq.toList
+
+let readModuleDef ilGlobals (peReader: PEReader) peReaderKind =
+    let nativeResources = readILNativeResources peReader peReaderKind
 
     let subsys =
         int16 peReader.PEHeaders.PEHeader.Subsystem
@@ -605,7 +629,7 @@ let readModuleDef ilGlobals (peReader: PEReader) =
       CustomAttrsStored = readILAttributesStored cenv (moduleDef.GetCustomAttributes())
       MetadataIndex = 1 // TODO: Is this right?
       Name = ilModuleName
-      NativeResources = [] // TODO:
+      NativeResources = nativeResources
       TypeDefs = emptyILTypeDefs // TODO //mkILTypeDefsComputed (fun () -> seekReadTopTypeDefs ctxt)
       SubSystemFlags = int32 subsys
       IsILOnly = ilOnly
@@ -629,7 +653,7 @@ let openILModuleReader fileName (ilReaderOptions: Microsoft.FSharp.Compiler.Abst
     { new Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILModuleReader with
 
         member __.ILModuleDef = 
-            readModuleDef ilReaderOptions.ilGlobals peReader
+            readModuleDef ilReaderOptions.ilGlobals peReader (OnDisk fileName)
 
         member __.ILAssemblyRefs = []
 
