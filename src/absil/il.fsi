@@ -1565,6 +1565,7 @@ val isTypeNameForGlobalFunctions: string -> bool
 type ILGlobals = 
     member primaryAssemblyScopeRef: ILScopeRef
     member primaryAssemblyName: string
+    member typ_TypedReference: ILType
     member typ_Object: ILType
     member typ_String: ILType
     member typ_Type: ILType

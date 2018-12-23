@@ -113,7 +113,7 @@ type SignatureTypeProvider(ilg: ILGlobals) =
         member __.GetModifiedType(modifier, unmodifiedType, isRequired) =
             ILType.Modified(isRequired, modifier.TypeRef, unmodifiedType)
 
-        member __.GetPinnedType(elementType) = elementType
+        member __.GetPinnedType(elementType) = elementType // TODO: Is this right?
 
         member this.GetTypeFromSpecification(mdReader, ctxt, typeSpecHandle, _) =
             let typeSpec = mdReader.GetTypeSpecification(typeSpecHandle)
@@ -135,7 +135,7 @@ type SignatureTypeProvider(ilg: ILGlobals) =
             | PrimitiveTypeCode.SByte -> ilg.typ_SByte
             | PrimitiveTypeCode.Single -> ilg.typ_Single
             | PrimitiveTypeCode.String -> ilg.typ_String
-            | PrimitiveTypeCode.TypedReference -> ilg.typ_Type
+            | PrimitiveTypeCode.TypedReference -> ilg.typ_TypedReference
             | PrimitiveTypeCode.UInt16 -> ilg.typ_UInt16
             | PrimitiveTypeCode.UInt32 -> ilg.typ_UInt32
             | PrimitiveTypeCode.UInt64 -> ilg.typ_UInt64
