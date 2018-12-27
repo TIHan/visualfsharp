@@ -580,7 +580,7 @@ let readILNativeResources (peReader: PEReader) peReaderKind =
     peReader.PEHeaders.SectionHeaders
     |> Seq.choose (fun s ->
         // TODO: Is this right?
-        if s.Name.EndsWith(".rsrc", StringComparison.OrdinalIgnoreCase) then
+        if s.Name.Equals(".rsrc", StringComparison.OrdinalIgnoreCase) then
             match peReaderKind with
             | OnDisk(fileName) ->
                 ILNativeResource.In(fileName, s.VirtualAddress, s.PointerToRawData, s.VirtualSize)
