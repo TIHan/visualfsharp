@@ -630,9 +630,9 @@ let readILParameter (cenv: cenv) (si: MethodSignature<ILType>) (paramHandle: Par
         Type = typ
         Default = tryReadILFieldInit cenv (param.GetDefaultValue())
         Marshal = None // TODO
-        IsIn = false // TODO
-        IsOut = false // TODO
-        IsOptional = false // TODO
+        IsIn = int (param.Attributes &&& ParameterAttributes.In) <> 0
+        IsOut = int (param.Attributes &&& ParameterAttributes.Out) <> 0
+        IsOptional = int (param.Attributes &&& ParameterAttributes.Optional) <> 0
         CustomAttrsStored = readILAttributesStored cenv (param.GetCustomAttributes())
         MetadataIndex = NoMetadataIdx
     }
