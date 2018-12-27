@@ -10,6 +10,15 @@ open System.Reflection.Metadata.Ecma335
 open Microsoft.FSharp.Compiler.AbstractIL.IL  
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
 
+type MetadataReader with
+
+    member this.TryGetString(handle: StringHandle) =
+        if handle.IsNil then ValueNone
+        else
+            let str = this.GetString(handle)
+            if str = null then ValueNone
+            else ValueSome(str)
+
 [<Sealed>]
 type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType, unit>) =
 
@@ -54,6 +63,20 @@ let mkILAssemblyLongevity (flags: AssemblyFlags) =
     elif masked = 0x0006 then ILAssemblyLongevity.PlatformProcess
     elif masked = 0x0008 then ILAssemblyLongevity.PlatformSystem
     else                      ILAssemblyLongevity.Unspecified
+
+let mkILTypeDefLayoutInfo (layout: TypeLayout) =
+    if layout.IsDefault then
+        { Size = None; Pack = None }
+    else
+        { Size = Some(layout.Size); Pack = Some(uint16 layout.PackingSize) }
+
+let mkILTypeDefLayout (attributes: TypeAttributes) (layout: TypeLayout) =
+    if int (attributes &&& TypeAttributes.SequentialLayout) <> 0 then
+        ILTypeDefLayout.Sequential(mkILTypeDefLayoutInfo layout)
+    elif int (attributes &&& TypeAttributes.ExplicitLayout) <> 0 then
+        ILTypeDefLayout.Explicit(mkILTypeDefLayoutInfo layout)
+    else
+        ILTypeDefLayout.Auto
 
 let mkILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
     match declSecurityAction with
@@ -571,6 +594,174 @@ let readILNativeResources (peReader: PEReader) peReaderKind =
             None
     )
     |> Seq.toList
+
+let tryReadILFieldInit (cenv: cenv) (constantHandle: ConstantHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let constant = mdReader.GetConstant(constantHandle)
+    let blobReader = mdReader.GetBlobReader(constant.Value)
+    match constant.TypeCode with
+    | ConstantTypeCode.Boolean -> ILFieldInit.Bool(blobReader.ReadBoolean()) |> Some
+    | ConstantTypeCode.Byte -> ILFieldInit.UInt8(blobReader.ReadByte()) |> Some
+    | ConstantTypeCode.Char -> ILFieldInit.Char(blobReader.ReadChar() |> uint16) |> Some // Why does ILFieldInit.Char not just take a char?
+    | ConstantTypeCode.Double -> ILFieldInit.Double(blobReader.ReadDouble()) |> Some
+    | ConstantTypeCode.Int16 -> ILFieldInit.Int16(blobReader.ReadInt16()) |> Some
+    | ConstantTypeCode.Int32 -> ILFieldInit.Int32(blobReader.ReadInt32()) |> Some
+    | ConstantTypeCode.Int64 -> ILFieldInit.Int64(blobReader.ReadInt64()) |> Some
+    | ConstantTypeCode.SByte -> ILFieldInit.Int8(blobReader.ReadSByte()) |> Some
+    | ConstantTypeCode.Single -> ILFieldInit.Single(blobReader.ReadSingle()) |> Some
+    | ConstantTypeCode.String -> ILFieldInit.String(blobReader.ReadUTF16(blobReader.Length)) |> Some
+    | ConstantTypeCode.UInt16 -> ILFieldInit.UInt16(blobReader.ReadUInt16()) |> Some
+    | ConstantTypeCode.UInt32 -> ILFieldInit.UInt32(blobReader.ReadUInt32()) |> Some
+    | ConstantTypeCode.UInt64 -> ILFieldInit.UInt64(blobReader.ReadUInt64()) |> Some
+    | ConstantTypeCode.NullReference -> ILFieldInit.Null |> Some
+    | _ -> None
+
+let readILParameter (cenv: cenv) (si: MethodSignature<ILType>) (paramHandle: ParameterHandle) : ILParameter =
+    let mdReader = cenv.MetadataReader
+
+    let param = mdReader.GetParameter(paramHandle)
+
+    let nameOpt = mdReader.TryGetString(param.Name)
+    let typ = si.ParameterTypes.[param.SequenceNumber]
+
+    {
+        Name = match nameOpt with | ValueNone -> None | ValueSome(name) -> Some(name)
+        Type = typ
+        Default = tryReadILFieldInit cenv (param.GetDefaultValue())
+        Marshal = None // TODO
+        IsIn = false // TODO
+        IsOut = false // TODO
+        IsOptional = false // TODO
+        CustomAttrsStored = readILAttributesStored cenv (param.GetCustomAttributes())
+        MetadataIndex = NoMetadataIdx
+    }
+
+let readILMethodDef (cenv: cenv) (methDefHandle: MethodDefinitionHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let methDef = mdReader.GetMethodDefinition(methDefHandle)
+
+    let name = mdReader.GetString(methDef.Name) 
+    let attributes = methDef.Attributes
+    let implAttributes = methDef.ImplAttributes
+
+    let si = methDef.DecodeSignature(cenv.SignatureTypeProvider, ())
+
+    let callingConv = readILCallingConv si.Header
+    let parameters = 
+        methDef.GetParameters()
+        |> Seq.map (fun h ->
+            readILParameter cenv si h
+        )
+        |> List.ofSeq
+
+    ILMethodDef(
+        name = name,
+        attributes = attributes,
+        implAttributes = implAttributes,
+        callingConv = callingConv,
+        parameters = parameters,
+        ret = mkILReturn si.ReturnType,
+        body = null, // TODO
+        isEntryPoint = false, // TODO
+        genericParams = null, // TODO
+        securityDeclsStored = readILSecurityDeclsStored cenv (methDef.GetDeclarativeSecurityAttributes()),
+        customAttrsStored = readILAttributesStored cenv (methDef.GetCustomAttributes()),
+        metadataIndex = NoMetadataIdx
+    )
+
+let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
+
+    let name = 
+        let namespaceOpt = mdReader.TryGetString(typeDef.Namespace)
+        let name = mdReader.GetString(typeDef.Name)
+        match namespaceOpt with
+        | ValueNone -> name
+        | ValueSome(namespac) -> namespac + "." + name
+
+    let implements =
+        typeDef.GetInterfaceImplementations()
+        |> Seq.map (fun h ->
+            let interfaceImpl = mdReader.GetInterfaceImplementation(h)
+            readILType cenv interfaceImpl.Interface
+        )
+        |> List.ofSeq
+
+    let genericParams =
+        typeDef.GetGenericParameters()
+        |> Seq.map (fun h ->
+            readILGenericParameterDef cenv h
+        )
+        |> List.ofSeq
+
+    let extends =
+        if typeDef.BaseType.IsNil then None
+        else Some(readILType cenv typeDef.BaseType)
+
+    let methods =
+        mkILMethodsComputed (fun () ->
+            typeDef.GetMethods()
+            |> Seq.map (fun h ->
+                readILMethodDef cenv h
+            )
+            |> Array.ofSeq
+        )
+
+    let nestedTypes =
+        typeDef.GetNestedTypes()
+        |> Seq.map (fun h -> 
+            readILTypeDef cenv h
+        )
+        |> List.ofSeq
+        |> mkILTypeDefs
+
+    ILTypeDef(
+        name = name,
+        attributes = typeDef.Attributes,
+        layout = mkILTypeDefLayout typeDef.Attributes (typeDef.GetLayout()),
+        implements = implements,
+        genericParams = genericParams,
+        extends = extends,
+        methods = methods,
+        nestedTypes = nestedTypes,
+        fields = [], // TODO
+        methodImpls = [], // TODO
+        events = [], // TODO
+        properties = [], // TODO
+        securityDeclsStored = readILSecurityDeclsStored cenv (typeDef.GetDeclarativeSecurityAttributes()),
+        customAttrsStored = readILAttributesStored cenv (typeDef.GetCustomAttributes()),
+        metadataIndex = MetadataTokens.GetRowNumber(TypeDefinitionHandle.op_Implicit(typeDefHandle))
+    )
+
+let readILPreTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
+
+    let namespaceOpt = mdReader.TryGetString(typeDef.Namespace)
+    let name = mdReader.GetString(typeDef.Name)
+
+    let namespaceSplit =
+        match namespaceOpt with
+        | ValueNone -> []
+        | ValueSome(namespac) -> splitNamespace namespac
+
+    mkILPreTypeDefComputed (namespaceSplit, name, (fun () -> readILTypeDef cenv typeDefHandle))
+
+let readILPreTypeDefs (cenv: cenv) = 
+    let mdReader = cenv.MetadataReader
+
+    [|
+        for typeDefHandle in mdReader.TypeDefinitions do
+            let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
+            // Only get top types.
+            if not typeDef.IsNested then
+                yield readILPreTypeDef cenv typeDefHandle
+    |]
 
 let readModuleDef ilGlobals (peReader: PEReader) peReaderKind =
     let nativeResources = readILNativeResources peReader peReaderKind
