@@ -7,6 +7,7 @@ open System.Reflection
 open System.Reflection.PortableExecutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open System.Collections.Immutable
 open Microsoft.FSharp.Compiler.AbstractIL.IL  
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
 
@@ -71,11 +72,12 @@ let mkILTypeDefLayoutInfo (layout: TypeLayout) =
         { Size = Some(layout.Size); Pack = Some(uint16 layout.PackingSize) }
 
 let mkILTypeDefLayout (attributes: TypeAttributes) (layout: TypeLayout) =
-    if int (attributes &&& TypeAttributes.SequentialLayout) <> 0 then
+    match attributes &&& TypeAttributes.LayoutMask with
+    | TypeAttributes.SequentialLayout ->
         ILTypeDefLayout.Sequential(mkILTypeDefLayoutInfo layout)
-    elif int (attributes &&& TypeAttributes.ExplicitLayout) <> 0 then
+    | TypeAttributes.ExplicitLayout ->
         ILTypeDefLayout.Explicit(mkILTypeDefLayoutInfo layout)
-    else
+    | _ ->
         ILTypeDefLayout.Auto
 
 let mkILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
@@ -111,6 +113,50 @@ let mkILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
         | 0x0012 -> ILSecurityAction.DemandChoice
         | x -> failwithf "Invalid DeclarativeSecurityAction: %i" x
 
+let mkPInvokeCallingConvention (methImportAttributes: MethodImportAttributes) =
+    match methImportAttributes &&& MethodImportAttributes.CallingConventionMask with
+    | MethodImportAttributes.CallingConventionCDecl ->
+        PInvokeCallingConvention.Cdecl
+    | MethodImportAttributes.CallingConventionStdCall ->
+        PInvokeCallingConvention.Stdcall
+    | MethodImportAttributes.CallingConventionThisCall ->
+        PInvokeCallingConvention.Thiscall
+    | MethodImportAttributes.CallingConventionFastCall ->
+        PInvokeCallingConvention.Fastcall
+    | MethodImportAttributes.CallingConventionWinApi ->
+        PInvokeCallingConvention.WinApi
+    | _ ->
+        PInvokeCallingConvention.None
+
+let mkPInvokeCharEncoding (methImportAttributes: MethodImportAttributes) =
+    match methImportAttributes &&& MethodImportAttributes.CharSetMask with
+    | MethodImportAttributes.CharSetAnsi ->
+        PInvokeCharEncoding.Ansi
+    | MethodImportAttributes.CharSetUnicode ->
+        PInvokeCharEncoding.Unicode
+    | MethodImportAttributes.CharSetAuto ->
+        PInvokeCharEncoding.Auto
+    | _ ->
+        PInvokeCharEncoding.None
+
+let mkPInvokeThrowOnUnmappableChar (methImportAttrs: MethodImportAttributes) =
+    match methImportAttrs &&& MethodImportAttributes.ThrowOnUnmappableCharMask with
+    | MethodImportAttributes.ThrowOnUnmappableCharEnable ->
+        PInvokeThrowOnUnmappableChar.Enabled
+    | MethodImportAttributes.ThrowOnUnmappableCharDisable ->
+        PInvokeThrowOnUnmappableChar.Disabled
+    | _ -> 
+        PInvokeThrowOnUnmappableChar.UseAssembly
+
+let mkPInvokeCharBestFit (methImportAttrs: MethodImportAttributes) =
+    match methImportAttrs &&& MethodImportAttributes.BestFitMappingMask with
+    | MethodImportAttributes.BestFitMappingEnable ->
+        PInvokeCharBestFit.Enabled
+    | MethodImportAttributes.BestFitMappingDisable ->
+        PInvokeCharBestFit.Disabled
+    | _ ->
+        PInvokeCharBestFit.UseAssembly
+        
 [<Sealed>]
 type SignatureTypeProvider(ilg: ILGlobals) =
 
@@ -289,6 +335,10 @@ let readILType (cenv: cenv) (handle: EntityHandle) : ILType =
         let typeDef = mdReader.GetTypeDefinition(TypeDefinitionHandle.op_Explicit(handle))
         readILTypeFromTypeDefinition cenv typeDef
 
+    | HandleKind.TypeSpecification ->
+        let typeSpec = mdReader.GetTypeSpecification(TypeSpecificationHandle.op_Explicit(handle))
+        typeSpec.DecodeSignature(cenv.SignatureTypeProvider, ())
+
     | _ ->
         failwithf "Invalid Handle Kind: %A" handle.Kind
 
@@ -401,6 +451,11 @@ let readILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHand
         CustomAttrsStored = readILAttributesStored cenv (genParam.GetCustomAttributes())
         MetadataIndex = MetadataTokens.GetRowNumber(GenericParameterHandle.op_Implicit(genParamHandle))
     }
+
+let readILGenericParameterDefs (cenv: cenv) (genParamHandles: GenericParameterHandleCollection) =
+    genParamHandles
+    |> Seq.map (readILGenericParameterDef cenv)
+    |> List.ofSeq
 
 let rec readILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
     let mdReader = cenv.MetadataReader
@@ -598,6 +653,9 @@ let readILNativeResources (peReader: PEReader) peReaderKind =
 let tryReadILFieldInit (cenv: cenv) (constantHandle: ConstantHandle) =
     let mdReader = cenv.MetadataReader
 
+    if constantHandle.IsNil then None
+    else
+
     let constant = mdReader.GetConstant(constantHandle)
     let blobReader = mdReader.GetBlobReader(constant.Value)
     match constant.TypeCode with
@@ -623,7 +681,9 @@ let readILParameter (cenv: cenv) (si: MethodSignature<ILType>) (paramHandle: Par
     let param = mdReader.GetParameter(paramHandle)
 
     let nameOpt = mdReader.TryGetString(param.Name)
-    let typ = si.ParameterTypes.[param.SequenceNumber]
+    let typ = 
+        if param.SequenceNumber = 0 then si.ReturnType
+        else si.ParameterTypes.[param.SequenceNumber - 1]
 
     {
         Name = match nameOpt with | ValueNone -> None | ValueSome(name) -> Some(name)
@@ -637,35 +697,85 @@ let readILParameter (cenv: cenv) (si: MethodSignature<ILType>) (paramHandle: Par
         MetadataIndex = NoMetadataIdx
     }
 
-let readILMethodDef (cenv: cenv) (methDefHandle: MethodDefinitionHandle) =
+let readILParameters (cenv: cenv) si (paramHandles: ParameterHandleCollection) =
+    paramHandles
+    |> Seq.map (readILParameter cenv si)
+    |> List.ofSeq
+
+let readILCode (cenv: cenv) : ILCode =
+    {
+        Labels = System.Collections.Generic.Dictionary() // TODO
+        Instrs = [||] // TODO
+        Exceptions = [] // TODO
+        Locals = [] // TODO
+    }
+
+let readILMethodBody (cenv: cenv) (methImpl: MethodImplementation) (methDef: MethodDefinition) : ILMethodBody =
+    let mdReader = cenv.MetadataReader
+
+    let implAttrs = methDef.ImplAttributes
+
+    {
+        IsZeroInit = false // TODO
+        MaxStack = 1 // TODO:
+        NoInlining = int (implAttrs &&& MethodImplAttributes.NoInlining) <> 0
+        AggressiveInlining = int (implAttrs &&& MethodImplAttributes.AggressiveInlining) <> 0
+        Locals = ILLocals.Empty // TODO:
+        Code = readILCode cenv // TODO:
+        SourceMarker = None // TODO:
+    }
+
+let readMethodBody (cenv: cenv) (methImplOpt: MethodImplementation option) (methDef: MethodDefinition) =
+    let mdReader = cenv.MetadataReader
+    let attrs = methDef.Attributes
+    let implAttrs = methDef.ImplAttributes
+
+    if int (attrs &&& MethodAttributes.PinvokeImpl) <> 0 then
+        let import = methDef.GetImport()
+        let importAttrs = import.Attributes
+        let pInvokeMethod : PInvokeMethod =
+            {
+                Where = readILModuleRefFromModuleReference cenv (mdReader.GetModuleReference(import.Module))
+                Name = mdReader.GetString(import.Name)
+                CallingConv = mkPInvokeCallingConvention importAttrs
+                CharEncoding = mkPInvokeCharEncoding importAttrs
+                NoMangle = int (importAttrs &&& MethodImportAttributes.ExactSpelling) <> 0
+                LastError = int (importAttrs &&& MethodImportAttributes.SetLastError) <> 0
+                ThrowOnUnmappableChar = mkPInvokeThrowOnUnmappableChar importAttrs
+                CharBestFit = mkPInvokeCharBestFit importAttrs
+            }
+        MethodBody.PInvoke(pInvokeMethod)
+    elif int (implAttrs &&& MethodImplAttributes.Native) <> 0 then
+        MethodBody.Native
+    elif int (attrs &&& MethodAttributes.Abstract) <> 0 || int (implAttrs &&& MethodImplAttributes.InternalCall) <> 0 || int (implAttrs &&& MethodImplAttributes.Unmanaged) <> 0 then
+        MethodBody.Abstract
+    elif int (implAttrs &&& MethodImplAttributes.IL) <> 0 then
+        if methImplOpt.IsNone then failwith "No method implementation for MethodBody.IL"
+        MethodBody.IL(readILMethodBody cenv methImplOpt.Value methDef)
+    else
+        MethodBody.NotAvailable
+
+let readILMethodDef (cenv: cenv) (methImplLookup: ImmutableDictionary<MethodDefinitionHandle, MethodImplementation>) (methDefHandle: MethodDefinitionHandle) =
     let mdReader = cenv.MetadataReader
 
     let methDef = mdReader.GetMethodDefinition(methDefHandle)
-
-    let name = mdReader.GetString(methDef.Name) 
-    let attributes = methDef.Attributes
-    let implAttributes = methDef.ImplAttributes
-
     let si = methDef.DecodeSignature(cenv.SignatureTypeProvider, ())
 
-    let callingConv = readILCallingConv si.Header
-    let parameters = 
-        methDef.GetParameters()
-        |> Seq.map (fun h ->
-            readILParameter cenv si h
-        )
-        |> List.ofSeq
+    let methImplOpt =
+        match methImplLookup.TryGetValue(methDefHandle) with
+        | true, methImpl -> Some(methImpl)
+        | _ -> None
 
     ILMethodDef(
-        name = name,
-        attributes = attributes,
-        implAttributes = implAttributes,
-        callingConv = callingConv,
-        parameters = parameters,
-        ret = mkILReturn si.ReturnType,
-        body = null, // TODO
-        isEntryPoint = false, // TODO
-        genericParams = null, // TODO
+        name = mdReader.GetString(methDef.Name),
+        attributes = methDef.Attributes,
+        implAttributes = methDef.ImplAttributes,
+        callingConv = readILCallingConv si.Header,
+        parameters = readILParameters cenv si (methDef.GetParameters()), // TODO: First param might actually be the return type.
+        ret = mkILReturn si.ReturnType, // TODO: Do we need more info for ILReturn?
+        body = mkMethBodyLazyAux (lazy readMethodBody cenv methImplOpt methDef),
+        isEntryPoint = false, // TODO: need to pass entrypoint token
+        genericParams = readILGenericParameterDefs cenv (methDef.GetGenericParameters()),
         securityDeclsStored = readILSecurityDeclsStored cenv (methDef.GetDeclarativeSecurityAttributes()),
         customAttrsStored = readILAttributesStored cenv (methDef.GetCustomAttributes()),
         metadataIndex = NoMetadataIdx
@@ -691,12 +801,7 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
         )
         |> List.ofSeq
 
-    let genericParams =
-        typeDef.GetGenericParameters()
-        |> Seq.map (fun h ->
-            readILGenericParameterDef cenv h
-        )
-        |> List.ofSeq
+    let genericParams = readILGenericParameterDefs cenv (typeDef.GetGenericParameters())
 
     let extends =
         if typeDef.BaseType.IsNil then None
@@ -704,9 +809,20 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
 
     let methods =
         mkILMethodsComputed (fun () ->
+            let lookup = ImmutableDictionary.CreateBuilder()
+            typeDef.GetMethodImplementations()
+            |> Seq.iter (fun h -> 
+                let impl = mdReader.GetMethodImplementation(h)
+                match impl.MethodDeclaration.Kind with
+                | HandleKind.MethodDefinition ->
+                    let decl = MethodDefinitionHandle.op_Explicit(impl.MethodDeclaration)
+                    lookup.[decl] <- impl
+                | _ -> ()
+            )
+
             typeDef.GetMethods()
             |> Seq.map (fun h ->
-                readILMethodDef cenv h
+                readILMethodDef cenv (lookup.ToImmutable()) h
             )
             |> Array.ofSeq
         )
@@ -728,10 +844,10 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
         extends = extends,
         methods = methods,
         nestedTypes = nestedTypes,
-        fields = [], // TODO
-        methodImpls = [], // TODO
-        events = [], // TODO
-        properties = [], // TODO
+        fields = mkILFields [], // TODO
+        methodImpls = mkILMethodImpls [], // TODO
+        events = mkILEvents [], // TODO
+        properties = mkILProperties [], // TODO
         securityDeclsStored = readILSecurityDeclsStored cenv (typeDef.GetDeclarativeSecurityAttributes()),
         customAttrsStored = readILAttributesStored cenv (typeDef.GetCustomAttributes()),
         metadataIndex = MetadataTokens.GetRowNumber(TypeDefinitionHandle.op_Implicit(typeDefHandle))
@@ -821,7 +937,7 @@ let readModuleDef ilGlobals (peReader: PEReader) peReaderKind =
       MetadataIndex = 1 // TODO: Is this right?
       Name = ilModuleName
       NativeResources = nativeResources
-      TypeDefs = emptyILTypeDefs // TODO //mkILTypeDefsComputed (fun () -> seekReadTopTypeDefs ctxt)
+      TypeDefs = mkILTypeDefsComputed (fun () -> readILPreTypeDefs cenv)
       SubSystemFlags = int32 subsys
       IsILOnly = ilOnly
       SubsystemVersion = subsysversion
