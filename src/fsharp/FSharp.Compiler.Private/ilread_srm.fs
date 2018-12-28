@@ -24,24 +24,28 @@ type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType
     let typeDefCache = Dictionary()
     let typeRefCache = Dictionary()
     let typeSpecCache = Dictionary()
+    let asmRefCache = Dictionary()
 
-    let isCacheEnabled = false
+    let isILTypeCacheEnabled = false
 
     member __.MetadataReader = mdReader
 
     member __.SignatureTypeProvider = sigTyProvider
 
     member __.CacheILType(typeDefHandle: TypeDefinitionHandle, ilType: ILType) =
-        if isCacheEnabled then
+        if isILTypeCacheEnabled then
             typeDefCache.Add(typeDefHandle, ilType)
 
     member __.CacheILType(typeRefHandle: TypeReferenceHandle, ilType: ILType) =
-        if isCacheEnabled then
+        if isILTypeCacheEnabled then
             typeRefCache.Add(typeRefHandle, ilType)
 
     member __.CacheILType(typeSpecHandle: TypeSpecificationHandle, ilType: ILType) =
-        if isCacheEnabled then
+        if isILTypeCacheEnabled then
             typeSpecCache.Add(typeSpecHandle, ilType)
+
+    member __.CacheILAssemblyRef(asmRefHandle: AssemblyReferenceHandle, ilAsmRef: ILAssemblyRef) =
+        asmRefCache.Add(asmRefHandle, ilAsmRef)
         
     member __.TryGetCachedILType(typeDefHandle) =
         match typeDefCache.TryGetValue(typeDefHandle) with
@@ -56,6 +60,11 @@ type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType
     member __.TryGetCachedILType(typeSpecHandle) =
         match typeSpecCache.TryGetValue(typeSpecHandle) with
         | true, ilType -> ValueSome(ilType)
+        | _ -> ValueNone
+
+    member __.TryGetCachedILAssemblyRef(asmRefHandle: AssemblyReferenceHandle) =
+        match asmRefCache.TryGetValue(asmRefHandle) with
+        | true, ilAsmRef -> ValueSome(ilAsmRef)
         | _ -> ValueNone
 
 let mkVersionTuple (v: Version) =
@@ -285,8 +294,7 @@ let rec readILScopeRef (cenv: cenv) (handle: EntityHandle) =
         ILScopeRef.Module(readILModuleRefFromAssemblyFile cenv asmFile)
 
     | HandleKind.AssemblyReference ->
-        let asmRef = mdReader.GetAssemblyReference(AssemblyReferenceHandle.op_Explicit(handle))
-        ILScopeRef.Assembly(readILAssemblyRefFromAssemblyReference cenv asmRef)
+        ILScopeRef.Assembly(readILAssemblyRefFromAssemblyReference cenv (AssemblyReferenceHandle.op_Explicit(handle)))
 
     | HandleKind.ModuleReference ->
         let modRef = mdReader.GetModuleReference(ModuleReferenceHandle.op_Explicit(handle))
@@ -306,9 +314,10 @@ let rec readILScopeRef (cenv: cenv) (handle: EntityHandle) =
     | _ ->
         failwithf "Invalid Handle Kind: %A" handle.Kind
 
-let readILAssemblyRefFromAssemblyReference (cenv: cenv) (asmRef: AssemblyReference) =
+let readILAssemblyRefFromAssemblyReferenceUncached (cenv: cenv) (asmRefHandle: AssemblyReferenceHandle) =
     let mdReader = cenv.MetadataReader
 
+    let asmRef = mdReader.GetAssemblyReference(asmRefHandle)
     let name = mdReader.GetString(asmRef.Name)
     let flags = asmRef.Flags
 
@@ -338,6 +347,14 @@ let readILAssemblyRefFromAssemblyReference (cenv: cenv) (asmRef: AssemblyReferen
         else Some(locale)
 
     ILAssemblyRef.Create(name, hash, publicKey, retargetable, version, locale)
+
+let readILAssemblyRefFromAssemblyReference (cenv: cenv) (asmRefHandle: AssemblyReferenceHandle) =
+    match cenv.TryGetCachedILAssemblyRef(asmRefHandle) with
+    | ValueSome(ilAsmRef) -> ilAsmRef
+    | _ ->
+        let ilAsmRef = readILAssemblyRefFromAssemblyReferenceUncached cenv asmRefHandle
+        cenv.CacheILAssemblyRef(asmRefHandle, ilAsmRef)
+        ilAsmRef
 
 let readILModuleRefFromAssemblyFile (cenv: cenv) (asmFile: AssemblyFile) =
     let mdReader = cenv.MetadataReader
