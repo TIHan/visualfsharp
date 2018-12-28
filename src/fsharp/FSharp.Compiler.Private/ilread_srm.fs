@@ -511,25 +511,33 @@ let readILSecurityDecl (cenv: cenv) (declSecurityAttributeHandle: DeclarativeSec
     ILSecurityDecl(mkILSecurityAction declSecurityAttribute.Action, bytes)
 
 let readILSecurityDeclsStored (cenv: cenv) (declSecurityAttributeHandles: DeclarativeSecurityAttributeHandleCollection) =
-    [
-        for declSecurityAttributeHandle in declSecurityAttributeHandles do
-            yield readILSecurityDecl cenv declSecurityAttributeHandle
-    ]
-    |> mkILSecurityDecls
-    |> storeILSecurityDecls
+    mkILSecurityDeclsReader (fun _ ->
+        [|
+            for declSecurityAttributeHandle in declSecurityAttributeHandles do
+                yield readILSecurityDecl cenv declSecurityAttributeHandle
+        |]
+    )
 
 let readILAttribute (cenv: cenv) (customAttrHandle: CustomAttributeHandle) =
-    let customAttr = cenv.MetadataReader.GetCustomAttribute(customAttrHandle)
+    let mdReader = cenv.MetadataReader
+    let customAttr = mdReader.GetCustomAttribute(customAttrHandle)
 
-    ILAttribute.Encoded(readILMethodSpec cenv customAttr.Constructor, [||], [])
+    let bytes = 
+        if customAttr.Value.IsNil then [||]
+        else mdReader.GetBlobBytes(customAttr.Value)
+
+    let elements = [] // Why are we not putting elements in here?
+    ILAttribute.Encoded(readILMethodSpec cenv customAttr.Constructor, bytes, elements)
 
 let readILAttributesStored (cenv: cenv) (customAttrs: CustomAttributeHandleCollection) =
-    [
+    mkILCustomAttrsReader (fun _ ->
+        let customAttrsArray = Array.zeroCreate customAttrs.Count
+        let mutable i = 0
         for customAttrHandle in customAttrs do
-            yield readILAttribute cenv customAttrHandle
-    ]
-    |> mkILCustomAttrs
-    |> storeILCustomAttrs
+            customAttrsArray.[i] <- readILAttribute cenv customAttrHandle
+            i <- i + 1
+        customAttrsArray
+    )
 
 let rec readILNestedExportedTypes (cenv: cenv) (handle: EntityHandle) =
     let mdReader = cenv.MetadataReader
@@ -538,22 +546,23 @@ let rec readILNestedExportedTypes (cenv: cenv) (handle: EntityHandle) =
         let typeDefHandle = TypeDefinitionHandle.op_Explicit(handle)
         let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
 
-        let nested =
-            typeDef.GetNestedTypes()
-            |> Seq.map (fun typeDefHandle ->
-                let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
+        let nestedLazy =
+            lazy
+                typeDef.GetNestedTypes()
+                |> Seq.map (fun typeDefHandle ->
+                    let typeDef = mdReader.GetTypeDefinition(typeDefHandle)
                 
-                {
-                    Name = mdReader.GetString(typeDef.Name)
-                    Access = mkILMemberAccess typeDef.Attributes
-                    Nested = readILNestedExportedTypes cenv (TypeDefinitionHandle.op_Implicit(typeDefHandle))
-                    CustomAttrsStored = readILAttributesStored cenv (typeDef.GetCustomAttributes())
-                    MetadataIndex = MetadataTokens.GetRowNumber(TypeDefinitionHandle.op_Implicit(typeDefHandle))
-                }
-            )
-            |> List.ofSeq
+                    {
+                        Name = mdReader.GetString(typeDef.Name)
+                        Access = mkILMemberAccess typeDef.Attributes
+                        Nested = readILNestedExportedTypes cenv (TypeDefinitionHandle.op_Implicit(typeDefHandle))
+                        CustomAttrsStored = readILAttributesStored cenv (typeDef.GetCustomAttributes())
+                        MetadataIndex = MetadataTokens.GetRowNumber(TypeDefinitionHandle.op_Implicit(typeDefHandle))
+                    }
+                )
+                |> List.ofSeq
 
-        mkILNestedExportedTypes nested
+        mkILNestedExportedTypesLazy nestedLazy
 
     | _ ->
         mkILNestedExportedTypes []
@@ -572,11 +581,13 @@ let readILExportedType (cenv: cenv) (exportedTyHandle: ExportedTypeHandle) =
     }
 
 let readILExportedTypes (cenv: cenv) (exportedTys: ExportedTypeHandleCollection) =
-    [
-        for exportedTyHandle in exportedTys do
-            yield readILExportedType cenv exportedTyHandle
-    ]
-    |> mkILExportedTypes
+    let f =
+        lazy
+            [
+                for exportedTyHandle in exportedTys do
+                    yield readILExportedType cenv exportedTyHandle
+            ]
+    mkILExportedTypesLazy f
 
 let readILAssemblyManifest (cenv: cenv) (entryPointToken: int) =
     let mdReader = cenv.MetadataReader
@@ -828,12 +839,13 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
         )
 
     let nestedTypes =
-        typeDef.GetNestedTypes()
-        |> Seq.map (fun h -> 
-            readILTypeDef cenv h
+        mkILTypeDefsComputed (fun () ->
+            typeDef.GetNestedTypes()
+            |> Seq.map (fun h -> 
+                readILPreTypeDef cenv h
+            )
+            |> Array.ofSeq
         )
-        |> List.ofSeq
-        |> mkILTypeDefs
 
     ILTypeDef(
         name = name,
