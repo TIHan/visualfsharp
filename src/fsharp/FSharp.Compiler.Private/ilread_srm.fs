@@ -838,7 +838,6 @@ let tryReadILNativeType (cenv: cenv) (marshalDesc: BlobHandle) =
         let mutable (* it doesn't have to be mutable, but it's best practice for .NET structs *) reader = mdReader.GetBlobReader(marshalDesc)
         Some(readILNativeType cenv &reader)
 
-
 let readILParameter (cenv: cenv) (paramTypes: ImmutableArray<ILType>) (returnType: ILType) (paramHandle: ParameterHandle) : ILParameter =
     let mdReader = cenv.MetadataReader
 
@@ -856,7 +855,7 @@ let readILParameter (cenv: cenv) (paramTypes: ImmutableArray<ILType>) (returnTyp
             None
 
     let marshal =
-        if int (param.Attributes &&& ParameterAttributes.HasFieldMarshal) <> 0 then
+        if int (param.Attributes &&& ParameterAttributes.HasFieldMarshal) <> 0 then 
             tryReadILNativeType cenv (param.GetMarshallingDescriptor())
         else
             None
@@ -957,6 +956,58 @@ let readILMethodDef (cenv: cenv) (methImplLookup: ImmutableDictionary<MethodDefi
         metadataIndex = NoMetadataIdx
     )
 
+let readILFieldDef (cenv: cenv) (fieldDefHandle: FieldDefinitionHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let fieldDef = mdReader.GetFieldDefinition(fieldDefHandle)
+
+    ILFieldDef(
+        name = mdReader.GetString(fieldDef.Name),
+        fieldType = fieldDef.DecodeSignature(cenv.SignatureTypeProvider, ()),
+        attributes = fieldDef.Attributes,
+        data = None, // TODO:
+        literalValue = None, // TODO:
+        offset = None, // TODO:
+        marshal = None, // TODO:
+        customAttrsStored = readILAttributesStored cenv (fieldDef.GetCustomAttributes()),
+        metadataIndex = NoMetadataIdx
+    )
+
+let readILFieldDefs (cenv: cenv) (fieldDefHandles: FieldDefinitionHandleCollection) =
+    let f =
+        lazy
+            fieldDefHandles
+            |> Seq.map (readILFieldDef cenv)
+            |> List.ofSeq
+    mkILFieldsLazy f
+
+let readILPropertyDef (cenv: cenv) (propDefHandle: PropertyDefinitionHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let propDef = mdReader.GetPropertyDefinition(propDefHandle)
+    let si = propDef.DecodeSignature(cenv.SignatureTypeProvider, ())
+
+    ILPropertyDef(
+        name = mdReader.GetString(propDef.Name),
+        attributes = propDef.Attributes,
+        setMethod = None, // TODO: option
+        getMethod = None, // TODO: option
+        callingConv = ILThisConvention.Instance, // TODO: option
+        propertyType = si.ReturnType,
+        init = None, // TODO:
+        args = [], // TODO:
+        customAttrsStored = readILAttributesStored cenv (propDef.GetCustomAttributes()),
+        metadataIndex = NoMetadataIdx
+    )
+
+let readILPropertyDefs (cenv: cenv) (propDefHandles: PropertyDefinitionHandleCollection) =
+    let f =
+        lazy
+            propDefHandles
+            |> Seq.map (readILPropertyDef cenv)
+            |> List.ofSeq
+    mkILPropertiesLazy f
+
 let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
     let mdReader = cenv.MetadataReader
 
@@ -1026,10 +1077,10 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
         extends = extends,
         methods = methods,
         nestedTypes = nestedTypes,
-        fields = mkILFields [], // TODO
+        fields = readILFieldDefs cenv (typeDef.GetFields()),
         methodImpls = mkILMethodImpls [], // TODO
         events = mkILEvents [], // TODO
-        properties = mkILProperties [], // TODO
+        properties = readILPropertyDefs cenv (typeDef.GetProperties()),
         securityDeclsStored = readILSecurityDeclsStored cenv (typeDef.GetDeclarativeSecurityAttributes()),
         customAttrsStored = readILAttributesStored cenv (typeDef.GetCustomAttributes()),
         metadataIndex = MetadataTokens.GetRowNumber(TypeDefinitionHandle.op_Implicit(typeDefHandle))
