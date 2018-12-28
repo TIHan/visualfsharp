@@ -763,10 +763,9 @@ let readILParameter (cenv: cenv) (paramTypes: ImmutableArray<ILType>) (returnTyp
     }
 
 let readILParameters (cenv: cenv) paramTypes returnType (paramHandles: ParameterHandleCollection) =
-    [
-        for paramHandle in paramHandles do
-            yield readILParameter cenv paramTypes returnType paramHandle
-    ]
+    paramHandles
+    |> Seq.map (readILParameter cenv paramTypes returnType)
+    |> List.ofSeq
 
 let readILCode (cenv: cenv) : ILCode =
     {
