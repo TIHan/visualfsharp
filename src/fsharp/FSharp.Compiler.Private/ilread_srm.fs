@@ -3,11 +3,12 @@
 open System
 open System.IO
 open System.Linq
+open System.Collections.Generic
+open System.Collections.Immutable
 open System.Reflection
 open System.Reflection.PortableExecutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
-open System.Collections.Immutable
 open Microsoft.FSharp.Compiler.AbstractIL.IL  
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
 
@@ -414,7 +415,13 @@ let readILCallingConv (sigHeader: SignatureHeader) =
         | SignatureCallingConvention.VarArgs -> ILArgConvention.VarArg
         | _ -> failwithf "Invalid Signature Calling Convention: %A" sigHeader.CallingConvention
 
-    ILCallingConv.Callconv(ilThisConvention, ilArgConvention)
+    // Optimize allocations.
+    if ilThisConvention = ILThisConvention.Instance && ilArgConvention = ILArgConvention.Default then
+        ILCallingConv.Instance
+    elif ilThisConvention = ILThisConvention.Static && ilArgConvention = ILArgConvention.Default then
+        ILCallingConv.Static
+    else
+        ILCallingConv.Callconv(ilThisConvention, ilArgConvention)
 
 let readILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHandle) : ILGenericParameterDef =
     let mdReader = cenv.MetadataReader
