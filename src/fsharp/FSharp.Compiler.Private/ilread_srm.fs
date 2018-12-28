@@ -15,10 +15,7 @@ type MetadataReader with
 
     member this.TryGetString(handle: StringHandle) =
         if handle.IsNil then ValueNone
-        else
-            let str = this.GetString(handle)
-            if str = null then ValueNone
-            else ValueSome(str)
+        else ValueSome(this.GetString(handle))
 
 [<Sealed>]
 type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType, unit>) =
@@ -512,10 +509,12 @@ let readILSecurityDecl (cenv: cenv) (declSecurityAttributeHandle: DeclarativeSec
 
 let readILSecurityDeclsStored (cenv: cenv) (declSecurityAttributeHandles: DeclarativeSecurityAttributeHandleCollection) =
     mkILSecurityDeclsReader (fun _ ->
-        [|
-            for declSecurityAttributeHandle in declSecurityAttributeHandles do
-                yield readILSecurityDecl cenv declSecurityAttributeHandle
-        |]
+        let securityDeclsArray = Array.zeroCreate declSecurityAttributeHandles.Count
+        let mutable i = 0
+        for declSecurityAttributeHandle in declSecurityAttributeHandles do
+            securityDeclsArray.[i] <- readILSecurityDecl cenv declSecurityAttributeHandle
+            i <- i + 1
+        securityDeclsArray
     )
 
 let readILAttribute (cenv: cenv) (customAttrHandle: CustomAttributeHandle) =
@@ -686,15 +685,15 @@ let tryReadILFieldInit (cenv: cenv) (constantHandle: ConstantHandle) =
     | ConstantTypeCode.NullReference -> ILFieldInit.Null |> Some
     | _ -> None
 
-let readILParameter (cenv: cenv) (si: MethodSignature<ILType>) (paramHandle: ParameterHandle) : ILParameter =
+let readILParameter (cenv: cenv) (paramTypes: ImmutableArray<ILType>) (returnType: ILType) (paramHandle: ParameterHandle) : ILParameter =
     let mdReader = cenv.MetadataReader
 
     let param = mdReader.GetParameter(paramHandle)
 
     let nameOpt = mdReader.TryGetString(param.Name)
     let typ = 
-        if param.SequenceNumber = 0 then si.ReturnType
-        else si.ParameterTypes.[param.SequenceNumber - 1]
+        if param.SequenceNumber = 0 then returnType
+        else paramTypes.[param.SequenceNumber - 1]
 
     {
         Name = match nameOpt with | ValueNone -> None | ValueSome(name) -> Some(name)
@@ -708,10 +707,11 @@ let readILParameter (cenv: cenv) (si: MethodSignature<ILType>) (paramHandle: Par
         MetadataIndex = NoMetadataIdx
     }
 
-let readILParameters (cenv: cenv) si (paramHandles: ParameterHandleCollection) =
-    paramHandles
-    |> Seq.map (readILParameter cenv si)
-    |> List.ofSeq
+let readILParameters (cenv: cenv) paramTypes returnType (paramHandles: ParameterHandleCollection) =
+    [
+        for paramHandle in paramHandles do
+            yield readILParameter cenv paramTypes returnType paramHandle
+    ]
 
 let readILCode (cenv: cenv) : ILCode =
     {
@@ -782,7 +782,7 @@ let readILMethodDef (cenv: cenv) (methImplLookup: ImmutableDictionary<MethodDefi
         attributes = methDef.Attributes,
         implAttributes = methDef.ImplAttributes,
         callingConv = readILCallingConv si.Header,
-        parameters = readILParameters cenv si (methDef.GetParameters()), // TODO: First param might actually be the return type.
+        parameters = readILParameters cenv si.ParameterTypes si.ReturnType (methDef.GetParameters()), // TODO: First param might actually be the return type.
         ret = mkILReturn si.ReturnType, // TODO: Do we need more info for ILReturn?
         body = mkMethBodyLazyAux (lazy readMethodBody cenv methImplOpt methDef),
         isEntryPoint = false, // TODO: need to pass entrypoint token
@@ -830,12 +830,17 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
                     lookup.[decl] <- impl
                 | _ -> ()
             )
+            let lookup = lookup.ToImmutable()
 
-            typeDef.GetMethods()
-            |> Seq.map (fun h ->
-                readILMethodDef cenv (lookup.ToImmutable()) h
-            )
-            |> Array.ofSeq
+            let methDefHandles = typeDef.GetMethods()
+            let ilMethodDefs = Array.zeroCreate methDefHandles.Count
+
+            let mutable i = 0
+            for methDefHandle in methDefHandles do
+                ilMethodDefs.[i] <- readILMethodDef cenv lookup methDefHandle
+                i <- i + 1
+
+            ilMethodDefs
         )
 
     let nestedTypes =
