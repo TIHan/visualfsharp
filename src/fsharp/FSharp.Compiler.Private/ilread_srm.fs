@@ -25,18 +25,23 @@ type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType
     let typeRefCache = Dictionary()
     let typeSpecCache = Dictionary()
 
+    let isCacheEnabled = false
+
     member __.MetadataReader = mdReader
 
     member __.SignatureTypeProvider = sigTyProvider
 
     member __.CacheILType(typeDefHandle: TypeDefinitionHandle, ilType: ILType) =
-        typeDefCache.Add(typeDefHandle, ilType)
+        if isCacheEnabled then
+            typeDefCache.Add(typeDefHandle, ilType)
 
     member __.CacheILType(typeRefHandle: TypeReferenceHandle, ilType: ILType) =
-        typeRefCache.Add(typeRefHandle, ilType)
+        if isCacheEnabled then
+            typeRefCache.Add(typeRefHandle, ilType)
 
     member __.CacheILType(typeSpecHandle: TypeSpecificationHandle, ilType: ILType) =
-        typeSpecCache.Add(typeSpecHandle, ilType)
+        if isCacheEnabled then
+            typeSpecCache.Add(typeSpecHandle, ilType)
         
     member __.TryGetCachedILType(typeDefHandle) =
         match typeDefCache.TryGetValue(typeDefHandle) with
