@@ -11,6 +11,7 @@ open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open Microsoft.FSharp.Compiler.AbstractIL.IL  
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
+open Microsoft.FSharp.Compiler.AbstractIL.Internal.BinaryConstants
 
 type MetadataReader with
 
@@ -738,29 +739,105 @@ let readILNativeResources (peReader: PEReader) peReaderKind =
     |> Seq.toList
 
 let tryReadILFieldInit (cenv: cenv) (constantHandle: ConstantHandle) =
-    let mdReader = cenv.MetadataReader
-
     if constantHandle.IsNil then None
     else
+        let mdReader = cenv.MetadataReader
 
-    let constant = mdReader.GetConstant(constantHandle)
-    let blobReader = mdReader.GetBlobReader(constant.Value)
-    match constant.TypeCode with
-    | ConstantTypeCode.Boolean -> ILFieldInit.Bool(blobReader.ReadBoolean()) |> Some
-    | ConstantTypeCode.Byte -> ILFieldInit.UInt8(blobReader.ReadByte()) |> Some
-    | ConstantTypeCode.Char -> ILFieldInit.Char(blobReader.ReadChar() |> uint16) |> Some // Why does ILFieldInit.Char not just take a char?
-    | ConstantTypeCode.Double -> ILFieldInit.Double(blobReader.ReadDouble()) |> Some
-    | ConstantTypeCode.Int16 -> ILFieldInit.Int16(blobReader.ReadInt16()) |> Some
-    | ConstantTypeCode.Int32 -> ILFieldInit.Int32(blobReader.ReadInt32()) |> Some
-    | ConstantTypeCode.Int64 -> ILFieldInit.Int64(blobReader.ReadInt64()) |> Some
-    | ConstantTypeCode.SByte -> ILFieldInit.Int8(blobReader.ReadSByte()) |> Some
-    | ConstantTypeCode.Single -> ILFieldInit.Single(blobReader.ReadSingle()) |> Some
-    | ConstantTypeCode.String -> ILFieldInit.String(blobReader.ReadUTF16(blobReader.Length)) |> Some
-    | ConstantTypeCode.UInt16 -> ILFieldInit.UInt16(blobReader.ReadUInt16()) |> Some
-    | ConstantTypeCode.UInt32 -> ILFieldInit.UInt32(blobReader.ReadUInt32()) |> Some
-    | ConstantTypeCode.UInt64 -> ILFieldInit.UInt64(blobReader.ReadUInt64()) |> Some
-    | ConstantTypeCode.NullReference -> ILFieldInit.Null |> Some
-    | _ -> None
+        let constant = mdReader.GetConstant(constantHandle)
+        let blobReader = mdReader.GetBlobReader(constant.Value)
+        match constant.TypeCode with
+        | ConstantTypeCode.Boolean -> ILFieldInit.Bool(blobReader.ReadBoolean()) |> Some
+        | ConstantTypeCode.Byte -> ILFieldInit.UInt8(blobReader.ReadByte()) |> Some
+        | ConstantTypeCode.Char -> ILFieldInit.Char(blobReader.ReadChar() |> uint16) |> Some // Why does ILFieldInit.Char not just take a char?
+        | ConstantTypeCode.Double -> ILFieldInit.Double(blobReader.ReadDouble()) |> Some
+        | ConstantTypeCode.Int16 -> ILFieldInit.Int16(blobReader.ReadInt16()) |> Some
+        | ConstantTypeCode.Int32 -> ILFieldInit.Int32(blobReader.ReadInt32()) |> Some
+        | ConstantTypeCode.Int64 -> ILFieldInit.Int64(blobReader.ReadInt64()) |> Some
+        | ConstantTypeCode.SByte -> ILFieldInit.Int8(blobReader.ReadSByte()) |> Some
+        | ConstantTypeCode.Single -> ILFieldInit.Single(blobReader.ReadSingle()) |> Some
+        | ConstantTypeCode.String -> ILFieldInit.String(blobReader.ReadUTF16(blobReader.Length)) |> Some
+        | ConstantTypeCode.UInt16 -> ILFieldInit.UInt16(blobReader.ReadUInt16()) |> Some
+        | ConstantTypeCode.UInt32 -> ILFieldInit.UInt32(blobReader.ReadUInt32()) |> Some
+        | ConstantTypeCode.UInt64 -> ILFieldInit.UInt64(blobReader.ReadUInt64()) |> Some
+        | ConstantTypeCode.NullReference -> ILFieldInit.Null |> Some
+        | _ -> (* possible warning? *) None
+
+let ilNativeTypeLookup = (ILNativeTypeMap.Value |> Seq.map (fun x -> x)).ToDictionary((fun (key, _) -> key), fun (_, value) -> value) // This looks terrible. Cleanup later.
+let ilVariantTypeMap = (ILVariantTypeMap.Value |> Seq.map (fun x -> x)).ToDictionary((fun (_, key) -> key), fun (value, _) -> value) // This looks terrible. Cleanup later.
+
+let rec mkILVariantType (kind: int) =
+    match ilVariantTypeMap.TryGetValue(kind) with
+    | true, ilVariantType -> ilVariantType
+    | _ ->
+        match kind with
+        | _ when (kind &&& vt_ARRAY) <> 0 -> ILNativeVariant.Array(mkILVariantType (kind &&& (~~~vt_ARRAY)))
+        | _ when (kind &&& vt_VECTOR) <> 0 -> ILNativeVariant.Vector(mkILVariantType (kind &&& (~~~vt_VECTOR)))
+        | _ when (kind &&& vt_BYREF) <> 0 -> ILNativeVariant.Byref(mkILVariantType (kind &&& (~~~vt_BYREF)))
+        | _ -> (* possible warning? *) ILNativeVariant.Empty
+
+let rec readILNativeType (cenv: cenv) (reader: byref<BlobReader>) =
+    let kind = reader.ReadByte()
+    match ilNativeTypeLookup.TryGetValue(kind) with
+    | true, ilNativeType -> ilNativeType
+    | _ ->
+        match kind with
+        | 0x0uy -> ILNativeType.Empty
+        | _ when kind = nt_FIXEDSYSSTRING -> ILNativeType.FixedSysString(reader.ReadCompressedInteger())
+        | _ when kind = nt_FIXEDARRAY -> ILNativeType.FixedArray(reader.ReadCompressedInteger())
+
+        | _ when kind = nt_SAFEARRAY ->
+            if reader.RemainingBytes = 0 then
+                ILNativeType.SafeArray(ILNativeVariant.Empty, None)
+            else
+                let variantKind = reader.ReadCompressedInteger()
+                let ilVariantType = mkILVariantType variantKind
+                if reader.RemainingBytes = 0 then
+                    ILNativeType.SafeArray(ilVariantType, None)
+                else
+                    let s = reader.ReadUTF16(reader.Length)
+                    ILNativeType.SafeArray(ilVariantType, Some(s))
+
+        | _ when kind = nt_ARRAY ->
+            if reader.RemainingBytes = 0 then
+                ILNativeType.Array(None, None)
+            else
+                let nt = 
+                    let oldReader = reader
+                    let u = reader.ReadCompressedInteger() // What is 'u'?
+                    if u = int nt_MAX then // What is this doing?
+                        ILNativeType.Empty
+                    else
+                        // NOTE: go back to start and read native type
+                        reader <- oldReader
+                        readILNativeType cenv &reader
+              
+                if reader.RemainingBytes = 0 then
+                    ILNativeType.Array(Some(nt), None)
+                else
+                    let pnum = reader.ReadCompressedInteger()
+                    if reader.RemainingBytes = 0 then
+                        ILNativeType.Array(Some(nt), Some(pnum, None))
+                    else
+                        let additive = reader.ReadCompressedInteger()
+                        ILNativeType.Array(Some(nt), Some(pnum, Some(additive)))
+
+        | _ when kind = nt_CUSTOMMARSHALER ->
+            let guid = reader.ReadBytes(reader.ReadCompressedInteger())
+            let nativeTypeName = reader.ReadUTF16(reader.ReadCompressedInteger())
+            let custMarshallerName = reader.ReadUTF16(reader.ReadCompressedInteger())
+            let cookieString = reader.ReadBytes(reader.ReadCompressedInteger())
+            ILNativeType.Custom(guid, nativeTypeName, custMarshallerName, cookieString)
+
+        | _ -> ILNativeType.Empty
+
+let tryReadILNativeType (cenv: cenv) (marshalDesc: BlobHandle) =
+    if marshalDesc.IsNil then None
+    else
+        let mdReader = cenv.MetadataReader
+
+        let mutable (* it doesn't have to be mutable, but it's best practice for .NET structs *) reader = mdReader.GetBlobReader(marshalDesc)
+        Some(readILNativeType cenv &reader)
+
 
 let readILParameter (cenv: cenv) (paramTypes: ImmutableArray<ILType>) (returnType: ILType) (paramHandle: ParameterHandle) : ILParameter =
     let mdReader = cenv.MetadataReader
@@ -772,11 +849,23 @@ let readILParameter (cenv: cenv) (paramTypes: ImmutableArray<ILType>) (returnTyp
         if param.SequenceNumber = 0 then returnType
         else paramTypes.[param.SequenceNumber - 1]
 
+    let defaul =
+        if int (param.Attributes &&& ParameterAttributes.HasDefault) <> 0 then
+            tryReadILFieldInit cenv (param.GetDefaultValue())
+        else
+            None
+
+    let marshal =
+        if int (param.Attributes &&& ParameterAttributes.HasFieldMarshal) <> 0 then
+            tryReadILNativeType cenv (param.GetMarshallingDescriptor())
+        else
+            None
+
     {
         Name = match nameOpt with | ValueNone -> None | ValueSome(name) -> Some(name)
         Type = typ
-        Default = tryReadILFieldInit cenv (param.GetDefaultValue())
-        Marshal = None // TODO
+        Default = defaul
+        Marshal = marshal
         IsIn = int (param.Attributes &&& ParameterAttributes.In) <> 0
         IsOut = int (param.Attributes &&& ParameterAttributes.Out) <> 0
         IsOptional = int (param.Attributes &&& ParameterAttributes.Optional) <> 0
