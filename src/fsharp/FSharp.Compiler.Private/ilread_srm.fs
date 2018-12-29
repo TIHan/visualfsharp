@@ -15,18 +15,6 @@ open Microsoft.FSharp.Compiler.AbstractIL.Internal.BinaryConstants
 
 type MetadataOnlyFlag = Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.MetadataOnlyFlag
 
-//type PEReader with
-
-//    member this.GetRawSectionContent(relativeVirtualAddress) =
-//        let sectionIndex = this.PEHeaders.GetContainingSectionIndex(relativeVirtualAddress)
-//        if sectionIndex < 0 then
-//            [||]
-//        else
-//            let header = this.PEHeaders.SectionHeaders.[sectionIndex]
-//            if this.IsLoadedImage then
-//                let bytes = Array.zeroCreate header.VirtualSize
-//                header.
-
 type MetadataReader with
 
     member this.TryGetString(handle: StringHandle) =
@@ -172,6 +160,33 @@ let mkILSecurityAction (declSecurityAction: DeclarativeSecurityAction) =
         | 0x0012 -> ILSecurityAction.DemandChoice
         | x -> failwithf "Invalid DeclarativeSecurityAction: %i" x
 
+let mkILThisConvention (sigHeader: SignatureHeader) =
+    if sigHeader.IsInstance then
+        if sigHeader.HasExplicitThis then ILThisConvention.InstanceExplicit
+        else ILThisConvention.Instance
+    else ILThisConvention.Static
+    
+let mkILCallingConv (sigHeader: SignatureHeader) =
+    let ilThisConvention = mkILThisConvention sigHeader
+
+    let ilArgConvention =
+        match sigHeader.CallingConvention with
+        | SignatureCallingConvention.Default -> ILArgConvention.Default
+        | SignatureCallingConvention.CDecl -> ILArgConvention.CDecl
+        | SignatureCallingConvention.StdCall -> ILArgConvention.StdCall
+        | SignatureCallingConvention.ThisCall -> ILArgConvention.ThisCall
+        | SignatureCallingConvention.FastCall -> ILArgConvention.FastCall
+        | SignatureCallingConvention.VarArgs -> ILArgConvention.VarArg
+        | _ -> failwithf "Invalid Signature Calling Convention: %A" sigHeader.CallingConvention
+
+    // Optimize allocations.
+    if ilThisConvention = ILThisConvention.Instance && ilArgConvention = ILArgConvention.Default then
+        ILCallingConv.Instance
+    elif ilThisConvention = ILThisConvention.Static && ilArgConvention = ILArgConvention.Default then
+        ILCallingConv.Static
+    else
+        ILCallingConv.Callconv(ilThisConvention, ilArgConvention)
+
 let mkPInvokeCallingConvention (methImportAttributes: MethodImportAttributes) =
     match methImportAttributes &&& MethodImportAttributes.CallingConventionMask with
     | MethodImportAttributes.CallingConventionCDecl ->
@@ -226,7 +241,7 @@ type SignatureTypeProvider(ilg: ILGlobals) =
         member __.GetFunctionPointerType(si) =
             let callingSig =
                 {
-                    CallingConv = readILCallingConv si.Header
+                    CallingConv = mkILCallingConv si.Header
                     ArgTypes = si.ParameterTypes |> Seq.toList
                     ReturnType = si.ReturnType
                 }
@@ -488,31 +503,6 @@ let readILTypeFromTypeSpecification (cenv: cenv) (typeSpecHandle: TypeSpecificat
         cenv.CacheILType(typeSpecHandle, ilType)
         ilType
 
-let readILCallingConv (sigHeader: SignatureHeader) =
-    let ilThisConvention =
-        if sigHeader.IsInstance then
-            if sigHeader.HasExplicitThis then ILThisConvention.InstanceExplicit
-            else ILThisConvention.Instance
-        else ILThisConvention.Static
-
-    let ilArgConvention =
-        match sigHeader.CallingConvention with
-        | SignatureCallingConvention.Default -> ILArgConvention.Default
-        | SignatureCallingConvention.CDecl -> ILArgConvention.CDecl
-        | SignatureCallingConvention.StdCall -> ILArgConvention.StdCall
-        | SignatureCallingConvention.ThisCall -> ILArgConvention.ThisCall
-        | SignatureCallingConvention.FastCall -> ILArgConvention.FastCall
-        | SignatureCallingConvention.VarArgs -> ILArgConvention.VarArg
-        | _ -> failwithf "Invalid Signature Calling Convention: %A" sigHeader.CallingConvention
-
-    // Optimize allocations.
-    if ilThisConvention = ILThisConvention.Instance && ilArgConvention = ILArgConvention.Default then
-        ILCallingConv.Instance
-    elif ilThisConvention = ILThisConvention.Static && ilArgConvention = ILArgConvention.Default then
-        ILCallingConv.Static
-    else
-        ILCallingConv.Callconv(ilThisConvention, ilArgConvention)
-
 let readILGenericParameterDef (cenv: cenv) (genParamHandle: GenericParameterHandle) : ILGenericParameterDef =
     let mdReader = cenv.MetadataReader
 
@@ -560,7 +550,7 @@ let rec readILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
         
         let name = mdReader.GetString(memberRef.Name)
         let enclILTy = readILType cenv memberRef.Parent
-        let ilCallingConv = readILCallingConv si.Header
+        let ilCallingConv = mkILCallingConv si.Header
         let genericArity = 0
 
         let ilMethodRef = ILMethodRef.Create(enclILTy.TypeRef, ilCallingConv, name, genericArity, si.ParameterTypes |> List.ofSeq, si.ReturnType)
@@ -954,7 +944,7 @@ let readILMethodDef (cenv: cenv) (methImplLookup: ImmutableDictionary<MethodDefi
         name = mdReader.GetString(methDef.Name),
         attributes = methDef.Attributes,
         implAttributes = methDef.ImplAttributes,
-        callingConv = readILCallingConv si.Header,
+        callingConv = mkILCallingConv si.Header,
         parameters = readILParameters cenv si.ParameterTypes si.ReturnType (methDef.GetParameters()), // TODO: First param might actually be the return type.
         ret = mkILReturn si.ReturnType, // TODO: Do we need more info for ILReturn?
         body = mkMethBodyLazyAux (lazy readMethodBody cenv methImplOpt methDef),
@@ -965,35 +955,55 @@ let readILMethodDef (cenv: cenv) (methImplLookup: ImmutableDictionary<MethodDefi
         metadataIndex = NoMetadataIdx
     )
 
-let readILFieldDef (cenv: cenv) (fieldDefHandle: FieldDefinitionHandle) =
+let readILFieldDef (cenv: cenv) (ilTypeDefLayout: ILTypeDefLayout) (fieldDefHandle: FieldDefinitionHandle) =
     let mdReader = cenv.MetadataReader
 
     let fieldDef = mdReader.GetFieldDefinition(fieldDefHandle)
 
     let data = 
         if not cenv.IsMetadataOnly && int (fieldDef.Attributes &&& FieldAttributes.HasFieldRVA) <> 0 then
-            cenv.PEReader.GetSectionData(fieldDef.GetRelativeVirtualAddress()).GetContent().ToArray()
+            cenv.PEReader.GetSectionData(fieldDef.GetRelativeVirtualAddress()).GetContent().ToArray() // We should just return the immutable array instead of making a copy....
             |> Some
         else
-            None           
+            None
+
+    let literalValue =
+        if int (fieldDef.Attributes &&& FieldAttributes.HasDefault) <> 0 then
+            tryReadILFieldInit cenv (fieldDef.GetDefaultValue())
+        else
+            None
+
+    let offset =
+        let isStatic = int (fieldDef.Attributes &&& FieldAttributes.Static) <> 0
+        let hasLayout = (match ilTypeDefLayout with ILTypeDefLayout.Explicit _ -> true | _ -> false)
+        if hasLayout && not isStatic then
+            Some(fieldDef.GetOffset())
+        else
+            None
+            
+    let marshal =
+        if int (fieldDef.Attributes &&& FieldAttributes.HasFieldMarshal) <> 0 then 
+            tryReadILNativeType cenv (fieldDef.GetMarshallingDescriptor())
+        else
+            None
 
     ILFieldDef(
         name = mdReader.GetString(fieldDef.Name),
         fieldType = fieldDef.DecodeSignature(cenv.SignatureTypeProvider, ()),
         attributes = fieldDef.Attributes,
         data = data,
-        literalValue = None, // TODO:
-        offset = None, // TODO:
-        marshal = None, // TODO:
+        literalValue = literalValue,
+        offset = offset,
+        marshal = marshal,
         customAttrsStored = readILAttributesStored cenv (fieldDef.GetCustomAttributes()),
         metadataIndex = NoMetadataIdx
     )
 
-let readILFieldDefs (cenv: cenv) (fieldDefHandles: FieldDefinitionHandleCollection) =
+let readILFieldDefs (cenv: cenv) ilTypeDefLayout (fieldDefHandles: FieldDefinitionHandleCollection) =
     let f =
         lazy
             fieldDefHandles
-            |> Seq.map (readILFieldDef cenv)
+            |> Seq.map (readILFieldDef cenv ilTypeDefLayout)
             |> List.ofSeq
     mkILFieldsLazy f
 
@@ -1022,15 +1032,17 @@ let readILPropertyDef (cenv: cenv) (propDefHandle: PropertyDefinitionHandle) =
         else
             None
 
+    let args = si.ParameterTypes |> List.ofSeq
+
     ILPropertyDef(
         name = mdReader.GetString(propDef.Name),
         attributes = propDef.Attributes,
         setMethod = setMethod,
         getMethod = getMethod,
-        callingConv = ILThisConvention.Instance, // TODO: option
+        callingConv = mkILThisConvention si.Header,
         propertyType = si.ReturnType,
         init = init,
-        args = [], // TODO:
+        args = args,
         customAttrsStored = readILAttributesStored cenv (propDef.GetCustomAttributes()),
         metadataIndex = NoMetadataIdx
     )
@@ -1103,16 +1115,18 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
             |> Array.ofSeq
         )
 
+    let ilTypeDefLayout = mkILTypeDefLayout typeDef.Attributes (typeDef.GetLayout())
+
     ILTypeDef(
         name = name,
         attributes = typeDef.Attributes,
-        layout = mkILTypeDefLayout typeDef.Attributes (typeDef.GetLayout()),
+        layout = ilTypeDefLayout,
         implements = implements,
         genericParams = genericParams,
         extends = extends,
         methods = methods,
         nestedTypes = nestedTypes,
-        fields = readILFieldDefs cenv (typeDef.GetFields()),
+        fields = readILFieldDefs cenv ilTypeDefLayout (typeDef.GetFields()),
         methodImpls = mkILMethodImpls [], // TODO
         events = mkILEvents [], // TODO
         properties = readILPropertyDefs cenv (typeDef.GetProperties()),
