@@ -1012,11 +1012,40 @@ let readILParameters (cenv: cenv) paramTypes returnType (paramHandles: Parameter
     |> Seq.map (readILParameter cenv paramTypes returnType)
     |> List.ofSeq
 
-let readILCode (cenv: cenv) : ILCode =
+
+let readILCode (cenv: cenv) (methBodyBlock: MethodBodyBlock) : ILCode =
+    
+    let exceptions =
+        methBodyBlock.ExceptionRegions
+        |> Seq.map (fun region ->
+            let start = region.HandlerOffset
+            let finish = region.HandlerOffset + region.HandlerLength
+            let clause =
+                match region.Kind with
+                | ExceptionRegionKind.Finally ->
+                    ILExceptionClause.Finally(start, finish)
+                | ExceptionRegionKind.Fault ->
+                    ILExceptionClause.Fault(start, finish)
+                | ExceptionRegionKind.Filter ->
+                    let filterStart = region.FilterOffset
+                    let filterFinish = region.HandlerOffset
+                    ILExceptionClause.FilterCatch((filterStart, filterFinish), (start, finish))
+                | ExceptionRegionKind.Catch ->
+                    ILExceptionClause.TypeCatch(readILType cenv region.CatchType, (start, finish))
+                | _ ->
+                    failwith "Invalid Exception Region Kind: %A" region.Kind
+
+            {
+                ILExceptionSpec.Range = (region.TryOffset, region.TryOffset + region.TryLength)
+                ILExceptionSpec.Clause = clause
+            }
+        )
+        |> List.ofSeq
+
     {
         Labels = System.Collections.Generic.Dictionary() // TODO
         Instrs = [||] // TODO
-        Exceptions = [] // TODO
+        Exceptions = exceptions
         Locals = [] // TODO
     }
 
@@ -1039,7 +1068,7 @@ let readILMethodBody (cenv: cenv) (methDef: MethodDefinition) : ILMethodBody =
         NoInlining = int (methDef.ImplAttributes &&& MethodImplAttributes.NoInlining) <> 0
         AggressiveInlining = int (methDef.ImplAttributes &&& MethodImplAttributes.AggressiveInlining) <> 0
         Locals = ilLocals
-        Code = readILCode cenv // TODO:
+        Code = readILCode cenv methBodyBlock // TODO:
         SourceMarker = None // TODO: Do we need to read a source marker?
     }
 
