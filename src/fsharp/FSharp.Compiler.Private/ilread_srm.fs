@@ -905,7 +905,7 @@ let readILMethodBody (cenv: cenv) (methDef: MethodDefinition) : ILMethodBody =
             |> List.ofSeq
     
     {
-        IsZeroInit = not methBodyBlock.LocalVariablesInitialized
+        IsZeroInit = methBodyBlock.LocalVariablesInitialized
         MaxStack = methBodyBlock.MaxStack
         NoInlining = int (methDef.ImplAttributes &&& MethodImplAttributes.NoInlining) <> 0
         AggressiveInlining = int (methDef.ImplAttributes &&& MethodImplAttributes.AggressiveInlining) <> 0
