@@ -13,6 +13,20 @@ open Microsoft.FSharp.Compiler.AbstractIL.IL
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.BinaryConstants
 
+type MetadataOnlyFlag = Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.MetadataOnlyFlag
+
+//type PEReader with
+
+//    member this.GetRawSectionContent(relativeVirtualAddress) =
+//        let sectionIndex = this.PEHeaders.GetContainingSectionIndex(relativeVirtualAddress)
+//        if sectionIndex < 0 then
+//            [||]
+//        else
+//            let header = this.PEHeaders.SectionHeaders.[sectionIndex]
+//            if this.IsLoadedImage then
+//                let bytes = Array.zeroCreate header.VirtualSize
+//                header.
+
 type MetadataReader with
 
     member this.TryGetString(handle: StringHandle) =
@@ -20,7 +34,7 @@ type MetadataReader with
         else ValueSome(this.GetString(handle))
 
 [<Sealed>]
-type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType, unit>) =
+type cenv(peReader: PEReader, mdReader: MetadataReader, metadataOnlyFlag: MetadataOnlyFlag, sigTyProvider: ISignatureTypeProvider<ILType, unit>) =
 
     let typeDefCache = Dictionary()
     let typeRefCache = Dictionary()
@@ -28,6 +42,10 @@ type cenv(mdReader: MetadataReader, sigTyProvider: ISignatureTypeProvider<ILType
     let asmRefCache = Dictionary()
 
     let isILTypeCacheEnabled = false
+
+    member __.IsMetadataOnly = metadataOnlyFlag = MetadataOnlyFlag.Yes
+
+    member __.PEReader = peReader
 
     member __.MetadataReader = mdReader
 
@@ -715,24 +733,15 @@ let readILAssemblyManifest (cenv: cenv) (entryPointToken: int) =
         MetadataIndex = 1 // always one
     }
 
-type PEReaderKind =
-    | OnDisk of fileName: string
-    | InMemory
-
-let readILNativeResources (peReader: PEReader) peReaderKind =
+let readILNativeResources (peReader: PEReader) =
     peReader.PEHeaders.SectionHeaders
     |> Seq.choose (fun s ->
         // TODO: Is this right?
         if s.Name.Equals(".rsrc", StringComparison.OrdinalIgnoreCase) then
-            match peReaderKind with
-            | OnDisk(fileName) ->
-                ILNativeResource.In(fileName, s.VirtualAddress, s.PointerToRawData, s.VirtualSize)
-                |> Some
-            | InMemory ->
-                let memBlock = peReader.GetSectionData(s.VirtualAddress)
-                let bytes = memBlock.GetContent().ToArray() // We should never do this. ILNativeResource.Out should just take an immutable array...
-                ILNativeResource.Out(bytes)
-                |> Some
+            let memBlock = peReader.GetSectionData(s.VirtualAddress)
+            let bytes = memBlock.GetContent().ToArray() // We should never do this. ILNativeResource.Out should just take an immutable array...
+            ILNativeResource.Out(bytes)
+            |> Some
         else
             None
     )
@@ -924,7 +933,7 @@ let readMethodBody (cenv: cenv) (methImplOpt: MethodImplementation option) (meth
         MethodBody.Native
     elif int (attrs &&& MethodAttributes.Abstract) <> 0 || int (implAttrs &&& MethodImplAttributes.InternalCall) <> 0 || int (implAttrs &&& MethodImplAttributes.Unmanaged) <> 0 then
         MethodBody.Abstract
-    elif int (implAttrs &&& MethodImplAttributes.IL) <> 0 then
+    elif not cenv.IsMetadataOnly && int (implAttrs &&& MethodImplAttributes.IL) <> 0 then
         if methImplOpt.IsNone then failwith "No method implementation for MethodBody.IL"
         MethodBody.IL(readILMethodBody cenv methImplOpt.Value methDef)
     else
@@ -961,11 +970,18 @@ let readILFieldDef (cenv: cenv) (fieldDefHandle: FieldDefinitionHandle) =
 
     let fieldDef = mdReader.GetFieldDefinition(fieldDefHandle)
 
+    let data = 
+        if not cenv.IsMetadataOnly && int (fieldDef.Attributes &&& FieldAttributes.HasFieldRVA) <> 0 then
+            cenv.PEReader.GetSectionData(fieldDef.GetRelativeVirtualAddress()).GetContent().ToArray()
+            |> Some
+        else
+            None           
+
     ILFieldDef(
         name = mdReader.GetString(fieldDef.Name),
         fieldType = fieldDef.DecodeSignature(cenv.SignatureTypeProvider, ()),
         attributes = fieldDef.Attributes,
-        data = None, // TODO:
+        data = data,
         literalValue = None, // TODO:
         offset = None, // TODO:
         marshal = None, // TODO:
@@ -986,15 +1002,34 @@ let readILPropertyDef (cenv: cenv) (propDefHandle: PropertyDefinitionHandle) =
 
     let propDef = mdReader.GetPropertyDefinition(propDefHandle)
     let si = propDef.DecodeSignature(cenv.SignatureTypeProvider, ())
+    let accessors = propDef.GetAccessors()
+
+    let setMethod =
+        if accessors.Getter.IsNil then None
+        else
+            let spec = readILMethodSpec cenv (MethodDefinitionHandle.op_Implicit(accessors.Getter))
+            Some(spec.MethodRef)
+
+    let getMethod =
+        if accessors.Setter.IsNil then None
+        else
+            let spec = readILMethodSpec cenv (MethodDefinitionHandle.op_Implicit(accessors.Setter))
+            Some(spec.MethodRef)
+
+    let init =
+        if int (propDef.Attributes &&& PropertyAttributes.HasDefault) <> 0 then
+            tryReadILFieldInit cenv (propDef.GetDefaultValue())
+        else
+            None
 
     ILPropertyDef(
         name = mdReader.GetString(propDef.Name),
         attributes = propDef.Attributes,
-        setMethod = None, // TODO: option
-        getMethod = None, // TODO: option
+        setMethod = setMethod,
+        getMethod = getMethod,
         callingConv = ILThisConvention.Instance, // TODO: option
         propertyType = si.ReturnType,
-        init = None, // TODO:
+        init = init,
         args = [], // TODO:
         customAttrsStored = readILAttributesStored cenv (propDef.GetCustomAttributes()),
         metadataIndex = NoMetadataIdx
@@ -1112,8 +1147,8 @@ let readILPreTypeDefs (cenv: cenv) =
                 yield readILPreTypeDef cenv typeDefHandle
     |]
 
-let readModuleDef ilGlobals (peReader: PEReader) peReaderKind =
-    let nativeResources = readILNativeResources peReader peReaderKind
+let readModuleDef ilGlobals (peReader: PEReader) metadataOnlyFlag =
+    let nativeResources = readILNativeResources peReader
 
     let subsys =
         int16 peReader.PEHeaders.PEHeader.Subsystem
@@ -1161,7 +1196,7 @@ let readModuleDef ilGlobals (peReader: PEReader) peReaderKind =
     
     let cenv = 
         let sigTyProvider = SignatureTypeProvider(ilGlobals)
-        let cenv = cenv(mdReader, sigTyProvider)
+        let cenv = cenv(peReader, mdReader, MetadataOnlyFlag.No, sigTyProvider)
         sigTyProvider.cenv <- cenv
         cenv
 
@@ -1189,11 +1224,11 @@ let readModuleDef ilGlobals (peReader: PEReader) peReaderKind =
     }  
 
 let openILModuleReader fileName (ilReaderOptions: Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILReaderOptions) =
-    let peReader = new PEReader(new MemoryStream(File.ReadAllBytes(fileName)))
+    let peReader = new PEReader(File.ReadAllBytes(fileName).ToImmutableArray())
     { new Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILModuleReader with
 
         member __.ILModuleDef = 
-            readModuleDef ilReaderOptions.ilGlobals peReader (OnDisk fileName)
+            readModuleDef ilReaderOptions.ilGlobals peReader ilReaderOptions.metadataOnly
 
         member __.ILAssemblyRefs = []
 
