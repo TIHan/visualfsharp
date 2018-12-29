@@ -22,7 +22,12 @@ type MetadataReader with
         else ValueSome(this.GetString(handle))
 
 [<Sealed>]
-type cenv(peReader: PEReader, mdReader: MetadataReader, metadataOnlyFlag: MetadataOnlyFlag, sigTyProvider: ISignatureTypeProvider<ILType, unit>) =
+type cenv(
+            peReader: PEReader, 
+            mdReader: MetadataReader, 
+            metadataOnlyFlag: MetadataOnlyFlag, 
+            sigTyProvider: ISignatureTypeProvider<ILType, unit>,
+            localSigTyProvider: ISignatureTypeProvider<ILLocal, unit>) =
 
     let typeDefCache = Dictionary()
     let typeRefCache = Dictionary()
@@ -38,6 +43,8 @@ type cenv(peReader: PEReader, mdReader: MetadataReader, metadataOnlyFlag: Metada
     member __.MetadataReader = mdReader
 
     member __.SignatureTypeProvider = sigTyProvider
+
+    member __.LocalSignatureTypeProvider = localSigTyProvider
 
     member __.CacheILType(typeDefHandle: TypeDefinitionHandle, ilType: ILType) =
         if isILTypeCacheEnabled then
@@ -230,7 +237,59 @@ let mkPInvokeCharBestFit (methImportAttrs: MethodImportAttributes) =
         PInvokeCharBestFit.Disabled
     | _ ->
         PInvokeCharBestFit.UseAssembly
+
+let mkILTypeFunctionPointer (sigHeader: SignatureHeader) argTypes returnType =
+    let callingSig =
+        {
+            CallingConv = mkILCallingConv sigHeader
+            ArgTypes = argTypes
+            ReturnType = returnType
+        }
+    ILType.FunctionPointer(callingSig)
+
+let mkILTypeTypeVar index =
+    ILType.TypeVar(uint16 index)
+
+let mkILTypeModified isRequired typeRef unmodifiedType =
+    ILType.Modified(isRequired, typeRef, unmodifiedType)
         
+let mkILTypePrimitive (primitiveTypeCode: PrimitiveTypeCode) (ilg: ILGlobals) =
+    match primitiveTypeCode with
+    | PrimitiveTypeCode.Boolean -> ilg.typ_Bool
+    | PrimitiveTypeCode.Byte -> ilg.typ_Byte
+    | PrimitiveTypeCode.Char -> ilg.typ_Char
+    | PrimitiveTypeCode.Double -> ilg.typ_Double
+    | PrimitiveTypeCode.Int16 -> ilg.typ_Int16
+    | PrimitiveTypeCode.Int32 -> ilg.typ_Int32
+    | PrimitiveTypeCode.Int64 -> ilg.typ_Int64
+    | PrimitiveTypeCode.IntPtr -> ilg.typ_IntPtr
+    | PrimitiveTypeCode.Object -> ilg.typ_Object
+    | PrimitiveTypeCode.SByte -> ilg.typ_SByte
+    | PrimitiveTypeCode.Single -> ilg.typ_Single
+    | PrimitiveTypeCode.String -> ilg.typ_String
+    | PrimitiveTypeCode.TypedReference -> ilg.typ_TypedReference
+    | PrimitiveTypeCode.UInt16 -> ilg.typ_UInt16
+    | PrimitiveTypeCode.UInt32 -> ilg.typ_UInt32
+    | PrimitiveTypeCode.UInt64 -> ilg.typ_UInt64
+    | PrimitiveTypeCode.UIntPtr -> ilg.typ_UIntPtr
+    | PrimitiveTypeCode.Void -> ILType.Void
+    | _ -> failwithf "Invalid Primitive Type Code: %A" primitiveTypeCode
+
+let mkILTypeGeneric typeRef boxity typeArgs =
+    let ilTypeSpec = ILTypeSpec.Create(typeRef, typeArgs)
+    mkILTy boxity ilTypeSpec
+
+let mkILTypeArray elementType (shape: ArrayShape) =
+    let lowerBounds = shape.LowerBounds
+    let sizes = shape.Sizes
+    let rank = shape.Rank
+    let shape = 
+        let dim i =
+          (if i < lowerBounds.Length then Some (Seq.item i lowerBounds) else None), 
+          (if i < sizes.Length then Some (Seq.item i sizes) else None)
+        ILArrayShape (List.init rank dim)
+    mkILArrTy (elementType, shape)
+
 [<Sealed>]
 type SignatureTypeProvider(ilg: ILGlobals) =
 
@@ -239,24 +298,18 @@ type SignatureTypeProvider(ilg: ILGlobals) =
     interface ISignatureTypeProvider<ILType, unit> with
 
         member __.GetFunctionPointerType(si) =
-            let callingSig =
-                {
-                    CallingConv = mkILCallingConv si.Header
-                    ArgTypes = si.ParameterTypes |> Seq.toList
-                    ReturnType = si.ReturnType
-                }
-            ILType.FunctionPointer(callingSig)
+            mkILTypeFunctionPointer si.Header (si.ParameterTypes |> Seq.toList) si.ReturnType
 
         member __.GetGenericMethodParameter(_, index) =
-            ILType.TypeVar(uint16 index)
+            mkILTypeTypeVar index
 
         member __.GetGenericTypeParameter(_, index) =
-            ILType.TypeVar(uint16 index)
+            mkILTypeTypeVar index
 
         member __.GetModifiedType(modifier, unmodifiedType, isRequired) =
-            ILType.Modified(isRequired, modifier.TypeRef, unmodifiedType)
+            mkILTypeModified isRequired modifier.TypeRef unmodifiedType
 
-        member __.GetPinnedType(elementType) = elementType // TODO: Is this right?
+        member __.GetPinnedType(elementType) = elementType
 
         member this.GetTypeFromSpecification(_, _, typeSpecHandle, _) =
             readILTypeFromTypeSpecification this.cenv typeSpecHandle
@@ -264,27 +317,8 @@ type SignatureTypeProvider(ilg: ILGlobals) =
     interface ISimpleTypeProvider<ILType> with
 
         member __.GetPrimitiveType(typeCode) =
-            match typeCode with
-            | PrimitiveTypeCode.Boolean -> ilg.typ_Bool
-            | PrimitiveTypeCode.Byte -> ilg.typ_Byte
-            | PrimitiveTypeCode.Char -> ilg.typ_Char
-            | PrimitiveTypeCode.Double -> ilg.typ_Double
-            | PrimitiveTypeCode.Int16 -> ilg.typ_Int16
-            | PrimitiveTypeCode.Int32 -> ilg.typ_Int32
-            | PrimitiveTypeCode.Int64 -> ilg.typ_Int64
-            | PrimitiveTypeCode.IntPtr -> ilg.typ_IntPtr
-            | PrimitiveTypeCode.Object -> ilg.typ_Object
-            | PrimitiveTypeCode.SByte -> ilg.typ_SByte
-            | PrimitiveTypeCode.Single -> ilg.typ_Single
-            | PrimitiveTypeCode.String -> ilg.typ_String
-            | PrimitiveTypeCode.TypedReference -> ilg.typ_TypedReference
-            | PrimitiveTypeCode.UInt16 -> ilg.typ_UInt16
-            | PrimitiveTypeCode.UInt32 -> ilg.typ_UInt32
-            | PrimitiveTypeCode.UInt64 -> ilg.typ_UInt64
-            | PrimitiveTypeCode.UIntPtr -> ilg.typ_UIntPtr
-            | PrimitiveTypeCode.Void -> ILType.Void
-            | _ -> failwithf "Invalid Primitive Type Code: %A" typeCode
-
+            mkILTypePrimitive typeCode ilg
+            
         member this.GetTypeFromDefinition(_, typeDefHandle, _) =
             readILTypeFromTypeDefinition this.cenv typeDefHandle
 
@@ -294,19 +328,10 @@ type SignatureTypeProvider(ilg: ILGlobals) =
     interface IConstructedTypeProvider<ILType> with
 
         member __.GetGenericInstantiation(genericType, typeArgs) =
-            let ilTypeSpec = ILTypeSpec.Create(genericType.TypeRef, typeArgs |> List.ofSeq)
-            mkILTy genericType.Boxity ilTypeSpec
+            mkILTypeGeneric genericType.TypeRef genericType.Boxity (typeArgs |> List.ofSeq)
 
         member __.GetArrayType(elementType, shape) =
-            let lowerBounds = shape.LowerBounds
-            let sizes = shape.Sizes
-            let rank = shape.Rank
-            let shape = 
-                let dim i =
-                  (if i < lowerBounds.Length then Some (Seq.item i lowerBounds) else None), 
-                  (if i < sizes.Length then Some (Seq.item i sizes) else None)
-                ILArrayShape (List.init rank dim)
-            mkILArrTy (elementType, shape)
+            mkILTypeArray elementType shape
 
         member __.GetByReferenceType(elementType) =
             ILType.Byref(elementType)
@@ -318,6 +343,117 @@ type SignatureTypeProvider(ilg: ILGlobals) =
 
         member __.GetSZArrayType(elementType) =
             mkILArr1DTy elementType
+
+[<Sealed>]
+type LocalSignatureTypeProvider(ilg: ILGlobals) =
+
+    member val cenv : cenv = Unchecked.defaultof<_> with get, set
+
+    interface ISignatureTypeProvider<ILLocal, unit> with
+
+        member __.GetFunctionPointerType(si) =
+            {
+                IsPinned = false
+                Type = mkILTypeFunctionPointer si.Header (si.ParameterTypes |> Seq.map (fun x -> x.Type) |> Seq.toList) si.ReturnType.Type
+                DebugInfo = None
+            }
+
+        member __.GetGenericMethodParameter(_, index) =
+            {
+                IsPinned = false
+                Type = mkILTypeTypeVar index
+                DebugInfo = None
+            }
+
+        member __.GetGenericTypeParameter(_, index) =
+            {
+                IsPinned = false
+                Type = mkILTypeTypeVar index
+                DebugInfo = None
+            }
+
+        member __.GetModifiedType(modifier, unmodifiedType, isRequired) =
+            {
+                IsPinned = false
+                Type = mkILTypeModified isRequired modifier.Type.TypeRef unmodifiedType.Type
+                DebugInfo = None
+            }
+
+        member __.GetPinnedType(elementType) =
+            {
+                IsPinned = true
+                Type = elementType.Type
+                DebugInfo = None
+            }
+
+        member this.GetTypeFromSpecification(_, _, typeSpecHandle, _) =
+            {
+                IsPinned = false
+                Type = readILTypeFromTypeSpecification this.cenv typeSpecHandle
+                DebugInfo = None
+            }
+            
+    interface ISimpleTypeProvider<ILLocal> with
+
+        member __.GetPrimitiveType(typeCode) =
+            {
+                IsPinned = false
+                Type = mkILTypePrimitive typeCode ilg
+                DebugInfo = None
+            }
+            
+        member this.GetTypeFromDefinition(_, typeDefHandle, _) =
+            {
+                IsPinned = false
+                Type = readILTypeFromTypeDefinition this.cenv typeDefHandle
+                DebugInfo = None
+            }    
+
+        member this.GetTypeFromReference(_, typeRefHandle, _) =
+            {
+                IsPinned = false
+                Type = readILTypeFromTypeReference this.cenv typeRefHandle
+                DebugInfo = None
+            } 
+            
+    interface IConstructedTypeProvider<ILLocal> with
+
+        member __.GetGenericInstantiation(genericType, typeArgs) =
+            {
+                IsPinned = false
+                Type = mkILTypeGeneric genericType.Type.TypeRef genericType.Type.Boxity (typeArgs |> Seq.map (fun x -> x.Type) |> List.ofSeq)
+                DebugInfo = None
+            }
+
+        member __.GetArrayType(elementType, shape) =
+            {
+                IsPinned = false
+                Type = mkILTypeArray elementType.Type shape
+                DebugInfo = None
+            }
+
+        member __.GetByReferenceType(elementType) =
+            {
+                IsPinned = false
+                Type = ILType.Byref(elementType.Type)
+                DebugInfo = None
+            }
+
+        member __.GetPointerType(elementType) =
+            {
+                IsPinned = false
+                Type = ILType.Ptr(elementType.Type)
+                DebugInfo = None
+            }
+
+    interface ISZArrayTypeProvider<ILLocal> with
+
+        member __.GetSZArrayType(elementType) =
+            {
+                IsPinned = false
+                Type =  mkILArr1DTy elementType.Type
+                DebugInfo = None
+            }
 
 let rec readILScopeRef (cenv: cenv) (handle: EntityHandle) =
     let mdReader = cenv.MetadataReader
@@ -894,14 +1030,7 @@ let readILMethodBody (cenv: cenv) (methDef: MethodDefinition) : ILMethodBody =
         if methBodyBlock.LocalSignature.IsNil then []
         else
             let si = mdReader.GetStandaloneSignature(methBodyBlock.LocalSignature)
-            si.DecodeLocalSignature(cenv.SignatureTypeProvider, ())
-            |> Seq.map (fun ilType ->
-                {
-                    ILLocal.Type = ilType
-                    ILLocal.IsPinned = false // TODO: new signature type provider?
-                    ILLocal.DebugInfo = None // TODO: Do we need to read debug info?
-                }
-            )
+            si.DecodeLocalSignature(cenv.LocalSignatureTypeProvider, ())
             |> List.ofSeq
     
     {
@@ -1210,8 +1339,10 @@ let readModuleDef ilGlobals (peReader: PEReader) metadataOnlyFlag =
     
     let cenv = 
         let sigTyProvider = SignatureTypeProvider(ilGlobals)
-        let cenv = cenv(peReader, mdReader, MetadataOnlyFlag.No, sigTyProvider)
+        let localSigTyProvider = LocalSignatureTypeProvider(ilGlobals)
+        let cenv = cenv(peReader, mdReader, MetadataOnlyFlag.No, sigTyProvider, localSigTyProvider)
         sigTyProvider.cenv <- cenv
+        localSigTyProvider.cenv <- cenv
         cenv
 
     { Manifest = Some(readILAssemblyManifest cenv entryPointToken)
