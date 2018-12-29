@@ -1238,7 +1238,7 @@ let readModuleDef ilGlobals (peReader: PEReader) metadataOnlyFlag =
     }  
 
 let openILModuleReader fileName (ilReaderOptions: Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILReaderOptions) =
-    let peReader = new PEReader(File.ReadAllBytes(fileName).ToImmutableArray())
+    let peReader = new PEReader(File.OpenRead(fileName), PEStreamOptions.PrefetchEntireImage)
     { new Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILModuleReader with
 
         member __.ILModuleDef = 
