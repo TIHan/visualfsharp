@@ -884,27 +884,47 @@ let readILCode (cenv: cenv) : ILCode =
         Locals = [] // TODO
     }
 
-let readILMethodBody (cenv: cenv) (methImpl: MethodImplementation) (methDef: MethodDefinition) : ILMethodBody =
+let readILMethodBody (cenv: cenv) (methDef: MethodDefinition) : ILMethodBody =
+    let peReader = cenv.PEReader
     let mdReader = cenv.MetadataReader
 
-    let implAttrs = methDef.ImplAttributes
+    let methBodyBlock = peReader.GetMethodBody(methDef.RelativeVirtualAddress)
 
+    let ilLocals =
+        if methBodyBlock.LocalSignature.IsNil then []
+        else
+            let si = mdReader.GetStandaloneSignature(methBodyBlock.LocalSignature)
+            si.DecodeLocalSignature(cenv.SignatureTypeProvider, ())
+            |> Seq.map (fun ilType ->
+                {
+                    ILLocal.Type = ilType
+                    ILLocal.IsPinned = false // TODO: new signature type provider?
+                    ILLocal.DebugInfo = None // TODO: Do we need to read debug info?
+                }
+            )
+            |> List.ofSeq
+    
     {
-        IsZeroInit = false // TODO
-        MaxStack = 1 // TODO:
-        NoInlining = int (implAttrs &&& MethodImplAttributes.NoInlining) <> 0
-        AggressiveInlining = int (implAttrs &&& MethodImplAttributes.AggressiveInlining) <> 0
-        Locals = ILLocals.Empty // TODO:
+        IsZeroInit = not methBodyBlock.LocalVariablesInitialized
+        MaxStack = methBodyBlock.MaxStack
+        NoInlining = int (methDef.ImplAttributes &&& MethodImplAttributes.NoInlining) <> 0
+        AggressiveInlining = int (methDef.ImplAttributes &&& MethodImplAttributes.AggressiveInlining) <> 0
+        Locals = ilLocals
         Code = readILCode cenv // TODO:
-        SourceMarker = None // TODO:
+        SourceMarker = None // TODO: Do we need to read a source marker?
     }
 
-let readMethodBody (cenv: cenv) (methImplOpt: MethodImplementation option) (methDef: MethodDefinition) =
+let readMethodBody (cenv: cenv) (methDef: MethodDefinition) =
     let mdReader = cenv.MetadataReader
     let attrs = methDef.Attributes
     let implAttrs = methDef.ImplAttributes
 
-    if int (attrs &&& MethodAttributes.PinvokeImpl) <> 0 then
+    let isPInvoke = int (attrs &&& MethodAttributes.PinvokeImpl) <> 0
+    let codeType = int (implAttrs &&& MethodImplAttributes.CodeTypeMask)
+
+    if codeType = 0x01 && isPInvoke then
+        MethodBody.Native
+    elif isPInvoke then
         let import = methDef.GetImport()
         let importAttrs = import.Attributes
         let pInvokeMethod : PInvokeMethod =
@@ -919,26 +939,18 @@ let readMethodBody (cenv: cenv) (methImplOpt: MethodImplementation option) (meth
                 CharBestFit = mkPInvokeCharBestFit importAttrs
             }
         MethodBody.PInvoke(pInvokeMethod)
-    elif int (implAttrs &&& MethodImplAttributes.Native) <> 0 then
-        MethodBody.Native
-    elif int (attrs &&& MethodAttributes.Abstract) <> 0 || int (implAttrs &&& MethodImplAttributes.InternalCall) <> 0 || int (implAttrs &&& MethodImplAttributes.Unmanaged) <> 0 then
+    elif codeType <> 0x00 || int (attrs &&& MethodAttributes.Abstract) <> 0 || int (implAttrs &&& MethodImplAttributes.InternalCall) <> 0 || int (implAttrs &&& MethodImplAttributes.Unmanaged) <> 0 then
         MethodBody.Abstract
-    elif not cenv.IsMetadataOnly && int (implAttrs &&& MethodImplAttributes.IL) <> 0 then
-        if methImplOpt.IsNone then failwith "No method implementation for MethodBody.IL"
-        MethodBody.IL(readILMethodBody cenv methImplOpt.Value methDef)
+    elif not cenv.IsMetadataOnly then
+        MethodBody.IL(readILMethodBody cenv methDef)
     else
         MethodBody.NotAvailable
 
-let readILMethodDef (cenv: cenv) (methImplLookup: ImmutableDictionary<MethodDefinitionHandle, MethodImplementation>) (methDefHandle: MethodDefinitionHandle) =
+let readILMethodDef (cenv: cenv) (methDefHandle: MethodDefinitionHandle) =
     let mdReader = cenv.MetadataReader
 
     let methDef = mdReader.GetMethodDefinition(methDefHandle)
     let si = methDef.DecodeSignature(cenv.SignatureTypeProvider, ())
-
-    let methImplOpt =
-        match methImplLookup.TryGetValue(methDefHandle) with
-        | true, methImpl -> Some(methImpl)
-        | _ -> None
 
     ILMethodDef(
         name = mdReader.GetString(methDef.Name),
@@ -947,7 +959,7 @@ let readILMethodDef (cenv: cenv) (methImplLookup: ImmutableDictionary<MethodDefi
         callingConv = mkILCallingConv si.Header,
         parameters = readILParameters cenv si.ParameterTypes si.ReturnType (methDef.GetParameters()), // TODO: First param might actually be the return type.
         ret = mkILReturn si.ReturnType, // TODO: Do we need more info for ILReturn?
-        body = mkMethBodyLazyAux (lazy readMethodBody cenv methImplOpt methDef),
+        body = mkMethBodyLazyAux (lazy readMethodBody cenv methDef),
         isEntryPoint = false, // TODO: need to pass entrypoint token
         genericParams = readILGenericParameterDefs cenv (methDef.GetGenericParameters()),
         securityDeclsStored = readILSecurityDeclsStored cenv (methDef.GetDeclarativeSecurityAttributes()),
@@ -1083,24 +1095,12 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
 
     let methods =
         mkILMethodsComputed (fun () ->
-            let lookup = ImmutableDictionary.CreateBuilder()
-            typeDef.GetMethodImplementations()
-            |> Seq.iter (fun h -> 
-                let impl = mdReader.GetMethodImplementation(h)
-                match impl.MethodDeclaration.Kind with
-                | HandleKind.MethodDefinition ->
-                    let decl = MethodDefinitionHandle.op_Explicit(impl.MethodDeclaration)
-                    lookup.[decl] <- impl
-                | _ -> ()
-            )
-            let lookup = lookup.ToImmutable()
-
             let methDefHandles = typeDef.GetMethods()
             let ilMethodDefs = Array.zeroCreate methDefHandles.Count
 
             let mutable i = 0
             for methDefHandle in methDefHandles do
-                ilMethodDefs.[i] <- readILMethodDef cenv lookup methDefHandle
+                ilMethodDefs.[i] <- readILMethodDef cenv methDefHandle
                 i <- i + 1
 
             ilMethodDefs
@@ -1238,7 +1238,7 @@ let readModuleDef ilGlobals (peReader: PEReader) metadataOnlyFlag =
     }  
 
 let openILModuleReader fileName (ilReaderOptions: Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILReaderOptions) =
-    let peReader = new PEReader(File.OpenRead(fileName), PEStreamOptions.PrefetchEntireImage)
+    let peReader = new PEReader(File.ReadAllBytes(fileName).ToImmutableArray())
     { new Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILModuleReader with
 
         member __.ILModuleDef = 
