@@ -9,11 +9,13 @@ open System.Reflection
 open System.Reflection.PortableExecutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
-open Microsoft.FSharp.Compiler.AbstractIL.IL  
+open Microsoft.FSharp.Compiler.AbstractIL.IL
+open Microsoft.FSharp.Compiler.AbstractIL.Diagnostics
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
 open Microsoft.FSharp.Compiler.AbstractIL.Internal.BinaryConstants
 
 type MetadataOnlyFlag = Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.MetadataOnlyFlag
+type OperandType = System.Reflection.Emit.OperandType
 
 type MetadataReader with
 
@@ -34,7 +36,7 @@ type cenv(
     let typeSpecCache = Dictionary()
     let asmRefCache = Dictionary()
 
-    let isILTypeCacheEnabled = false
+    let isILTypeCacheEnabled = true
 
     member __.IsMetadataOnly = metadataOnlyFlag = MetadataOnlyFlag.Yes
 
@@ -1012,6 +1014,354 @@ let readILParameters (cenv: cenv) paramTypes returnType (paramHandles: Parameter
     |> Seq.map (readILParameter cenv paramTypes returnType)
     |> List.ofSeq
 
+// -------------------------------------------------------------------- 
+// IL Instruction reading
+// --------------------------------------------------------------------
+
+[<NoEquality; NoComparison>]
+type OperandPrefixEnv =
+    {
+        mutable al: ILAlignment
+        mutable tl: ILTailcall
+        mutable vol: ILVolatility
+        mutable ro: ILReadonly
+        mutable constrained: ILType option
+    }
+
+let noPrefixes mk prefixes = 
+    if prefixes.al <> Aligned then failwith "an unaligned prefix is not allowed here"
+    if prefixes.vol <> Nonvolatile then failwith "a volatile prefix is not allowed here"
+    if prefixes.tl <> Normalcall then failwith "a tailcall prefix is not allowed here"
+    if prefixes.ro <> NormalAddress then failwith "a readonly prefix is not allowed here"
+    if prefixes.constrained <> None then failwith "a constrained prefix is not allowed here"
+    mk
+
+let volatileOrUnalignedPrefix mk prefixes = 
+    if prefixes.tl <> Normalcall then failwith "a tailcall prefix is not allowed here"
+    if prefixes.constrained <> None then failwith "a constrained prefix is not allowed here"
+    if prefixes.ro <> NormalAddress then failwith "a readonly prefix is not allowed here"
+    mk (prefixes.al, prefixes.vol) 
+
+let volatilePrefix mk prefixes = 
+    if prefixes.al <> Aligned then failwith "an unaligned prefix is not allowed here"
+    if prefixes.tl <> Normalcall then failwith "a tailcall prefix is not allowed here"
+    if prefixes.constrained <> None then failwith "a constrained prefix is not allowed here"
+    if prefixes.ro <> NormalAddress then failwith "a readonly prefix is not allowed here"
+    mk prefixes.vol
+
+let tailPrefix mk prefixes = 
+    if prefixes.al <> Aligned then failwith "an unaligned prefix is not allowed here"
+    if prefixes.vol <> Nonvolatile then failwith "a volatile prefix is not allowed here"
+    if prefixes.constrained <> None then failwith "a constrained prefix is not allowed here"
+    if prefixes.ro <> NormalAddress then failwith "a readonly prefix is not allowed here"
+    mk prefixes.tl 
+
+let constraintOrTailPrefix mk prefixes = 
+    if prefixes.al <> Aligned then failwith "an unaligned prefix is not allowed here"
+    if prefixes.vol <> Nonvolatile then failwith "a volatile prefix is not allowed here"
+    if prefixes.ro <> NormalAddress then failwith "a readonly prefix is not allowed here"
+    mk (prefixes.constrained, prefixes.tl )
+
+let readonlyPrefix mk prefixes = 
+    if prefixes.al <> Aligned then failwith "an unaligned prefix is not allowed here"
+    if prefixes.vol <> Nonvolatile then failwith "a volatile prefix is not allowed here"
+    if prefixes.tl <> Normalcall then failwith "a tailcall prefix is not allowed here"
+    if prefixes.constrained <> None then failwith "a constrained prefix is not allowed here"
+    mk prefixes.ro
+
+type OperandDecoder =
+    | NoDecoder
+    | InlineNone of (OperandPrefixEnv -> ILInstr)
+    | ShortInlineVar of (OperandPrefixEnv -> sbyte -> ILInstr)
+    | ShortInlineI of (OperandPrefixEnv -> sbyte -> ILInstr)
+    | InlineI of (OperandPrefixEnv -> int -> ILInstr)
+    | InlineI8 of (OperandPrefixEnv -> int64 -> ILInstr)
+    | ShortInlineR of (OperandPrefixEnv -> single -> ILInstr)
+    | InlineR of (OperandPrefixEnv ->double -> ILInstr)
+    | InlineMethod of (OperandPrefixEnv -> ILMethodSpec * ILVarArgs -> ILInstr)
+    | InlineSig of (OperandPrefixEnv -> ILCallingSignature * ILVarArgs -> ILInstr)
+    | ShortInlineBrTarget of (OperandPrefixEnv -> sbyte -> ILInstr)
+    | InlineSwitch of (OperandPrefixEnv -> int list -> ILInstr)
+    | InlineType of (OperandPrefixEnv -> ILType -> ILInstr)
+    | InlineString of (OperandPrefixEnv -> string -> ILInstr)
+    | InlineField of (OperandPrefixEnv -> ILFieldSpec -> ILInstr)
+    | InlineTok of (OperandPrefixEnv -> ILToken -> ILInstr)
+
+let operandTypes = 
+    [|
+        InlineNone(noPrefixes AI_nop)//byte OperandType.InlineNone           // nop
+        InlineNone(noPrefixes I_break)//byte OperandType.InlineNone           // break
+        InlineNone(noPrefixes (I_ldarg(0us)))//byte OperandType.InlineNone           // ldarg.0
+        InlineNone(noPrefixes (I_ldarg(1us)))//byte OperandType.InlineNone           // ldarg.1
+        InlineNone(noPrefixes (I_ldarg(2us)))//byte OperandType.InlineNone           // ldarg.2
+        InlineNone(noPrefixes (I_ldarg(3us)))//byte OperandType.InlineNone           // ldarg.3
+        InlineNone(noPrefixes (I_ldloc(0us)))//byte OperandType.InlineNone           // ldloc.0
+        InlineNone(noPrefixes (I_ldloc(1us)))//byte OperandType.InlineNone           // ldloc.1
+        InlineNone(noPrefixes (I_ldloc(2us)))//byte OperandType.InlineNone           // ldloc.2
+        InlineNone(noPrefixes (I_ldloc(3us)))//byte OperandType.InlineNone           // ldloc.3
+        InlineNone(noPrefixes (I_stloc(0us)))//byte OperandType.InlineNone           // stloc.0
+        InlineNone(noPrefixes (I_stloc(1us)))//byte OperandType.InlineNone           // stloc.1
+        InlineNone(noPrefixes (I_stloc(2us)))//byte OperandType.InlineNone           // stloc.2
+        InlineNone(noPrefixes (I_stloc(3us)))//byte OperandType.InlineNone           // stloc.3
+        ShortInlineVar(noPrefixes (fun index -> I_ldarg(uint16 index))) //byte OperandType.ShortInlineVar       // ldarg.s
+        ShortInlineVar(noPrefixes (fun index -> I_ldarga(uint16 index)))//byte OperandType.ShortInlineVar       // ldarga.s
+        ShortInlineVar(noPrefixes (fun index -> I_starg(uint16 index)))//byte OperandType.ShortInlineVar       // starg.s
+        ShortInlineVar(noPrefixes (fun index -> I_ldloc(uint16 index)))//byte OperandType.ShortInlineVar       // ldloc.s
+        ShortInlineVar(noPrefixes (fun index -> I_ldloca(uint16 index)))//byte OperandType.ShortInlineVar       // ldloca.s
+        ShortInlineVar(noPrefixes (fun index -> I_stloc(uint16 index)))//byte OperandType.ShortInlineVar       // stloc.s
+        InlineNone(noPrefixes AI_ldnull)//byte OperandType.InlineNone           // ldnull
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(-1))))//byte OperandType.InlineNone           // ldc.i4.m1
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(0))))//byte OperandType.InlineNone           // ldc.i4.0
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(1))))//byte OperandType.InlineNone           // ldc.i4.1
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(2))))//byte OperandType.InlineNone           // ldc.i4.2
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(3))))//byte OperandType.InlineNone           // ldc.i4.3
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(4))))//byte OperandType.InlineNone           // ldc.i4.4
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(5))))//byte OperandType.InlineNone           // ldc.i4.5
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(6))))//byte OperandType.InlineNone           // ldc.i4.6
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(7))))//byte OperandType.InlineNone           // ldc.i4.7
+        InlineNone(noPrefixes (AI_ldc(DT_I4, ILConst.I4(8))))//byte OperandType.InlineNone           // ldc.i4.8
+        ShortInlineI(noPrefixes (fun value -> AI_ldc(DT_I4, ILConst.I4(int32 value))))//byte OperandType.ShortInlineI         // ldc.i4.s
+        InlineI(noPrefixes (fun value -> AI_ldc(DT_I4, ILConst.I4(value))))//byte OperandType.InlineI              // ldc.i4
+        InlineI8(noPrefixes (fun value -> AI_ldc(DT_I8, ILConst.I8(value))))//byte OperandType.InlineI8             // ldc.i8
+        ShortInlineR(noPrefixes (fun value -> AI_ldc(DT_R4, ILConst.R4(value))))//byte OperandType.ShortInlineR         // ldc.r4
+        InlineR(noPrefixes (fun value -> AI_ldc(DT_R8, ILConst.R8(value))))//byte OperandType.InlineR              // ldc.r8
+        NoDecoder
+        InlineNone(noPrefixes AI_dup)//byte OperandType.InlineNone           // dup
+        InlineNone(noPrefixes AI_pop)//byte OperandType.InlineNone           // pop
+        InlineMethod(noPrefixes (fun (ilMethSpec, _) -> I_jmp(ilMethSpec)))//byte OperandType.InlineMethod         // jmp
+        InlineMethod(tailPrefix (fun ilTailcall (ilMethSpec, ilVarArgs) -> I_call(ilTailcall, ilMethSpec, ilVarArgs)))//byte OperandType.InlineMethod         // call
+        InlineSig(tailPrefix (fun ilTailcall (ilCallSig, ilVarArgs) -> I_calli(ilTailcall, ilCallSig, ilVarArgs)))//byte OperandType.InlineSig            // calli
+        InlineNone(noPrefixes I_ret)//byte OperandType.InlineNone           // ret
+        ShortInlineBrTarget(noPrefixes (fun value -> I_br(int value)))//byte OperandType.ShortInlineBrTarget  // br.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_brfalse, int value)))//byte OperandType.ShortInlineBrTarget  // brfalse.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_brtrue, int value)))//byte OperandType.ShortInlineBrTarget  // brtrue.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_beq, int value)))//byte OperandType.ShortInlineBrTarget  // beq.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bge, int value)))//byte OperandType.ShortInlineBrTarget  // bge.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bgt, int value)))//byte OperandType.ShortInlineBrTarget  // bgt.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_ble, int value)))//byte OperandType.ShortInlineBrTarget  // ble.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_blt, int value)))//byte OperandType.ShortInlineBrTarget  // blt.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bne_un, int value)))//byte OperandType.ShortInlineBrTarget  // bne.un.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bge_un, int value)))//byte OperandType.ShortInlineBrTarget  // bge.un.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bgt_un, int value)))//byte OperandType.ShortInlineBrTarget  // bgt.un.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_ble_un, int value)))//byte OperandType.ShortInlineBrTarget  // ble.un.s
+        ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_blt_un, int value)))//byte OperandType.ShortInlineBrTarget  // blt.un.s
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        InlineSwitch(noPrefixes (fun values -> ILInstr.I_switch(values)))//byte OperandType.InlineSwitch         // switch
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_I1)))//byte OperandType.InlineNone           // ldind.i1
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_U1)))//byte OperandType.InlineNone           // ldind.u1
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_I2)))//byte OperandType.InlineNone           // ldind.i2
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_U2)))//byte OperandType.InlineNone           // ldind.u2
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_I4)))//byte OperandType.InlineNone           // ldind.i4
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_U4)))//byte OperandType.InlineNone           // ldind.u4
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_I8)))//byte OperandType.InlineNone           // ldind.i8
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_I)))//byte OperandType.InlineNone           // ldind.i
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_R4)))//byte OperandType.InlineNone           // ldind.r4
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_R8)))//byte OperandType.InlineNone           // ldind.r8
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_REF)))//byte OperandType.InlineNone           // ldind.ref
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_stind(ilAlignment, ilVolatility, DT_REF)))//byte OperandType.InlineNone           // stind.ref
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_stind(ilAlignment, ilVolatility, DT_I1)))//byte OperandType.InlineNone           // stind.i1
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_stind(ilAlignment, ilVolatility, DT_I2)))//byte OperandType.InlineNone           // stind.i2
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_stind(ilAlignment, ilVolatility, DT_I4)))//byte OperandType.InlineNone           // stind.i4
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_stind(ilAlignment, ilVolatility, DT_I8)))//byte OperandType.InlineNone           // stind.i8
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_stind(ilAlignment, ilVolatility, DT_R4)))//byte OperandType.InlineNone           // stind.r4
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_stind(ilAlignment, ilVolatility, DT_R8)))//byte OperandType.InlineNone           // stind.r8
+        InlineNone(noPrefixes AI_add)//byte OperandType.InlineNone           // add
+        InlineNone(noPrefixes AI_sub)//byte OperandType.InlineNone           // sub
+        InlineNone(noPrefixes AI_mul)//byte OperandType.InlineNone           // mul
+        InlineNone(noPrefixes AI_div)//byte OperandType.InlineNone           // div
+        InlineNone(noPrefixes AI_div_un)//byte OperandType.InlineNone           // div.un
+        InlineNone(noPrefixes AI_rem)//byte OperandType.InlineNone           // rem
+        InlineNone(noPrefixes AI_rem_un)//byte OperandType.InlineNone           // rem.un
+        InlineNone(noPrefixes AI_and)//byte OperandType.InlineNone           // and
+        InlineNone(noPrefixes AI_or)//byte OperandType.InlineNone           // or
+        InlineNone(noPrefixes AI_xor)//byte OperandType.InlineNone           // xor
+        InlineNone(noPrefixes AI_shl)//byte OperandType.InlineNone           // shl
+        InlineNone(noPrefixes AI_shr)//byte OperandType.InlineNone           // shr
+        InlineNone(noPrefixes AI_shr_un)//byte OperandType.InlineNone           // shr.un
+        InlineNone(noPrefixes AI_neg)//byte OperandType.InlineNone           // neg
+        InlineNone(noPrefixes AI_not)//byte OperandType.InlineNone           // not
+        InlineNone(noPrefixes (AI_conv(DT_I1)))//byte OperandType.InlineNone           // conv.i1
+        InlineNone(noPrefixes (AI_conv(DT_I2)))//byte OperandType.InlineNone           // conv.i2
+        InlineNone(noPrefixes (AI_conv(DT_I4)))//byte OperandType.InlineNone           // conv.i4
+        InlineNone(noPrefixes (AI_conv(DT_I8)))//byte OperandType.InlineNone           // conv.i8
+        InlineNone(noPrefixes (AI_conv(DT_R4)))//byte OperandType.InlineNone           // conv.r4
+        InlineNone(noPrefixes (AI_conv(DT_R8)))//byte OperandType.InlineNone           // conv.r8
+        InlineNone(noPrefixes (AI_conv(DT_U4)))//byte OperandType.InlineNone           // conv.u4
+        InlineNone(noPrefixes (AI_conv(DT_U8)))//byte OperandType.InlineNone           // conv.u8
+        InlineMethod(tailPrefix (fun ilTailcall (ilMethSpec, ilVarArgs) -> I_callvirt(ilTailcall, ilMethSpec, ilVarArgs)))//byte OperandType.InlineMethod         // callvirt
+        InlineType(noPrefixes (fun ilType -> I_cpobj(ilType)))//byte OperandType.InlineType           // cpobj
+        InlineType(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) ilType -> I_ldobj(ilAlignment, ilVolatility, ilType)))//byte OperandType.InlineType           // ldobj
+        InlineString(noPrefixes (fun value -> I_ldstr(value)))//byte OperandType.InlineString         // ldstr
+        InlineMethod(noPrefixes (fun (ilMethSpec, ilVarArgs) -> I_newobj(ilMethSpec, ilVarArgs)))//byte OperandType.InlineMethod         // newobj
+        InlineType(noPrefixes (fun ilType -> I_castclass(ilType)))//byte OperandType.InlineType           // castclass
+        InlineType(noPrefixes (fun ilType -> I_isinst(ilType)))//byte OperandType.InlineType           // isinst
+        InlineNone(noPrefixes (AI_conv(DT_R)))//byte OperandType.InlineNone           // conv.r.un // TODO: Looks like we don't have this?
+        NoDecoder
+        NoDecoder
+        InlineType(noPrefixes (fun ilType -> I_unbox(ilType)))//byte OperandType.InlineType           // unbox
+        InlineNone(noPrefixes I_throw)//byte OperandType.InlineNone           // throw
+        InlineField(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) ilFieldSpec -> I_ldfld(ilAlignment, ilVolatility, ilFieldSpec)))//byte OperandType.InlineField          // ldfld
+        InlineField(noPrefixes (fun ilFieldSpec -> I_ldflda(ilFieldSpec)))//byte OperandType.InlineField          // ldflda
+        InlineField(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) ilFieldSpec -> I_stfld(ilAlignment, ilVolatility, ilFieldSpec)))//byte OperandType.InlineField          // stfld
+        InlineField(volatilePrefix (fun ilVolatility ilFieldSpec -> I_ldsfld(ilVolatility, ilFieldSpec)))//byte OperandType.InlineField          // ldsfld
+        InlineField(noPrefixes (fun ilFieldSpec -> I_ldsflda(ilFieldSpec)))//byte OperandType.InlineField          // ldsflda
+        InlineField(volatilePrefix (fun ilVolatility ilFieldSpec -> I_stsfld(ilVolatility, ilFieldSpec)))//byte OperandType.InlineField          // stsfld
+        InlineType(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) ilType -> I_stobj(ilAlignment, ilVolatility, ilType)))//byte OperandType.InlineType           // stobj
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_I1)))//byte OperandType.InlineNone           // conv.ovf.i1.un
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_I2)))//byte OperandType.InlineNone           // conv.ovf.i2.un
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_I4)))//byte OperandType.InlineNone           // conv.ovf.i4.un
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_I8)))//byte OperandType.InlineNone           // conv.ovf.i8.un
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_U1)))//byte OperandType.InlineNone           // conv.ovf.u1.un
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_U2)))//byte OperandType.InlineNone           // conv.ovf.u2.un
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_U4)))//byte OperandType.InlineNone           // conv.ovf.u4.un
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_U8)))//byte OperandType.InlineNone           // conv.ovf.u8.un
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_I)))//byte OperandType.InlineNone           // conv.ovf.i.un
+        InlineNone(noPrefixes (AI_conv_ovf_un(DT_U)))//byte OperandType.InlineNone           // conv.ovf.u.un
+        InlineType(noPrefixes (fun ilType -> I_unbox(ilType)))//byte OperandType.InlineType           // box
+        InlineType(noPrefixes (fun ilType -> I_newarr(ILArrayShape.SingleDimensional, ilType)))//byte OperandType.InlineType           // newarr
+        InlineNone(noPrefixes I_ldlen)//byte OperandType.InlineNone           // ldlen
+        InlineType(readonlyPrefix (fun ilReadonly ilType -> I_ldelema(ilReadonly, false, ILArrayShape.SingleDimensional, ilType)))//byte OperandType.InlineType           // ldelema
+        InlineNone(noPrefixes (I_ldelem(DT_I1)))//byte OperandType.InlineNone           // ldelem.i1
+        InlineNone(noPrefixes (I_ldelem(DT_U1)))//byte OperandType.InlineNone           // ldelem.u1
+        InlineNone(noPrefixes (I_ldelem(DT_I2)))//byte OperandType.InlineNone           // ldelem.i2
+        InlineNone(noPrefixes (I_ldelem(DT_U2)))//byte OperandType.InlineNone           // ldelem.u2
+        InlineNone(noPrefixes (I_ldelem(DT_I4)))//byte OperandType.InlineNone           // ldelem.i4
+        InlineNone(noPrefixes (I_ldelem(DT_U4)))//byte OperandType.InlineNone           // ldelem.u4
+        InlineNone(noPrefixes (I_ldelem(DT_I8)))//byte OperandType.InlineNone           // ldelem.i8
+        InlineNone(noPrefixes (I_ldelem(DT_I)))//byte OperandType.InlineNone           // ldelem.i
+        InlineNone(noPrefixes (I_ldelem(DT_R4)))//byte OperandType.InlineNone           // ldelem.r4
+        InlineNone(noPrefixes (I_ldelem(DT_R8)))//byte OperandType.InlineNone           // ldelem.r8
+        InlineNone(noPrefixes (I_ldelem(DT_REF)))//byte OperandType.InlineNone           // ldelem.ref
+        InlineNone(noPrefixes (I_stelem(DT_I)))//byte OperandType.InlineNone           // stelem.i
+        InlineNone(noPrefixes (I_stelem(DT_I1)))//byte OperandType.InlineNone           // stelem.i1
+        InlineNone(noPrefixes (I_stelem(DT_I2)))//byte OperandType.InlineNone           // stelem.i2
+        InlineNone(noPrefixes (I_stelem(DT_I4)))//byte OperandType.InlineNone           // stelem.i4
+        InlineNone(noPrefixes (I_stelem(DT_I8)))//byte OperandType.InlineNone           // stelem.i8
+        InlineNone(noPrefixes (I_stelem(DT_R4)))//byte OperandType.InlineNone           // stelem.r4
+        InlineNone(noPrefixes (I_stelem(DT_R8)))//byte OperandType.InlineNone           // stelem.r8
+        InlineNone(noPrefixes (I_stelem(DT_REF)))//byte OperandType.InlineNone           // stelem.ref
+        InlineType(noPrefixes (fun ilType -> I_ldelem_any(ILArrayShape.SingleDimensional, ilType)))//byte OperandType.InlineType           // ldelem
+        InlineType(noPrefixes (fun ilType -> I_stelem_any(ILArrayShape.SingleDimensional, ilType)))//byte OperandType.InlineType           // stelem
+        InlineType(noPrefixes (fun ilType -> I_unbox_any(ilType)))//byte OperandType.InlineType           // unbox.any
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        InlineNone(noPrefixes (AI_conv_ovf(DT_I1)))//byte OperandType.InlineNone           // conv.ovf.i1
+        InlineNone(noPrefixes (AI_conv_ovf(DT_U1)))//byte OperandType.InlineNone           // conv.ovf.u1
+        InlineNone(noPrefixes (AI_conv_ovf(DT_I2)))//byte OperandType.InlineNone           // conv.ovf.i2
+        InlineNone(noPrefixes (AI_conv_ovf(DT_U2)))//byte OperandType.InlineNone           // conv.ovf.u2
+        InlineNone(noPrefixes (AI_conv_ovf(DT_I4)))//byte OperandType.InlineNone           // conv.ovf.i4
+        InlineNone(noPrefixes (AI_conv_ovf(DT_U4)))//byte OperandType.InlineNone           // conv.ovf.u4
+        InlineNone(noPrefixes (AI_conv_ovf(DT_I8)))//byte OperandType.InlineNone           // conv.ovf.i8
+        InlineNone(noPrefixes (AI_conv_ovf(DT_U8)))//byte OperandType.InlineNone           // conv.ovf.u8
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        InlineType(noPrefixes (fun ilType -> I_refanyval(ilType)))//byte OperandType.InlineType           // refanyval
+        InlineNone(noPrefixes AI_ckfinite)//byte OperandType.InlineNone           // ckfinite
+        NoDecoder
+        NoDecoder
+        InlineType(noPrefixes (fun ilType -> I_mkrefany(ilType)))//byte OperandType.InlineType           // mkrefany
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        InlineTok(noPrefixes (fun ilToken -> I_ldtoken(ilToken)))//byte OperandType.InlineTok            // ldtoken
+        InlineNone(noPrefixes (AI_conv(DT_U2)))//byte OperandType.InlineNone           // conv.u2
+        InlineNone(noPrefixes (AI_conv(DT_U1)))//byte OperandType.InlineNone           // conv.u1
+        InlineNone(noPrefixes (AI_conv(DT_I)))//byte OperandType.InlineNone           // conv.i
+        InlineNone(noPrefixes (AI_conv_ovf(DT_I)))//byte OperandType.InlineNone           // conv.ovf.i
+        InlineNone(noPrefixes (AI_conv_ovf(DT_U)))//byte OperandType.InlineNone           // conv.ovf.u
+        InlineNone(noPrefixes AI_add_ovf)//byte OperandType.InlineNone           // add.ovf
+        InlineNone(noPrefixes AI_add_ovf_un)//byte OperandType.InlineNone           // add.ovf.un
+        InlineNone(noPrefixes AI_mul_ovf)//byte OperandType.InlineNone           // mul.ovf
+        InlineNone(noPrefixes AI_mul_ovf_un)//byte OperandType.InlineNone           // mul.ovf.un
+        InlineNone(noPrefixes AI_sub_ovf)//byte OperandType.InlineNone           // sub.ovf
+        InlineNone(noPrefixes AI_sub_ovf_un)//byte OperandType.InlineNone           // sub.ovf.un
+        InlineNone(noPrefixes I_endfinally)//byte OperandType.InlineNone           // endfinally
+        NoDecoder
+        ShortInlineBrTarget(noPrefixes (fun value -> I_leave(int value)))//byte OperandType.ShortInlineBrTarget  // leave.s
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_stind(ilAlignment, ilVolatility, DT_I)))//byte OperandType.InlineNone           // stind.i
+        InlineNone(noPrefixes (AI_conv(DT_U)))//byte OperandType.InlineNone           // conv.u            (0xe0)
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+        NoDecoder
+    |]
+
+let readILOpCode (ilReader: byref<BlobReader>) : ILOpCode =
+    let opCode = int (ilReader.ReadByte())
+    if opCode = 0xfe then LanguagePrimitives.EnumOfValue(uint16 (0xfe00 + int (ilReader.ReadByte())))
+    else LanguagePrimitives.EnumOfValue(uint16 opCode)
+
+let readILInstrs (cenv: cenv) (ilReader: byref<BlobReader>) =
+    let mdReader = cenv.MetadataReader
+
+    let instrs = ResizeArray()
+    
+    while ilReader.RemainingBytes > 0 do
+        let opCode = readILOpCode &ilReader
+        ()
+    instrs.ToArray()
+
+// --------------------------------------------------------------------
 
 let readILCode (cenv: cenv) (methBodyBlock: MethodBodyBlock) : ILCode =
     
@@ -1033,7 +1383,7 @@ let readILCode (cenv: cenv) (methBodyBlock: MethodBodyBlock) : ILCode =
                 | ExceptionRegionKind.Catch ->
                     ILExceptionClause.TypeCatch(readILType cenv region.CatchType, (start, finish))
                 | _ ->
-                    failwith "Invalid Exception Region Kind: %A" region.Kind
+                    failwithf "Invalid Exception Region Kind: %A" region.Kind
 
             {
                 ILExceptionSpec.Range = (region.TryOffset, region.TryOffset + region.TryLength)
@@ -1042,9 +1392,11 @@ let readILCode (cenv: cenv) (methBodyBlock: MethodBodyBlock) : ILCode =
         )
         |> List.ofSeq
 
+    let mutable ilReader = methBodyBlock.GetILReader()
+
     {
         Labels = System.Collections.Generic.Dictionary() // TODO
-        Instrs = [||] // TODO
+        Instrs = readILInstrs cenv &ilReader
         Exceptions = exceptions
         Locals = [] // TODO
     }
@@ -1369,7 +1721,7 @@ let readModuleDef ilGlobals (peReader: PEReader) metadataOnlyFlag =
     let cenv = 
         let sigTyProvider = SignatureTypeProvider(ilGlobals)
         let localSigTyProvider = LocalSignatureTypeProvider(ilGlobals)
-        let cenv = cenv(peReader, mdReader, MetadataOnlyFlag.No, sigTyProvider, localSigTyProvider)
+        let cenv = cenv(peReader, mdReader, metadataOnlyFlag, sigTyProvider, localSigTyProvider)
         sigTyProvider.cenv <- cenv
         localSigTyProvider.cenv <- cenv
         cenv
