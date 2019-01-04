@@ -720,6 +720,10 @@ let rec readILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
         
         ILMethodSpec.Create(enclILTy, ilMethodRef, ilGenericArgs)
 
+    | HandleKind.MethodSpecification ->
+        let methodSpec = mdReader.GetMethodSpecification(MethodSpecificationHandle.op_Explicit(handle))
+        readILMethodSpec cenv methodSpec.Method
+
     | _ ->
         failwithf "Invalid Entity Handle Kind: %A" handle.Kind
 
@@ -1019,7 +1023,7 @@ let readILParameters (cenv: cenv) paramTypes returnType (paramHandles: Parameter
 // --------------------------------------------------------------------
 
 [<NoEquality; NoComparison>]
-type OperandPrefixEnv =
+type ILOperandPrefixEnv =
     {
         mutable al: ILAlignment
         mutable tl: ILTailcall
@@ -1069,25 +1073,30 @@ let readonlyPrefix mk prefixes =
     if prefixes.constrained <> None then failwith "a constrained prefix is not allowed here"
     mk prefixes.ro
 
-type OperandDecoder =
+type ILOperandDecoder =
     | NoDecoder
-    | InlineNone of (OperandPrefixEnv -> ILInstr)
-    | ShortInlineVar of (OperandPrefixEnv -> sbyte -> ILInstr)
-    | ShortInlineI of (OperandPrefixEnv -> sbyte -> ILInstr)
-    | InlineI of (OperandPrefixEnv -> int -> ILInstr)
-    | InlineI8 of (OperandPrefixEnv -> int64 -> ILInstr)
-    | ShortInlineR of (OperandPrefixEnv -> single -> ILInstr)
-    | InlineR of (OperandPrefixEnv ->double -> ILInstr)
-    | InlineMethod of (OperandPrefixEnv -> ILMethodSpec * ILVarArgs -> ILInstr)
-    | InlineSig of (OperandPrefixEnv -> ILCallingSignature * ILVarArgs -> ILInstr)
-    | ShortInlineBrTarget of (OperandPrefixEnv -> sbyte -> ILInstr)
-    | InlineSwitch of (OperandPrefixEnv -> int list -> ILInstr)
-    | InlineType of (OperandPrefixEnv -> ILType -> ILInstr)
-    | InlineString of (OperandPrefixEnv -> string -> ILInstr)
-    | InlineField of (OperandPrefixEnv -> ILFieldSpec -> ILInstr)
-    | InlineTok of (OperandPrefixEnv -> ILToken -> ILInstr)
+    | InlineNone of (ILOperandPrefixEnv -> ILInstr)
+    | ShortInlineVar of (ILOperandPrefixEnv -> sbyte -> ILInstr)
+    | ShortInlineI of (ILOperandPrefixEnv -> sbyte -> ILInstr)
+    | InlineI of (ILOperandPrefixEnv -> int -> ILInstr)
+    | InlineI8 of (ILOperandPrefixEnv -> int64 -> ILInstr)
+    | ShortInlineR of (ILOperandPrefixEnv -> single -> ILInstr)
+    | InlineR of (ILOperandPrefixEnv -> double -> ILInstr)
+    | InlineMethod of (ILOperandPrefixEnv -> ILMethodSpec * ILVarArgs -> ILInstr)
+    | InlineSig of (ILOperandPrefixEnv -> ILCallingSignature * ILVarArgs -> ILInstr)
+    | ShortInlineBrTarget of (ILOperandPrefixEnv -> sbyte -> ILInstr)
+    | InlineSwitch of (ILOperandPrefixEnv -> int list -> ILInstr)
+    | InlineType of (ILOperandPrefixEnv -> ILType -> ILInstr)
+    | InlineString of (ILOperandPrefixEnv -> string -> ILInstr)
+    | InlineField of (ILOperandPrefixEnv -> ILFieldSpec -> ILInstr)
+    | InlineTok of (ILOperandPrefixEnv -> ILToken -> ILInstr)
+    | InlineVar of (ILOperandPrefixEnv -> uint16 -> ILInstr)
 
-let operandTypes = 
+    | PrefixShortInlineI of (ILOperandPrefixEnv -> uint16 -> unit)
+    | PrefixInlineNone of (ILOperandPrefixEnv -> unit)
+    | PrefixInlineType of (ILOperandPrefixEnv -> ILType -> unit)
+
+let OneByteDecoders = 
     [|
         InlineNone(noPrefixes AI_nop)//byte OperandType.InlineNone           // nop
         InlineNone(noPrefixes I_break)//byte OperandType.InlineNone           // break
@@ -1346,19 +1355,142 @@ let operandTypes =
         NoDecoder
     |]
 
-let readILOpCode (ilReader: byref<BlobReader>) : ILOpCode =
-    let opCode = int (ilReader.ReadByte())
-    if opCode = 0xfe then LanguagePrimitives.EnumOfValue(uint16 (0xfe00 + int (ilReader.ReadByte())))
-    else LanguagePrimitives.EnumOfValue(uint16 opCode)
+let TwoByteDecoders =
+    [|
+        InlineNone(noPrefixes I_arglist)//(byte)OperandType.InlineNone,           // arglist           (0xfe 0x00)
+        InlineNone(noPrefixes AI_ceq)//(byte)OperandType.InlineNone,           // ceq
+        InlineNone(noPrefixes AI_cgt)//(byte)OperandType.InlineNone,           // cgt
+        InlineNone(noPrefixes AI_cgt_un)//(byte)OperandType.InlineNone,           // cgt.un
+        InlineNone(noPrefixes AI_clt)//(byte)OperandType.InlineNone,           // clt
+        InlineNone(noPrefixes AI_clt_un)//(byte)OperandType.InlineNone,           // clt.un
+        InlineMethod(noPrefixes (fun (ilMethSpec, _) -> I_ldftn(ilMethSpec)))//(byte)OperandType.InlineMethod,         // ldftn
+        InlineMethod(noPrefixes (fun (ilMethSpec, _) -> I_ldvirtftn(ilMethSpec)))//(byte)OperandType.InlineMethod,         // ldvirtftn
+        NoDecoder
+        InlineVar(noPrefixes (fun index -> I_ldarg(index)))//(byte)OperandType.InlineVar,            // ldarg
+        InlineVar(noPrefixes (fun index -> I_ldarga(index)))//(byte)OperandType.InlineVar,            // ldarga
+        InlineVar(noPrefixes (fun index -> I_starg(index)))//(byte)OperandType.InlineVar,            // starg
+        InlineVar(noPrefixes (fun index -> I_ldloc(index)))//(byte)OperandType.InlineVar,            // ldloc
+        InlineVar(noPrefixes (fun index -> I_ldloca(index)))//(byte)OperandType.InlineVar,            // ldloca
+        InlineVar(noPrefixes (fun index -> I_stloc(index)))//(byte)OperandType.InlineVar,            // stloc
+        InlineNone(noPrefixes I_localloc)//(byte)OperandType.InlineNone,           // localloc
+        NoDecoder
+        InlineNone(noPrefixes I_endfilter)//(byte)OperandType.InlineNone,           // endfilter
+        PrefixShortInlineI(fun prefixes value -> prefixes.al <- match value with | 1us -> Unaligned1 | 2us -> Unaligned2 | 4us -> Unaligned4 | _ -> (* possible warning? *) Aligned)//(byte)OperandType.ShortInlineI,         // unaligned.
+        PrefixInlineNone(fun prefixes -> prefixes.vol <- Volatile)//(byte)OperandType.InlineNone,           // volatile.
+        PrefixInlineNone(fun prefixes -> prefixes.tl <- Tailcall)//(byte)OperandType.InlineNone,           // tail.
+        InlineType(noPrefixes (fun ilType -> I_initobj(ilType)))//(byte)OperandType.InlineType,           // initobj
+        PrefixInlineType(fun prefixes ilType -> prefixes.constrained <- Some(ilType))//(byte)OperandType.InlineType,           // constrained.
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_cpblk(ilAlignment, ilVolatility)))//(byte)OperandType.InlineNone,           // cpblk
+        InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_initblk(ilAlignment, ilVolatility)))//(byte)OperandType.InlineNone,           // initblk
+        NoDecoder
+        InlineNone(noPrefixes I_rethrow)//(byte)OperandType.InlineNone,           // rethrow
+        NoDecoder
+        InlineType(noPrefixes (fun ilType -> I_sizeof(ilType)))//(byte)OperandType.InlineType,           // sizeof
+        InlineNone(noPrefixes I_refanytype)//(byte)OperandType.InlineNone,           // refanytype
+        PrefixInlineNone(fun prefixes -> prefixes.ro <- ReadonlyAddress)//(byte)OperandType.InlineNone,           // readonly.         (0xfe 0x1e)
+    |]
+
+let readILOperandDecoder (ilReader: byref<BlobReader>) : ILOperandDecoder =
+    let operation = int (ilReader.ReadByte())
+    if operation = 0xfe then TwoByteDecoders.[int (ilReader.ReadByte())]
+    else OneByteDecoders.[operation]
 
 let readILInstrs (cenv: cenv) (ilReader: byref<BlobReader>) =
     let mdReader = cenv.MetadataReader
 
     let instrs = ResizeArray()
+
+    let prefixes =
+        {
+            al = Aligned
+            tl = Normalcall
+            vol = Nonvolatile
+            ro = NormalAddress
+            constrained = None
+        }
     
     while ilReader.RemainingBytes > 0 do
-        let opCode = readILOpCode &ilReader
-        ()
+        match readILOperandDecoder &ilReader with
+        | PrefixInlineNone(f) -> f prefixes
+        | PrefixShortInlineI(f) -> f prefixes (ilReader.ReadUInt16())
+        | PrefixInlineType(f) ->
+            let token = ilReader.ReadInt32()
+            let handle = MetadataTokens.EntityHandle(token)
+            let ilType = readILType cenv handle
+            f prefixes ilType
+
+        | decoder ->
+            let instr =
+                match decoder with
+                | NoDecoder -> failwith "Bad IL reading format"
+                | InlineNone(f) -> f prefixes
+                | ShortInlineVar(f) -> f prefixes (ilReader.ReadSByte())
+                | ShortInlineI(f) -> f prefixes (ilReader.ReadSByte())
+                | InlineI(f) -> f prefixes (ilReader.ReadInt32())
+                | InlineI8(f) -> f prefixes (ilReader.ReadInt64())
+                | ShortInlineR(f) -> f prefixes (ilReader.ReadSingle())
+                | InlineR(f) -> f prefixes (ilReader.ReadDouble())
+
+                | InlineMethod(f) ->
+                    let handle = MetadataTokens.EntityHandle(ilReader.ReadInt32())
+                    let ilMethSpec = readILMethodSpec cenv handle
+                    let ilVarArgs =
+                        match ilMethSpec.GenericArgs with
+                        | [] -> None
+                        | xs -> Some(xs)
+                    f prefixes (ilMethSpec, ilVarArgs)
+
+                | InlineSig(f) ->
+                    let handle = MetadataTokens.EntityHandle(ilReader.ReadInt32())
+                    let ilMethSpec = readILMethodSpec cenv handle
+                    let ilVarArgs =
+                        match ilMethSpec.GenericArgs with
+                        | [] -> None
+                        | xs -> Some(xs)
+                    f prefixes (ilMethSpec.MethodRef.CallingSignature, ilVarArgs)
+
+                | ShortInlineBrTarget(f) -> f prefixes (ilReader.ReadSByte())
+
+                | InlineSwitch(f) ->
+                    let deltas = Array.zeroCreate (ilReader.ReadInt32())
+                    for i = 0 to deltas.Length - 1 do deltas.[i] <- ilReader.ReadInt32()
+                    f prefixes (deltas |> List.ofArray)
+
+                | InlineType(f) ->
+                    let handle = MetadataTokens.EntityHandle(ilReader.ReadInt32())
+                    let ilType = readILType cenv handle
+                    f prefixes ilType
+                    
+                | InlineString(f) ->
+                    let handle = MetadataTokens.Handle(ilReader.ReadInt32())
+                    let value = mdReader.GetString(StringHandle.op_Explicit(handle))
+                    f prefixes value
+
+                | InlineField(f) ->
+                    let handle = MetadataTokens.EntityHandle(ilReader.ReadInt32())
+                    let ilFieldSpec = readILFieldSpec cenv handle
+                    f prefixes ilFieldSpec
+
+                | InlineTok(f) ->
+                    let handle = MetadataTokens.EntityHandle(ilReader.ReadInt32())
+
+                    let ilToken =
+                        match handle.Kind with
+                        | HandleKind.MethodDefinition
+                        | HandleKind.MemberReference -> ILToken.ILMethod(readILMethodSpec cenv handle)
+                        | HandleKind.FieldDefinition -> ILToken.ILField(readILFieldSpec cenv handle)
+                        | HandleKind.TypeDefinition
+                        | HandleKind.TypeReference
+                        | HandleKind.TypeSpecification -> ILToken.ILType(readILType cenv handle)
+                        | _ -> failwithf "Invalid Handle Kind: %A" handle.Kind
+
+                    f prefixes ilToken
+
+                | InlineVar(f) -> f prefixes (ilReader.ReadUInt16())
+                | _ -> failwith "Incorrect IL reading decoder at this point"
+
+            instrs.Add(instr)          
+
     instrs.ToArray()
 
 // --------------------------------------------------------------------
@@ -1477,7 +1609,7 @@ let readILMethodDef (cenv: cenv) (methDefHandle: MethodDefinitionHandle) =
         metadataIndex = NoMetadataIdx
     )
 
-let readILFieldDef (cenv: cenv) (ilTypeDefLayout: ILTypeDefLayout) (fieldDefHandle: FieldDefinitionHandle) =
+let readILFieldDef (cenv: cenv) (fieldDefHandle: FieldDefinitionHandle) : ILFieldDef =
     let mdReader = cenv.MetadataReader
 
     let fieldDef = mdReader.GetFieldDefinition(fieldDefHandle)
@@ -1497,9 +1629,9 @@ let readILFieldDef (cenv: cenv) (ilTypeDefLayout: ILTypeDefLayout) (fieldDefHand
 
     let offset =
         let isStatic = int (fieldDef.Attributes &&& FieldAttributes.Static) <> 0
-        let hasLayout = (match ilTypeDefLayout with ILTypeDefLayout.Explicit _ -> true | _ -> false)
-        if hasLayout && not isStatic then
-            Some(fieldDef.GetOffset())
+        if not isStatic then
+            let offset = fieldDef.GetOffset()
+            if offset = -1 then None else Some(offset)
         else
             None
             
@@ -1521,11 +1653,52 @@ let readILFieldDef (cenv: cenv) (ilTypeDefLayout: ILTypeDefLayout) (fieldDefHand
         metadataIndex = NoMetadataIdx
     )
 
-let readILFieldDefs (cenv: cenv) ilTypeDefLayout (fieldDefHandles: FieldDefinitionHandleCollection) =
+let readILFieldSpec (cenv: cenv) (handle: EntityHandle) : ILFieldSpec =
+    let mdReader = cenv.MetadataReader
+
+    match handle.Kind with
+    | HandleKind.FieldDefinition ->
+        let fieldDef = mdReader.GetFieldDefinition(FieldDefinitionHandle.op_Explicit(handle))
+
+        let declaringILType = readILTypeFromTypeDefinition cenv (fieldDef.GetDeclaringType())
+
+        let ilFieldRef =
+            {
+                DeclaringTypeRef = declaringILType.TypeRef
+                Name = mdReader.GetString(fieldDef.Name)
+                Type = fieldDef.DecodeSignature(cenv.SignatureTypeProvider, ())
+            }
+
+        {
+            FieldRef = ilFieldRef
+            DeclaringType = declaringILType
+        }
+
+    | HandleKind.MemberReference ->
+        let memberRef = mdReader.GetMemberReference(MemberReferenceHandle.op_Explicit(handle))
+
+        let declaringType = readILType cenv memberRef.Parent
+
+        let ilFieldRef =
+            {
+                DeclaringTypeRef = declaringType.TypeRef
+                Name = mdReader.GetString(memberRef.Name)
+                Type = memberRef.DecodeFieldSignature(cenv.SignatureTypeProvider, ())
+            }
+
+        {
+            FieldRef = ilFieldRef
+            DeclaringType = declaringType
+        }
+
+    | _ -> failwithf "Invalid Handle Kind: %A" handle.Kind
+
+
+let readILFieldDefs (cenv: cenv) (fieldDefHandles: FieldDefinitionHandleCollection) =
     let f =
         lazy
             fieldDefHandles
-            |> Seq.map (readILFieldDef cenv ilTypeDefLayout)
+            |> Seq.map (readILFieldDef cenv)
             |> List.ofSeq
     mkILFieldsLazy f
 
@@ -1636,7 +1809,7 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
         extends = extends,
         methods = methods,
         nestedTypes = nestedTypes,
-        fields = readILFieldDefs cenv ilTypeDefLayout (typeDef.GetFields()),
+        fields = readILFieldDefs cenv (typeDef.GetFields()),
         methodImpls = mkILMethodImpls [], // TODO
         events = mkILEvents [], // TODO
         properties = readILPropertyDefs cenv (typeDef.GetProperties()),
