@@ -35,6 +35,8 @@ type cenv(
     let typeRefCache = Dictionary()
     let typeSpecCache = Dictionary()
     let asmRefCache = Dictionary()
+    let memberRefToILMethSpecCache = Dictionary()
+    let methDefToILMethSpecCache = Dictionary()
 
     let isILTypeCacheEnabled = true
 
@@ -62,6 +64,12 @@ type cenv(
 
     member __.CacheILAssemblyRef(asmRefHandle: AssemblyReferenceHandle, ilAsmRef: ILAssemblyRef) =
         asmRefCache.Add(asmRefHandle, ilAsmRef)
+
+    member __.CacheILMethodSpec(memberRefHandle: MemberReferenceHandle, ilMethSpec: ILMethodSpec) =
+        memberRefToILMethSpecCache.Add(memberRefHandle, ilMethSpec)
+
+    member __.CacheILMethodSpec(methDefHandle: MethodDefinitionHandle, ilMethSpec: ILMethodSpec) =
+        methDefToILMethSpecCache.Add(methDefHandle, ilMethSpec)
         
     member __.TryGetCachedILType(typeDefHandle) =
         match typeDefCache.TryGetValue(typeDefHandle) with
@@ -81,6 +89,16 @@ type cenv(
     member __.TryGetCachedILAssemblyRef(asmRefHandle: AssemblyReferenceHandle) =
         match asmRefCache.TryGetValue(asmRefHandle) with
         | true, ilAsmRef -> ValueSome(ilAsmRef)
+        | _ -> ValueNone
+
+    member __.TryGetCachedILMethodSpec(memberRefHandle) =
+        match memberRefToILMethSpecCache.TryGetValue(memberRefHandle) with
+        | true, ilMethSpec -> ValueSome(ilMethSpec)
+        | _ -> ValueNone
+
+    member __.TryGetCachedILMethodSpec(methDefHandle) =
+        match methDefToILMethSpecCache.TryGetValue(methDefHandle) with
+        | true, ilMethSpec -> ValueSome(ilMethSpec)
         | _ -> ValueNone
 
 let mkVersionTuple (v: Version) =
@@ -697,46 +715,71 @@ let rec readDeclaringTypeInfoFromMemberOrMethod (cenv: cenv) (handle: EntityHand
     | _ ->
         failwithf "Invalid Entity Handle Kind: %A" handle.Kind
 
+let readILMethodSpecFromMemberReferencedUncached (cenv: cenv) (memberRefHandle: MemberReferenceHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let memberRef = mdReader.GetMemberReference(memberRefHandle)
+    let si = memberRef.DecodeMethodSignature(cenv.SignatureTypeProvider, ())
+
+    let name = mdReader.GetString(memberRef.Name)
+    let enclILTy = readILType cenv memberRef.Parent
+    let ilCallingConv = mkILCallingConv si.Header
+    let genericArity = 0
+
+    let ilMethodRef = ILMethodRef.Create(enclILTy.TypeRef, ilCallingConv, name, genericArity, si.ParameterTypes |> List.ofSeq, si.ReturnType)
+
+    ILMethodSpec.Create(enclILTy, ilMethodRef, [])
+
+let readILMethodSpecFromMemberReference (cenv: cenv) (memberRefHandle: MemberReferenceHandle) =
+    match cenv.TryGetCachedILMethodSpec(memberRefHandle) with
+    | ValueSome(ilMethSpec) -> ilMethSpec
+    | _ ->
+        let ilMethSpec = readILMethodSpecFromMemberReferencedUncached cenv memberRefHandle
+        cenv.CacheILMethodSpec(memberRefHandle, ilMethSpec)
+        ilMethSpec
+
+let readILMethodSpecFromMethodDefinitionUncached (cenv: cenv) (methDefHandle: MethodDefinitionHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let methodDef = mdReader.GetMethodDefinition(methDefHandle)
+    let si = methodDef.DecodeSignature(cenv.SignatureTypeProvider, ())
+
+    let name = mdReader.GetString(methodDef.Name)
+    let enclILTy = readILTypeFromTypeDefinition cenv (methodDef.GetDeclaringType())
+    let ilCallingConv =
+        if int (methodDef.Attributes &&& MethodAttributes.Static) <> 0 then
+            ILCallingConv.Static
+        else
+            ILCallingConv.Instance
+    let genericArity = si.GenericParameterCount
+
+    let ilMethodRef = ILMethodRef.Create(enclILTy.TypeRef, ilCallingConv, name, genericArity, si.ParameterTypes |> List.ofSeq, si.ReturnType)
+
+    let ilGenericArgs =
+        // TODO: Confirm if this is right?
+        let enclILGenericArgCount = enclILTy.GenericArgs.Length
+        methodDef.GetGenericParameters()
+        |> Seq.mapi (fun i _ -> mkILTyvarTy (uint16 (enclILGenericArgCount + i)))
+        |> List.ofSeq
+
+    ILMethodSpec.Create(enclILTy, ilMethodRef, ilGenericArgs)
+
+let readILMethodSpecFromMethodDefinition (cenv: cenv) (methDefHandle: MethodDefinitionHandle) =
+    match cenv.TryGetCachedILMethodSpec(methDefHandle) with
+    | ValueSome(ilMethSpec) -> ilMethSpec
+    | _ ->
+        let ilMethSpec = readILMethodSpecFromMethodDefinitionUncached cenv methDefHandle
+        cenv.CacheILMethodSpec(methDefHandle, ilMethSpec)
+        ilMethSpec
+
 let rec readILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
     let mdReader = cenv.MetadataReader
     match handle.Kind with
     | HandleKind.MemberReference ->
-        let memberRef = mdReader.GetMemberReference(MemberReferenceHandle.op_Explicit(handle))
-        let si = memberRef.DecodeMethodSignature(cenv.SignatureTypeProvider, ())
-        
-        let name = mdReader.GetString(memberRef.Name)
-        let enclILTy = readILType cenv memberRef.Parent
-        let ilCallingConv = mkILCallingConv si.Header
-        let genericArity = 0
-
-        let ilMethodRef = ILMethodRef.Create(enclILTy.TypeRef, ilCallingConv, name, genericArity, si.ParameterTypes |> List.ofSeq, si.ReturnType)
-
-        ILMethodSpec.Create(enclILTy, ilMethodRef, [])
+        readILMethodSpecFromMemberReference cenv (MemberReferenceHandle.op_Explicit(handle))
 
     | HandleKind.MethodDefinition ->
-        let methodDefHandle = MethodDefinitionHandle.op_Explicit(handle)
-        let methodDef = mdReader.GetMethodDefinition(methodDefHandle)
-        let si = methodDef.DecodeSignature(cenv.SignatureTypeProvider, ())
-
-        let name = mdReader.GetString(methodDef.Name)
-        let enclILTy = readILTypeFromTypeDefinition cenv (methodDef.GetDeclaringType())
-        let ilCallingConv =
-            if int (methodDef.Attributes &&& MethodAttributes.Static) <> 0 then
-                ILCallingConv.Static
-            else
-                ILCallingConv.Instance
-        let genericArity = si.GenericParameterCount
-
-        let ilMethodRef = ILMethodRef.Create(enclILTy.TypeRef, ilCallingConv, name, genericArity, si.ParameterTypes |> List.ofSeq, si.ReturnType)
-
-        let ilGenericArgs =
-            // TODO: Confirm if this is right?
-            let enclILGenericArgCount = enclILTy.GenericArgs.Length
-            methodDef.GetGenericParameters()
-            |> Seq.mapi (fun i _ -> mkILTyvarTy (uint16 (enclILGenericArgCount + i)))
-            |> List.ofSeq
-        
-        ILMethodSpec.Create(enclILTy, ilMethodRef, ilGenericArgs)
+        readILMethodSpecFromMethodDefinition cenv (MethodDefinitionHandle.op_Explicit(handle))
 
     | HandleKind.MethodSpecification ->
         let methodSpec = mdReader.GetMethodSpecification(MethodSpecificationHandle.op_Explicit(handle))
