@@ -1790,6 +1790,71 @@ let readILPropertyDefs (cenv: cenv) (propDefHandles: PropertyDefinitionHandleCol
             |> List.ofSeq
     mkILPropertiesLazy f
 
+let readILOverridesSpec (cenv: cenv) (handle: EntityHandle) =
+    let ilMethSpec = readILMethodSpec cenv handle
+    OverridesSpec(ilMethSpec.MethodRef, ilMethSpec.DeclaringType)
+
+let readILMethodImpl (cenv: cenv) (methImplHandle: MethodImplementationHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let methImpl = mdReader.GetMethodImplementation(methImplHandle)
+
+    {
+        OverrideBy = readILMethodSpec cenv methImpl.MethodBody
+        Overrides = readILOverridesSpec cenv methImpl.MethodDeclaration
+    }
+
+let readILMethodImpls (cenv: cenv) (methImplHandles: MethodImplementationHandleCollection) =
+    let f =
+        lazy
+            methImplHandles
+            |> Seq.map (readILMethodImpl cenv)
+            |> List.ofSeq
+    mkILMethodImplsLazy f
+
+let readILMethodRef (cenv: cenv) (handle: EntityHandle) =
+    (readILMethodSpec cenv handle).MethodRef
+
+let tryReadILMethodRef (cenv: cenv) (handle: EntityHandle) =
+    if handle.IsNil then None
+    else
+        readILMethodRef cenv handle
+        |> Some
+
+let tryReadILType (cenv: cenv) (handle: EntityHandle) =
+    if handle.IsNil then None
+    else
+        readILType cenv handle
+        |> Some
+
+let readILEventDef (cenv: cenv) (eventDefHandle: EventDefinitionHandle) =
+    let mdReader = cenv.MetadataReader
+
+    let eventDef = mdReader.GetEventDefinition(eventDefHandle)
+    let accessors = eventDef.GetAccessors()
+
+    let otherMethods = accessors.Others |> Seq.map (fun h -> readILMethodRef cenv (MethodDefinitionHandle.op_Implicit(h))) |> List.ofSeq
+
+    ILEventDef(
+        eventType = tryReadILType cenv eventDef.Type,
+        name = mdReader.GetString(eventDef.Name),
+        attributes = eventDef.Attributes,
+        addMethod = readILMethodRef cenv (MethodDefinitionHandle.op_Implicit(accessors.Adder)),
+        removeMethod = readILMethodRef cenv (MethodDefinitionHandle.op_Implicit(accessors.Remover)),
+        fireMethod = tryReadILMethodRef cenv (MethodDefinitionHandle.op_Implicit(accessors.Raiser)),
+        otherMethods = otherMethods,
+        customAttrsStored = readILAttributesStored cenv (eventDef.GetCustomAttributes()),
+        metadataIndex = NoMetadataIdx
+    )
+ 
+let readILEventDefs (cenv: cenv) (eventDefHandles: EventDefinitionHandleCollection) =
+    let f =
+        lazy
+            eventDefHandles
+            |> Seq.map (readILEventDef cenv)
+            |> List.ofSeq
+    mkILEventsLazy f
+
 let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
     let mdReader = cenv.MetadataReader
 
@@ -1850,8 +1915,8 @@ let rec readILTypeDef (cenv: cenv) (typeDefHandle: TypeDefinitionHandle) =
         methods = methods,
         nestedTypes = nestedTypes,
         fields = readILFieldDefs cenv (typeDef.GetFields()),
-        methodImpls = mkILMethodImpls [], // TODO
-        events = mkILEvents [], // TODO
+        methodImpls = readILMethodImpls cenv (typeDef.GetMethodImplementations()),
+        events = readILEventDefs cenv (typeDef.GetEvents()),
         properties = readILPropertyDefs cenv (typeDef.GetProperties()),
         securityDeclsStored = readILSecurityDeclsStored cenv (typeDef.GetDeclarativeSecurityAttributes()),
         customAttrsStored = readILAttributesStored cenv (typeDef.GetCustomAttributes()),
