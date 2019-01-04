@@ -1209,7 +1209,7 @@ let OneByteDecoders =
         InlineNone(noPrefixes (AI_conv(DT_R8)))//byte OperandType.InlineNone           // conv.r8
         InlineNone(noPrefixes (AI_conv(DT_U4)))//byte OperandType.InlineNone           // conv.u4
         InlineNone(noPrefixes (AI_conv(DT_U8)))//byte OperandType.InlineNone           // conv.u8
-        InlineMethod(tailPrefix (fun ilTailcall (ilMethSpec, ilVarArgs) -> I_callvirt(ilTailcall, ilMethSpec, ilVarArgs)))//byte OperandType.InlineMethod         // callvirt
+        InlineMethod(constraintOrTailPrefix (fun (ilConstraint, ilTailcall) (ilMethSpec, ilVarArgs) -> match ilConstraint with | Some(ilType) -> I_callconstraint(ilTailcall, ilType, ilMethSpec, ilVarArgs) | _ -> I_callvirt(ilTailcall, ilMethSpec, ilVarArgs)))//byte OperandType.InlineMethod         // callvirt
         InlineType(noPrefixes (fun ilType -> I_cpobj(ilType)))//byte OperandType.InlineType           // cpobj
         InlineType(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) ilType -> I_ldobj(ilAlignment, ilVolatility, ilType)))//byte OperandType.InlineType           // ldobj
         InlineString(noPrefixes (fun value -> I_ldstr(value)))//byte OperandType.InlineString         // ldstr
@@ -1414,8 +1414,7 @@ let readILInstrs (cenv: cenv) (ilReader: byref<BlobReader>) =
         | PrefixInlineNone(f) -> f prefixes
         | PrefixShortInlineI(f) -> f prefixes (ilReader.ReadUInt16())
         | PrefixInlineType(f) ->
-            let token = ilReader.ReadInt32()
-            let handle = MetadataTokens.EntityHandle(token)
+            let handle = MetadataTokens.EntityHandle(ilReader.ReadInt32())
             let ilType = readILType cenv handle
             f prefixes ilType
 
@@ -1463,7 +1462,11 @@ let readILInstrs (cenv: cenv) (ilReader: byref<BlobReader>) =
                     
                 | InlineString(f) ->
                     let handle = MetadataTokens.Handle(ilReader.ReadInt32())
-                    let value = mdReader.GetString(StringHandle.op_Explicit(handle))
+                    let value =
+                        match handle.Kind with
+                        | HandleKind.String -> mdReader.GetString(StringHandle.op_Explicit(handle))
+                        | HandleKind.UserString -> mdReader.GetUserString(UserStringHandle.op_Explicit(handle))
+                        | _ -> failwithf "Invalid Handle Kind: %A" handle.Kind
                     f prefixes value
 
                 | InlineField(f) ->
@@ -1489,7 +1492,14 @@ let readILInstrs (cenv: cenv) (ilReader: byref<BlobReader>) =
                 | InlineVar(f) -> f prefixes (ilReader.ReadUInt16())
                 | _ -> failwith "Incorrect IL reading decoder at this point"
 
-            instrs.Add(instr)          
+            instrs.Add(instr)
+
+            // Reset prefixes
+            prefixes.al <- Aligned
+            prefixes.tl <- Normalcall
+            prefixes.vol <- Nonvolatile
+            prefixes.ro <- NormalAddress
+            prefixes.constrained <- None
 
     instrs.ToArray()
 
