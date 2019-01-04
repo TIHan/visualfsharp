@@ -679,6 +679,24 @@ let readILGenericParameterDefs (cenv: cenv) (genParamHandles: GenericParameterHa
     |> Seq.map (readILGenericParameterDef cenv)
     |> List.ofSeq
 
+let rec readDeclaringTypeInfoFromMemberOrMethod (cenv: cenv) (handle: EntityHandle) : string * ILType =
+    let mdReader = cenv.MetadataReader
+    match handle.Kind with
+    | HandleKind.MemberReference ->
+        let memberRef = mdReader.GetMemberReference(MemberReferenceHandle.op_Explicit(handle))
+        (mdReader.GetString(memberRef.Name), readILType cenv memberRef.Parent)
+
+    | HandleKind.MethodDefinition ->
+        let methodDef = mdReader.GetMethodDefinition(MethodDefinitionHandle.op_Explicit(handle))
+        (mdReader.GetString(methodDef.Name), readILTypeFromTypeDefinition cenv (methodDef.GetDeclaringType()))
+
+    | HandleKind.MethodSpecification ->
+        let methodSpec = mdReader.GetMethodSpecification(MethodSpecificationHandle.op_Explicit(handle))
+        readDeclaringTypeInfoFromMemberOrMethod cenv methodSpec.Method
+
+    | _ ->
+        failwithf "Invalid Entity Handle Kind: %A" handle.Kind
+
 let rec readILMethodSpec (cenv: cenv) (handle: EntityHandle) : ILMethodSpec =
     let mdReader = cenv.MetadataReader
     match handle.Kind with
@@ -1085,6 +1103,7 @@ type ILOperandDecoder =
     | InlineMethod of (ILOperandPrefixEnv -> ILMethodSpec * ILVarArgs -> ILInstr)
     | InlineSig of (ILOperandPrefixEnv -> ILCallingSignature * ILVarArgs -> ILInstr)
     | ShortInlineBrTarget of (ILOperandPrefixEnv -> sbyte -> ILInstr)
+    | InlineBrTarget of (ILOperandPrefixEnv -> int -> ILInstr)
     | InlineSwitch of (ILOperandPrefixEnv -> int list -> ILInstr)
     | InlineType of (ILOperandPrefixEnv -> ILType -> ILInstr)
     | InlineString of (ILOperandPrefixEnv -> string -> ILInstr)
@@ -1154,19 +1173,19 @@ let OneByteDecoders =
         ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bgt_un, int value)))//byte OperandType.ShortInlineBrTarget  // bgt.un.s
         ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_ble_un, int value)))//byte OperandType.ShortInlineBrTarget  // ble.un.s
         ShortInlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_blt_un, int value)))//byte OperandType.ShortInlineBrTarget  // blt.un.s
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
-        NoDecoder
+        InlineBrTarget(noPrefixes (fun value -> I_br(value))) // br
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_brfalse, value))) // brfalse
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_brtrue, value))) // brtrue
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_beq, value))) // beq
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bge, value))) // bge
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bgt, value))) // bgt
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_ble, value))) // ble
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_blt, value))) // blt
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bne_un, value))) // bne.un
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bge_un, value))) // bge.un
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_bgt_un, value))) // bgt.un
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_ble_un, value))) // ble.un
+        InlineBrTarget(noPrefixes (fun value -> I_brcmp(BI_blt_un, value))) // blt.un
         InlineSwitch(noPrefixes (fun values -> ILInstr.I_switch(values)))//byte OperandType.InlineSwitch         // switch
         InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_I1)))//byte OperandType.InlineNone           // ldind.i1
         InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_ldind(ilAlignment, ilVolatility, DT_U1)))//byte OperandType.InlineNone           // ldind.u1
@@ -1319,7 +1338,7 @@ let OneByteDecoders =
         InlineNone(noPrefixes AI_sub_ovf)//byte OperandType.InlineNone           // sub.ovf
         InlineNone(noPrefixes AI_sub_ovf_un)//byte OperandType.InlineNone           // sub.ovf.un
         InlineNone(noPrefixes I_endfinally)//byte OperandType.InlineNone           // endfinally
-        NoDecoder
+        InlineBrTarget(noPrefixes (fun value -> I_leave(value))) // leave
         ShortInlineBrTarget(noPrefixes (fun value -> I_leave(int value)))//byte OperandType.ShortInlineBrTarget  // leave.s
         InlineNone(volatileOrUnalignedPrefix (fun (ilAlignment, ilVolatility) -> I_stind(ilAlignment, ilVolatility, DT_I)))//byte OperandType.InlineNone           // stind.i
         InlineNone(noPrefixes (AI_conv(DT_U)))//byte OperandType.InlineNone           // conv.u            (0xe0)
@@ -1432,12 +1451,22 @@ let readILInstrs (cenv: cenv) (ilReader: byref<BlobReader>) =
 
                 | InlineMethod(f) ->
                     let handle = MetadataTokens.EntityHandle(ilReader.ReadInt32())
-                    let ilMethSpec = readILMethodSpec cenv handle
-                    let ilVarArgs =
-                        match ilMethSpec.GenericArgs with
-                        | [] -> None
-                        | xs -> Some(xs)
-                    f prefixes (ilMethSpec, ilVarArgs)
+
+                    match readDeclaringTypeInfoFromMemberOrMethod cenv handle with
+                    | name, ILType.Array(shape, ilType) ->
+                        match name with
+                        | "Get" -> I_ldelem_any(shape, ilType)
+                        | "Set" -> I_stelem_any(shape, ilType)
+                        | "Address" -> I_ldelema(prefixes.ro, false, shape, ilType)
+                        | ".ctor" -> I_newarr(shape, ilType)
+                        | _ -> failwith "Bad method on array type"
+                    | _ ->
+                        let ilMethSpec = readILMethodSpec cenv handle
+                        let ilVarArgs =
+                            match ilMethSpec.GenericArgs with
+                            | [] -> None
+                            | xs -> Some(xs)
+                        f prefixes (ilMethSpec, ilVarArgs)
 
                 | InlineSig(f) ->
                     let handle = MetadataTokens.EntityHandle(ilReader.ReadInt32())
@@ -1449,6 +1478,7 @@ let readILInstrs (cenv: cenv) (ilReader: byref<BlobReader>) =
                     f prefixes (ilMethSpec.MethodRef.CallingSignature, ilVarArgs)
 
                 | ShortInlineBrTarget(f) -> f prefixes (ilReader.ReadSByte())
+                | InlineBrTarget(f) -> f prefixes (ilReader.ReadInt32())
 
                 | InlineSwitch(f) ->
                     let deltas = Array.zeroCreate (ilReader.ReadInt32())
