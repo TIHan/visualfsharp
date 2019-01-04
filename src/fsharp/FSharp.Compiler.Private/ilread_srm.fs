@@ -2047,6 +2047,16 @@ let readModuleDef ilGlobals (peReader: PEReader) metadataOnlyFlag =
         localSigTyProvider.cenv <- cenv
         cenv
 
+    let ilAsmRefs =
+        let asmRefs = mdReader.AssemblyReferences
+
+        let arr = Array.zeroCreate asmRefs.Count
+        let mutable i = 0
+        for asmRefHandle in asmRefs do
+            arr.[i] <- readILAssemblyRefFromAssemblyReference cenv asmRefHandle
+            i <- i + 1
+        arr |> List.ofArray
+
     { Manifest = Some(readILAssemblyManifest cenv entryPointToken)
       CustomAttrsStored = readILAttributesStored cenv (moduleDef.GetCustomAttributes())
       MetadataIndex = 1 // TODO: Is this right?
@@ -2068,16 +2078,18 @@ let readModuleDef ilGlobals (peReader: PEReader) metadataOnlyFlag =
       ImageBase = imageBaseReal
       MetadataVersion = ilMetadataVersion
       Resources = mkILResources [] // TODO //seekReadManifestResources ctxt mdv pectxtEager pevEager
-    }  
+    }, ilAsmRefs
 
 let openILModuleReader fileName (ilReaderOptions: Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILReaderOptions) =
     let peReader = new PEReader(File.ReadAllBytes(fileName).ToImmutableArray())
+
+    let ilModuleDef, ilAsmRefs = readModuleDef ilReaderOptions.ilGlobals peReader ilReaderOptions.metadataOnly
     { new Microsoft.FSharp.Compiler.AbstractIL.ILBinaryReader.ILModuleReader with
 
-        member __.ILModuleDef = 
-            readModuleDef ilReaderOptions.ilGlobals peReader ilReaderOptions.metadataOnly
+        member __.ILModuleDef = ilModuleDef
 
-        member __.ILAssemblyRefs = []
+        member __.ILAssemblyRefs = ilAsmRefs
+            
 
       interface IDisposable with
 
