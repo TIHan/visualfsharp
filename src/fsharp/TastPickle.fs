@@ -110,7 +110,7 @@ type NodeOutTable<'Data,'Node> =
 
 [<NoEquality; NoComparison>]
 type WriterState = 
-  { os: ByteBuffer 
+  { os: AbstractByteBuffer 
     oscope: CcuThunk
     occus: Table<CcuReference> 
     oentities: NodeOutTable<EntityData,Entity> 
@@ -202,6 +202,9 @@ let p_bytes (s:byte[]) st =
     let len = s.Length
     p_int32 (len) st
     st.os.EmitBytes s
+
+let p_byteBuffer (abs: AbstractByteBuffer) st =
+    st.os.Write abs
 
 let p_prim_string (s:string) st = 
     let bytes = Encoding.UTF8.GetBytes s
@@ -746,7 +749,7 @@ let p_simpletyp x st = p_int (encode_simpletyp st.occus st.ostrings st.onlerefs 
 let pickleObjWithDanglingCcus inMem file g scope p x =
   let ccuNameTab,(ntycons, ntypars, nvals, nanoninfos),stringTab,pubpathTab,nlerefTab,simpleTyTab,phase1bytes =
     let st1 = 
-      { os = ByteBuffer.Create 100000 
+      { os = ChunkedByteBuffer.Create() 
         oscope=scope
         occus= Table<_>.Create "occus" 
         oentities=NodeOutTable<_,_>.Create((fun (tc:Tycon) -> tc.Stamp),(fun tc -> tc.LogicalName),(fun tc -> tc.Range),(fun osgn -> osgn),"otycons") 
@@ -767,11 +770,11 @@ let pickleObjWithDanglingCcus inMem file g scope p x =
       st1.otypars.Size,
       st1.ovals.Size,
       st1.oanoninfos.Size 
-    st1.occus, sizes, st1.ostrings, st1.opubpaths,st1.onlerefs, st1.osimpletys, st1.os.Close()
+    st1.occus, sizes, st1.ostrings, st1.opubpaths,st1.onlerefs, st1.osimpletys, st1.os
 
   let phase2bytes = 
     let st2 = 
-     { os = ByteBuffer.Create 100000 
+     { os = ChunkedByteBuffer.Create()
        oscope=scope
        occus= Table<_>.Create "occus (fake)" 
        oentities=NodeOutTable<_,_>.Create((fun (tc:Tycon) -> tc.Stamp),(fun tc -> tc.LogicalName),(fun tc -> tc.Range),(fun osgn -> osgn),"otycons") 
@@ -798,10 +801,10 @@ let pickleObjWithDanglingCcus inMem file g scope p x =
         (p_array p_encoded_pubpath) 
         (p_array p_encoded_nleref) 
         (p_array p_encoded_simpletyp) 
-        p_bytes 
+        p_byteBuffer 
         (stringTab.AsArray,pubpathTab.AsArray,nlerefTab.AsArray,simpleTyTab.AsArray,phase1bytes)
         st2
-    st2.os.Close()
+    st2.os
   phase2bytes
   
 let check (ilscope:ILScopeRef) (inMap : NodeInTable<_,_>) =

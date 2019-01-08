@@ -3,11 +3,13 @@
 /// Byte arrays
 namespace Microsoft.FSharp.Compiler.AbstractIL.Internal
 
+open System
 open System.IO
+open System.Runtime.CompilerServices
 open Internal.Utilities
 
 open Microsoft.FSharp.Compiler.AbstractIL 
-open Microsoft.FSharp.Compiler.AbstractIL.Internal 
+open Microsoft.FSharp.Compiler.AbstractIL.Internal
 
 module internal Bytes = 
     let b0 n =  (n &&& 0xFF)
@@ -30,7 +32,238 @@ module internal Bytes =
         Array.append (System.Text.Encoding.UTF8.GetBytes s) (ofInt32Array [| 0x0 |]) 
 
     let stringAsUnicodeNullTerminated (s:string) = 
-        Array.append (System.Text.Encoding.Unicode.GetBytes s) (ofInt32Array [| 0x0;0x0 |]) 
+        Array.append (System.Text.Encoding.Unicode.GetBytes s) (ofInt32Array [| 0x0;0x0 |])
+        
+[<Struct>]
+type private ChunkedByteBufferImplState =
+    {
+        position: int
+        chunkIndex: int
+        length: int
+    }
+
+[<Sealed>]
+type ChunkedByteBufferImpl =
+    
+    val mutable private state : ChunkedByteBufferImplState
+    val private chunks : ResizeArray<byte []>
+    val private chunkSize : int
+    val private buffer : byte []
+
+    new () =
+        let chunkSize = 1024 * 8 // 8k bytes
+        {
+            state = { position = 0; chunkIndex = 0; length = 0 }
+            chunks = ResizeArray([|Array.zeroCreate chunkSize|])
+            chunkSize = chunkSize
+            buffer = Array.zeroCreate 64
+        }
+
+    member this.Item 
+        with [<MethodImpl(MethodImplOptions.AggressiveInlining)>] get i =
+            this.chunks.[i / this.chunkSize].[i % this.chunkSize]
+        and [<MethodImpl(MethodImplOptions.AggressiveInlining)>] set i value =
+            this.chunks.[i / this.chunkSize].[i % this.chunkSize] <- value
+
+    member this.WriteByte(value: byte) =
+        let state = this.state
+
+        let position1 = state.position
+        let nextPosition = position1 + 1
+
+        if nextPosition >= this.chunkSize then
+            this.chunks.Add(Array.zeroCreate this.chunkSize)
+
+            let size = this.chunkSize * state.chunkIndex
+            this.[position1 + size] <- byte value
+
+            this.state <- { position = nextPosition % this.chunkSize; chunkIndex = state.chunkIndex + 1; length = state.length + 1 }
+        else
+            let data = this.chunks.[state.chunkIndex]
+            data.[position1] <- value
+
+            this.state <- { state with position = nextPosition; length = state.length + 1 }
+
+    member this.WriteUInt16(value: uint16) =
+        let state = this.state
+
+        let position1 = state.position
+        let position2 = position1 + 1
+        let nextPosition = position2 + 1
+
+        if nextPosition >= this.chunkSize then
+            this.chunks.Add(Array.zeroCreate this.chunkSize)
+
+            let size = this.chunkSize * state.chunkIndex
+            this.[position1 + size] <- byte value
+            this.[position2 + size] <- byte (value >>> 8)
+
+            this.state <- { position = nextPosition % this.chunkSize; chunkIndex = state.chunkIndex + 1; length = state.length + 2 }
+        else
+            let data = this.chunks.[state.chunkIndex]
+            data.[position1] <- byte value
+            data.[position2] <- byte (value >>> 8)
+
+            this.state <- { state with position = nextPosition; length = state.length + 2 }
+
+    member this.WriteInt(value: int) =
+        let state = this.state
+
+        let position1 = state.position
+        let position2 = position1 + 1
+        let position3 = position2 + 1
+        let position4 = position3 + 1
+        let nextPosition = position4 + 1
+
+        if nextPosition >= this.chunkSize then
+            this.chunks.Add(Array.zeroCreate this.chunkSize)
+
+            let size = this.chunkSize * state.chunkIndex
+            this.[position1 + size] <- byte value
+            this.[position2 + size] <- byte (value >>> 8)
+            this.[position3 + size] <- byte (value >>> 16)
+            this.[position4 + size] <- byte (value >>> 24)
+
+            this.state <- { position = nextPosition % this.chunkSize; chunkIndex = state.chunkIndex + 1; length = state.length + 4 }
+        else
+            let data = this.chunks.[state.chunkIndex]
+            data.[position1] <- byte value
+            data.[position2] <- byte (value >>> 8)
+            data.[position3] <- byte (value >>> 16)
+            data.[position4] <- byte (value >>> 24)
+
+            this.state <- { state with position = nextPosition; length = state.length + 4 }
+
+    member this.ByteArrayOperation(buffer: byte [], offset: int, length: int, f) =
+        let mutable remainingLength = length
+        let mutable currentOffset = offset
+
+        while remainingLength > 0 do
+            let state = this.state
+
+            let operatingLength =
+                let operatingLength = this.chunkSize - state.position
+                if remainingLength > operatingLength then operatingLength
+                else remainingLength
+
+            remainingLength <- remainingLength - operatingLength
+            currentOffset <- currentOffset + operatingLength
+
+            let data = this.chunks.[state.chunkIndex]
+            f buffer currentOffset data state.position operatingLength
+
+            let nextPosition = (state.position + operatingLength + 1) % this.chunkSize
+            if nextPosition = 0 then
+                this.chunks.Add(Array.zeroCreate this.chunkSize)
+                this.state <- { position = 0; chunkIndex = state.chunkIndex; length = state.length + operatingLength }
+            else
+                this.state <- { state with position = nextPosition; length = state.length + operatingLength }   
+
+    member this.WriteBytes(buffer: byte [], offset: int, length: int) =
+        this.ByteArrayOperation(buffer, offset, length, fun buffer offset data position length ->
+            Buffer.BlockCopy(buffer, offset, data, position, length)
+        )           
+
+    member this.Position
+        with get () = 
+            (this.chunkSize * this.state.chunkIndex) + this.state.position
+        and set value =
+            this.state <- { this.state with position = value % this.chunkSize; chunkIndex = value / this.chunkSize }
+
+    member this.Length = this.state.length
+
+    member this.CopyTo(buffer: byte [], offset: int, length: int) =       
+        if length > (this.Length - this.Position) then
+            raise (ArgumentOutOfRangeException())
+
+        this.ByteArrayOperation(buffer, offset, length, fun buffer offset data position length ->
+            Buffer.BlockCopy(data, position, buffer, offset, length)
+        )    
+
+    member this.Write(cbs: ChunkedByteBufferImpl) =
+        let cbsLengthMinusOne = cbs.Length - 1
+        let lastChunkIndex = cbsLengthMinusOne / this.chunkSize
+        let lastChunkPosition = cbsLengthMinusOne % this.chunkSize
+        for i = 0 to lastChunkIndex do
+            let chunk = cbs.chunks.[i]
+            if cbs.state.chunkIndex = i then
+                if lastChunkPosition > 0 then
+                    this.WriteBytes(chunk, 0, lastChunkPosition)
+            else
+                this.WriteBytes(chunk, 0, chunk.Length)
+
+[<AbstractClass>]
+type AbstractByteBuffer() = 
+
+    abstract EmitIntAsByte : int -> unit
+
+    abstract EmitByte : byte -> unit
+
+    abstract EmitIntsAsBytes : int [] -> unit
+
+    abstract FixupInt32 : pos: int -> int -> unit
+
+    abstract EmitInt32 : int -> unit
+
+    abstract EmitBytes : byte [] -> unit
+
+    abstract EmitInt32AsUInt16 : int -> unit
+
+    member buf.EmitBoolAsByte (b:bool) = buf.EmitIntAsByte (if b then 1 else 0)
+
+    member buf.EmitUInt16 (x:uint16) = buf.EmitInt32AsUInt16 (int32 x)
+
+    member buf.EmitInt64 x = 
+        buf.EmitInt32 (Bytes.dWw0 x)
+        buf.EmitInt32 (Bytes.dWw1 x)
+
+    abstract Position : int
+
+    abstract Length : int
+
+    abstract Write : AbstractByteBuffer -> unit
+
+[<Sealed>]
+type ChunkedByteBuffer() =
+    inherit AbstractByteBuffer()
+
+    let impl = ChunkedByteBufferImpl()
+
+    member __.Impl = impl
+
+    override __.EmitIntAsByte n = impl.WriteByte(byte n)
+
+    override __.EmitByte n = impl.WriteByte n
+
+    override __.EmitIntsAsBytes (arr: int []) =
+        for i = 0 to arr.Length - 1 do
+            impl.WriteByte (byte arr.[i])
+
+    override __.FixupInt32 pos n =
+        let lastPos = impl.Position
+        impl.Position <- pos
+        impl.WriteInt n
+        impl.Position <- lastPos
+
+    override __.EmitInt32 n = impl.WriteInt n
+
+    override __.EmitBytes bytes = impl.WriteBytes(bytes, 0, bytes.Length)
+    
+    override __.EmitInt32AsUInt16 n =
+        impl.WriteByte(Bytes.b0 n |> byte)
+        impl.WriteByte(Bytes.b1 n |> byte)
+
+    override __.Position = impl.Position
+
+    override __.Length = impl.Length
+
+    override __.Write (abb: AbstractByteBuffer) =
+        match abb with
+        | :? ChunkedByteBuffer as cbb ->
+            cbb.Impl.Write(cbb.Impl)
+        | _ -> failwith "not supported"
+
+    static member Create() = ChunkedByteBuffer()
 
 type internal ByteStream = 
     { bytes: byte[] 
@@ -129,8 +362,15 @@ type internal ByteBuffer =
 
     member buf.Position = buf.bbCurrent
 
+    member buf.WriteChunkedByteBuffer (cbb: ChunkedByteBuffer) =
+        let length = cbb.Length
+        let newSize = buf.bbCurrent + length
+        buf.Ensure newSize
+        let lastPos = cbb.Position
+        cbb.Impl.Position <- 0
+        cbb.Impl.CopyTo(buf.bbArray, buf.Position, length)
+        cbb.Impl.Position <- lastPos
+
     static member Create sz = 
         { bbArray=Bytes.zeroCreate sz 
           bbCurrent = 0 }
-
-

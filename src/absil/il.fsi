@@ -1399,6 +1399,9 @@ type ILResourceLocation =
     /// Represents a manifest resource that is due to be written to the output PE file
     | LocalOut of byte[]
 
+    /// Represents a manifest resource that is due to be written to the output PE file
+    | LocalOutByteBuffer of (unit -> (unit -> (byte [] * int * int)) * int)
+
     /// Represents a manifest resource in an associated file
     | File of ILModuleRef * int32
 

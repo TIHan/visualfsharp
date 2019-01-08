@@ -2068,6 +2068,8 @@ let buildModuleFragment cenv emEnv (asmB : AssemblyBuilder) (modB : ModuleBuilde
            asmB.AddResourceFileAndLog(r.Name, mr.Name, attribs)
         | ILResourceLocation.Assembly _ -> 
            failwith "references to resources other assemblies may not be emitted using System.Reflection");
+        | ILResourceLocation.LocalOutByteBuffer _ ->
+           failwith "byte buffer is not supported"
 #endif
     emEnv
 

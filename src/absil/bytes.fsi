@@ -22,6 +22,40 @@ module internal Bytes =
     val stringAsUnicodeNullTerminated: string -> byte[]
     val stringAsUtf8NullTerminated: string -> byte[]
 
+[<AbstractClass>]
+type internal AbstractByteBuffer =
+
+    abstract EmitIntAsByte : int -> unit
+
+    abstract EmitByte : byte -> unit
+
+    abstract EmitIntsAsBytes : int [] -> unit
+
+    abstract FixupInt32 : pos: int -> int -> unit
+
+    abstract EmitInt32 : int -> unit
+
+    abstract EmitBytes : byte [] -> unit
+
+    abstract EmitInt32AsUInt16 : int -> unit
+
+    member EmitBoolAsByte : bool -> unit
+
+    member EmitUInt16 : uint16 -> unit
+
+    member EmitInt64 : int64 -> unit
+
+    abstract Position : int
+
+    abstract Length : int
+
+    abstract Write : AbstractByteBuffer -> unit
+    
+[<Sealed;Class>]
+type internal ChunkedByteBuffer =
+    inherit AbstractByteBuffer
+
+    static member Create : unit -> ChunkedByteBuffer
 
 /// Imperative buffers and streams of byte[]
 [<Sealed>]

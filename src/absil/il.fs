@@ -2186,6 +2186,7 @@ type ILResourceAccess =
 type ILResourceLocation =
     | LocalIn of string * int * int
     | LocalOut of byte[]
+    | ByteBufferLocalOut of (unit -> (unit -> (byte [] * int * int)) * int)
     | File of ILModuleRef * int32
     | Assembly of ILAssemblyRef
 
