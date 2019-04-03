@@ -80,9 +80,6 @@ type internal PartialCheckResults =
 [<Class>]
 type internal IncrementalBuilder = 
 
-      /// Check if the builder is not disposed
-      member IsAlive : bool
-
       /// The TcConfig passed in to the builder creation.
       member TcConfig : TcConfig
 
@@ -162,14 +159,9 @@ type internal IncrementalBuilder =
       /// This may be a marginally long-running operation (parses are relatively quick, only one file needs to be parsed)
       member GetParseResultsForFile : CompilationThreadToken * filename:string -> Cancellable<Ast.ParsedInput option * Range.range * string * (PhasedDiagnostic * FSharpErrorSeverity)[]>
 
+      interface IDisposable
+
       static member TryCreateBackgroundBuilderForProjectOptions : CompilationThreadToken * ReferenceResolver.Resolver * defaultFSharpBinariesDir: string * FrameworkImportsCache * scriptClosureOptions:LoadClosure option * sourceFiles:string list * commandLineArgs:string list * projectReferences: IProjectReference list * projectDirectory:string * useScriptResolutionRules:bool * keepAssemblyContents: bool * keepAllBackgroundResolutions: bool * maxTimeShareMilliseconds: int64 * tryGetMetadataSnapshot: ILBinaryReader.ILReaderTryGetMetadataSnapshot * suggestNamesForErrors: bool -> Cancellable<IncrementalBuilder option * FSharpErrorInfo[]>
-
-      /// Increment the usage count on the IncrementalBuilder by 1. This initial usage count is 0 so immediately after creation 
-      /// a call to KeepBuilderAlive should be made. The returns an IDisposable which will 
-      /// decrement the usage count and dispose if the usage count goes to zero
-      static member KeepBuilderAlive : IncrementalBuilder option -> IDisposable
-
-      member IsBeingKeptAliveApartFromCacheEntry : bool
 
 /// Generalized Incremental Builder. This is exposed only for unittesting purposes.
 module internal IncrementalBuild =

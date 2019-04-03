@@ -1261,8 +1261,6 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         if disposed then  
             System.Diagnostics.Debug.Assert(false, "IncrementalBuild object has already been disposed!")
 
-    let mutable referenceCount = 0
-
     //----------------------------------------------------
     // START OF BUILD TASK FUNCTIONS 
                 
@@ -1567,36 +1565,37 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     let MaxTimeStampInDependencies cache (ctok: CompilationThreadToken) (output:INode) = 
         IncrementalBuild.MaxTimeStampInDependencies cache ctok output.Name partialBuild 
 
-    member this.IncrementUsageCount() = 
-        assertNotDisposed() 
-        System.Threading.Interlocked.Increment(&referenceCount) |> ignore
-        { new System.IDisposable with member __.Dispose() = this.DecrementUsageCount() }
-
-    member __.DecrementUsageCount() = 
+    member __.TcConfig = 
         assertNotDisposed()
-        let currentValue =  System.Threading.Interlocked.Decrement(&referenceCount)
-        if currentValue = 0 then 
-                disposed <- true
-                disposeCleanupItem()
+        tcConfig
 
-    member __.IsAlive = referenceCount > 0
+    member __.FileParsed = 
+        assertNotDisposed()
+        fileParsed.Publish
 
-    member __.TcConfig = tcConfig
+    member __.BeforeFileChecked = 
+        assertNotDisposed()
+        beforeFileChecked.Publish
 
-    member __.FileParsed = fileParsed.Publish
+    member __.FileChecked = 
+        assertNotDisposed()
+        fileChecked.Publish
 
-    member __.BeforeFileChecked = beforeFileChecked.Publish
+    member __.ProjectChecked = 
+        assertNotDisposed()
+        projectChecked.Publish
 
-    member __.FileChecked = fileChecked.Publish
+    member __.ImportedCcusInvalidated = 
+        assertNotDisposed()
+        importsInvalidated.Publish
 
-    member __.ProjectChecked = projectChecked.Publish
-
-    member __.ImportedCcusInvalidated = importsInvalidated.Publish
-
-    member __.AllDependenciesDeprecated = allDependencies
+    member __.AllDependenciesDeprecated = 
+        assertNotDisposed()
+        allDependencies
 
 #if !NO_EXTENSIONTYPING
     member __.ThereAreLiveTypeProviders = 
+        assertNotDisposed()
         let liveTPs =
             match cleanupItem with 
             | None -> []
@@ -1607,7 +1606,9 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 #endif
 
     member __.Step (ctok: CompilationThreadToken) =  
+      assertNotDisposed()
       cancellable {
+        assertNotDisposed()
         let cache = TimeStampCache(defaultTimeStamp) // One per step
         let! res = IncrementalBuild.Step cache ctok SavePartialBuild (Target(tcStatesNode, None)) partialBuild
         match res with 
@@ -1619,6 +1620,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
       }
     
     member builder.GetCheckResultsBeforeFileInProjectEvenIfStale (filename): PartialCheckResults option  = 
+        assertNotDisposed()
         let slotOfFile = builder.GetSlotOfFileName filename
         let result = 
             match slotOfFile with
@@ -1631,6 +1633,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         
     
     member builder.AreCheckResultsBeforeFileInProjectReady (filename) = 
+        assertNotDisposed()
         let slotOfFile = builder.GetSlotOfFileName filename
         let cache = TimeStampCache(defaultTimeStamp)
         match slotOfFile with
@@ -1638,7 +1641,9 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         | _ -> IncrementalBuild.IsReady cache (Target(tcStatesNode, Some (slotOfFile-1))) partialBuild  
         
     member __.GetCheckResultsBeforeSlotInProject (ctok: CompilationThreadToken, slotOfFile) = 
+      assertNotDisposed()
       cancellable {
+        assertNotDisposed()
         let cache = TimeStampCache(defaultTimeStamp)
         let! result = 
           cancellable {
@@ -1657,18 +1662,23 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
       }
 
     member builder.GetCheckResultsBeforeFileInProject (ctok: CompilationThreadToken, filename) = 
+        assertNotDisposed()
         let slotOfFile = builder.GetSlotOfFileName filename
         builder.GetCheckResultsBeforeSlotInProject (ctok, slotOfFile)
 
     member builder.GetCheckResultsAfterFileInProject (ctok: CompilationThreadToken, filename) = 
+        assertNotDisposed()
         let slotOfFile = builder.GetSlotOfFileName filename + 1
         builder.GetCheckResultsBeforeSlotInProject (ctok, slotOfFile)
 
     member builder.GetCheckResultsAfterLastFileInProject (ctok: CompilationThreadToken) = 
+        assertNotDisposed()
         builder.GetCheckResultsBeforeSlotInProject(ctok, builder.GetSlotsCount()) 
 
     member __.GetCheckResultsAndImplementationsForProject(ctok: CompilationThreadToken) = 
+      assertNotDisposed()
       cancellable {
+        assertNotDisposed()
         let cache = TimeStampCache(defaultTimeStamp)
         let! build = IncrementalBuild.Eval cache ctok SavePartialBuild finalizedTypeCheckNode partialBuild
         match GetScalarResult(finalizedTypeCheckNode, build) with
@@ -1687,11 +1697,13 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
       }
         
     member __.GetLogicalTimeStampForProject(cache, ctok: CompilationThreadToken) = 
+        assertNotDisposed()
         let t1 = MaxTimeStampInDependencies cache ctok stampedFileNamesNode 
         let t2 = MaxTimeStampInDependencies cache ctok stampedReferencedAssembliesNode 
         max t1 t2
         
     member __.GetSlotOfFileName(filename:string) =
+        assertNotDisposed()
         // Get the slot of the given file and force it to build.
         let CompareFileNames (_, f2, _) = 
             let result = 
@@ -1703,13 +1715,16 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         | None -> failwith (sprintf "The file '%s' was not part of the project. Did you call InvalidateConfiguration when the list of files in the project changed?" filename)
         
     member __.GetSlotsCount () =
+        assertNotDisposed()
         let expr = GetExprByName(partialBuild, fileNamesNode)
         match partialBuild.Results.TryFind(expr.Id) with
         | Some (VectorResult vr) -> vr.Size
         | _ -> failwith "Failed to find sizes"
       
     member builder.GetParseResultsForFile (ctok: CompilationThreadToken, filename) =
+      assertNotDisposed()
       cancellable {
+        assertNotDisposed()
         let slotOfFile = builder.GetSlotOfFileName filename
         let! results = 
           cancellable {
@@ -1726,7 +1741,16 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         return ParseTask ctok results
       }
 
-    member __.SourceFiles  = sourceFiles  |> List.map (fun (_, f, _) -> f)
+    member __.SourceFiles  = 
+        assertNotDisposed()
+        sourceFiles  |> List.map (fun (_, f, _) -> f)
+
+    interface IDisposable with
+
+      member this.Dispose() =
+          if not disposed then
+              disposeCleanupItem()
+              disposed <- true
 
     /// CreateIncrementalBuilder (for background type checking). Note that fsc.fs also
     /// creates an incremental builder used by the command line compiler.
@@ -1877,11 +1901,3 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
         return builderOpt, diagnostics
       }
-
-    static member KeepBuilderAlive (builderOpt: IncrementalBuilder option) = 
-        match builderOpt with 
-        | Some builder -> builder.IncrementUsageCount() 
-        | None -> { new System.IDisposable with member __.Dispose() = () }
-
-    member __.IsBeingKeptAliveApartFromCacheEntry = (referenceCount >= 2)
-
