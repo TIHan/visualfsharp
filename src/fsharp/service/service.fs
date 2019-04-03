@@ -2296,6 +2296,54 @@ type FileVersion = int
 type ParseCacheLockToken() = interface LockToken
 type ScriptClosureCacheToken() = interface LockToken
 
+[<Sealed>]
+type private IncrementalBuildersCache() =
+
+    let cache = 
+        Dictionary<(string option * string), (FSharpProjectOptions * IncrementalBuilder option * FSharpErrorInfo[])>(
+            { new IEqualityComparer<(string option * string)> with 
+
+                member __.Equals((projectIdOpt1, projectFileName1), (projectIdOpt2, projectFileName2)) =
+                    match projectIdOpt1, projectIdOpt2 with
+                    | Some(projectId1), Some(projectId2) when not (String.IsNullOrWhiteSpace(projectId1)) && not (String.IsNullOrWhiteSpace(projectId2)) -> 
+                        projectId1 = projectId2
+                    | Some(_), Some(_)
+                    | None, None -> projectFileName1 = projectFileName2
+                    | _ -> false
+
+                member __.GetHashCode((projectIdOpt, projectFileName)) =
+                    match projectIdOpt with
+                    | Some(projectId) when not (String.IsNullOrWhiteSpace(projectId)) -> projectId.GetHashCode()
+                    | _ when projectFileName <> null -> projectFileName.GetHashCode()
+                    | _ -> 0
+            }
+        )
+
+    member __.Set(options: FSharpProjectOptions, (builderOpt, creationErrors)) =
+        cache.[(options.ProjectId, options.ProjectFileName)] <- (options, builderOpt, creationErrors)
+
+    member __.Remove(options) =
+        cache.Remove(options)
+
+    member __.Clear() =
+        cache
+        |> Seq.iter (fun pair ->
+            match pair.Value with
+            | (_, Some builder, _) -> dispose builder
+            | _ -> ()
+        )
+        cache.Clear()
+
+    member __.TryGet(options) =
+        match cache.TryGetValue((options.ProjectId, options.ProjectFileName)) with
+        | true, (oldOptions, builderOpt, creationErrors) when FSharpProjectOptions.AreSameForChecking(options, oldOptions) ->
+            Some(builderOpt, creationErrors)
+        | _ ->
+            None
+                
+    member __.ContainsSimilarKey(options) =
+        cache.ContainsKey((options.ProjectId, options.ProjectFileName))
+
 
 // There is only one instance of this type, held in FSharpChecker
 type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors) as self =
@@ -2380,29 +2428,22 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
       }
 
     // STATIC ROOT: FSharpLanguageServiceTestable.FSharpChecker.backgroundCompiler.incrementalBuildersCache. This root typically holds more 
-    // live information than anything else in the F# Language Service, since it holds up to 3 (projectCacheStrongSize) background project builds
-    // strongly.
+    // live information than anything else in the F# Language Service.
     // 
     /// Cache of builds keyed by options.        
-    let incrementalBuildersCache = 
-        MruCache<CompilationThreadToken, FSharpProjectOptions, (IncrementalBuilder option * FSharpErrorInfo[])>
-                (keepStrongly=projectCacheSize, keepMax=projectCacheSize, 
-                 areSame =  FSharpProjectOptions.AreSameForChecking, 
-                 areSimilar =  FSharpProjectOptions.UseSameProject,
-                 requiredToKeep=(fun _ -> true),
-                 onDiscard = (fun (builderOpt, _) -> match builderOpt with | Some(builder) -> dispose builder | _ -> ()))
+    let incrementalBuildersCache = IncrementalBuildersCache()
 
     let getOrCreateBuilderAndKeepAlive (ctok, options, userOpName) =
       cancellable {
           RequireCompilationThread ctok
-          match incrementalBuildersCache.TryGet (ctok, options) with
+          match incrementalBuildersCache.TryGet (options) with
           | Some (builderOpt,creationErrors) -> 
               Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_BuildingNewCache
               return builderOpt,creationErrors
           | None -> 
               Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_GettingCache
               let! (builderOpt,creationErrors) as info = CreateOneIncrementalBuilder (ctok, options, userOpName)
-              incrementalBuildersCache.Set (ctok, options, info)
+              incrementalBuildersCache.Set (options, info)
               return builderOpt, creationErrors
       }
 
@@ -2593,7 +2634,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                   execWithReactorAsync <| fun ctok ->   
                    cancellable {
                     let! _builderOpt,_creationErrors = getOrCreateBuilderAndKeepAlive (ctok, options, userOpName)
-                    match incrementalBuildersCache.TryGetAny (ctok, options) with
+                    match incrementalBuildersCache.TryGet (options) with
                     | Some (Some builder, creationErrors) ->
                         match bc.GetCachedCheckFileResult(builder, filename, sourceText, options) with
                         | Some (_, checkResults) -> return Some (builder, creationErrors, Some (FSharpCheckFileAnswer.Succeeded checkResults))
@@ -2833,12 +2874,12 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         reactor.EnqueueOp(userOpName, "InvalidateConfiguration: Stamp(" + (options.Stamp |> Option.defaultValue 0L).ToString() + ")", options.ProjectFileName, fun ctok -> 
             // If there was a similar entry then re-establish an empty builder .  This is a somewhat arbitrary choice - it
             // will have the effect of releasing memory associated with the previous builder, but costs some time.
-            if incrementalBuildersCache.ContainsSimilarKey (ctok, options) then
+            if incrementalBuildersCache.ContainsSimilarKey (options) then
 
                 // We do not need to decrement here - the onDiscard function is called each time an entry is pushed out of the build cache,
                 // including by incrementalBuildersCache.Set.
                 let newBuilderInfo = CreateOneIncrementalBuilder (ctok, options, userOpName) |> Cancellable.runWithoutCancellation
-                incrementalBuildersCache.Set(ctok, options, newBuilderInfo)
+                incrementalBuildersCache.Set(options, newBuilderInfo)
 
                 // Start working on the project.  Also a somewhat arbitrary choice
                 if startBackgroundCompileIfAlreadySeen then 
@@ -2850,11 +2891,11 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             // If there was a similar entry (as there normally will have been) then re-establish an empty builder .  This 
             // is a somewhat arbitrary choice - it will have the effect of releasing memory associated with the previous 
             // builder, but costs some time.
-            if incrementalBuildersCache.ContainsSimilarKey (ctok, options) then
+            if incrementalBuildersCache.ContainsSimilarKey (options) then
                 // We do not need to decrement here - the onDiscard function is called each time an entry is pushed out of the build cache,
                 // including by incrementalBuildersCache.Set.
                 let! newBuilderInfo = CreateOneIncrementalBuilder (ctok, options, userOpName) 
-                incrementalBuildersCache.Set(ctok, options, newBuilderInfo)
+                incrementalBuildersCache.Set(options, newBuilderInfo)
           })
 
     member bc.CheckProjectInBackground (options, userOpName) =
@@ -2895,9 +2936,10 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                 checkFileInProjectCachePossiblyStale.Clear ltok
                 checkFileInProjectCache.Clear ltok
                 parseFileCache.Clear(ltok))
-            incrementalBuildersCache.Clear ctok
+            incrementalBuildersCache.Clear()
             frameworkTcImportsCache.Clear ctok
             scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.Clear ltok)
+            FSharp.Compiler.AbstractIL.ILBinaryReader.ClearAllILModuleReaderCache()
             cancellable.Return ())
 
     member bc.DownsizeCaches(userOpName) =
@@ -2906,7 +2948,6 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                 checkFileInProjectCachePossiblyStale.Resize(ltok, keepStrongly=1)
                 checkFileInProjectCache.Resize(ltok, keepStrongly=1)
                 parseFileCache.Resize(ltok, keepStrongly=1))
-            incrementalBuildersCache.Resize(ctok, keepStrongly=1, keepMax=1)
             frameworkTcImportsCache.Downsize(ctok)
             scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.Resize(ltok,keepStrongly=1, keepMax=1))
             cancellable.Return ())
