@@ -2353,6 +2353,34 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
     let scriptClosureCacheLock = Lock<ScriptClosureCacheToken>()
     let frameworkTcImportsCache = FrameworkImportsCache(frameworkTcImportsCacheStrongSize)
 
+    let strongProjectReferenceRawFSharpAssemblyDataCache = 
+        let comparer =
+            { new IEqualityComparer<FSharpProjectOptions> with
+
+                member __.GetHashCode projectOptions =
+                    match projectOptions.ProjectId with
+                    | Some projectId -> projectId.GetHashCode ()
+                    | _ -> projectOptions.ProjectFileName.GetHashCode ()
+
+                member __.Equals (projectOptions1, projectOptions2) =
+                    FSharpProjectOptions.UseSameProject (projectOptions1, projectOptions2)
+            }
+        Dictionary<FSharpProjectOptions, IRawFSharpAssemblyData option * int64 option>(comparer)
+
+    let strongProjectReferenceTimeStampCache = 
+        let comparer =
+            { new IEqualityComparer<FSharpProjectOptions> with
+
+                member __.GetHashCode projectOptions =
+                    match projectOptions.ProjectId with
+                    | Some projectId -> projectId.GetHashCode ()
+                    | _ -> projectOptions.ProjectFileName.GetHashCode ()
+
+                member __.Equals (projectOptions1, projectOptions2) =
+                    FSharpProjectOptions.UseSameProject (projectOptions1, projectOptions2)
+            }
+        Dictionary<FSharpProjectOptions, DateTime option * int64 option>(comparer)
+
     /// CreateOneIncrementalBuilder (for background type checking). Note that fsc.fs also
     /// creates an incremental builder used by the command line compiler.
     let CreateOneIncrementalBuilder (ctok, options:FSharpProjectOptions, userOpName) = 
@@ -2372,11 +2400,19 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                         member x.EvaluateRawContents(ctok) = 
                           cancellable {
                             Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "ParseAndCheckProjectImpl", nm)
-                            let! r = self.ParseAndCheckProjectImpl(opts, ctok, userOpName + ".CheckReferencedProject("+nm+")")
-                            return r.RawFSharpAssemblyData 
+                            match strongProjectReferenceRawFSharpAssemblyDataCache.TryGetValue opts with
+                            | true, (tcAssemblyData, currentStamp) when not (opts.Stamp.IsNone) && opts.Stamp = currentStamp ->
+                                return tcAssemblyData
+                            | _ ->
+                                let! r = self.ParseAndCheckProjectImpl(opts, ctok, userOpName + ".CheckReferencedProject("+nm+")")
+                                return r.RawFSharpAssemblyData
                           }
                         member x.TryGetLogicalTimeStamp(cache, ctok) = 
-                            self.TryGetLogicalTimeStampForProject(cache, ctok, opts, userOpName + ".TimeStampReferencedProject("+nm+")")
+                            match strongProjectReferenceTimeStampCache.TryGetValue opts with
+                            | true, (timeStamp, currentStamp) when not (opts.Stamp.IsNone) && opts.Stamp = currentStamp ->
+                                timeStamp
+                            | _ ->
+                                self.TryGetLogicalTimeStampForProject(cache, ctok, opts, userOpName + ".TimeStampReferencedProject("+nm+")")
                         member x.FileName = nm } ]
 
         let loadClosure = scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.TryGet (ltok, options))
@@ -2603,6 +2639,8 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                                 let parsingOptions = FSharpParsingOptions.FromTcConfig(tcPrior.TcConfig, Array.ofList builder.SourceFiles, options.UseScriptResolutionRules)
                                 let checkAnswer = MakeCheckFileAnswer(fileName, tcFileResult, options, builder, Array.ofList tcPrior.TcDependencyFiles, creationErrors, parseResults.Errors, tcErrors)
                                 bc.RecordTypeCheckFileInProjectResults(fileName, options, parsingOptions, parseResults, fileVersion, tcPrior.TimeStamp, Some checkAnswer, sourceText.GetHashCode())
+                                strongProjectReferenceRawFSharpAssemblyDataCache.Remove(options) |> ignore
+                                strongProjectReferenceTimeStampCache.Remove(options) |> ignore
                                 return checkAnswer
                             finally
                                 let dummy = ref ()
@@ -2788,6 +2826,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             return FSharpCheckProjectResults (options.ProjectFileName, None, keepAssemblyContents, creationErrors, None)
         | Some builder -> 
             let! (tcProj, ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt)  = builder.GetCheckResultsAndImplementationsForProject(ctok)
+            strongProjectReferenceRawFSharpAssemblyDataCache.[options] <- (tcAssemblyDataOpt, options.Stamp)
             let errorOptions = tcProj.TcConfig.errorSeverityOptions
             let fileName = TcGlobals.DummyFileNameForRangesWithoutASpecificLocation
             let errors = [| yield! creationErrors; yield! ErrorHelpers.CreateErrorInfos (errorOptions, true, fileName, tcProj.TcErrors, suggestNamesForErrors) |]
@@ -2805,8 +2844,13 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         let builderOpt,_creationErrors,decrement = getOrCreateBuilderAndKeepAlive (ctok, options, userOpName + ".TryGetLogicalTimeStampForProject") |> Cancellable.runWithoutCancellation
         use _unwind = decrement
         match builderOpt with 
-        | None -> None
-        | Some builder -> Some (builder.GetLogicalTimeStampForProject(cache, ctok))
+        | None ->
+            strongProjectReferenceTimeStampCache.[options] <- (None, options.Stamp)
+            None
+        | Some builder -> 
+            let timeStamp = builder.GetLogicalTimeStampForProject(cache, ctok)
+            strongProjectReferenceTimeStampCache.[options] <- (Some timeStamp, options.Stamp)
+            Some timeStamp
 
     /// Keep the projet builder alive over a scope
     member bc.KeepProjectAlive(options, userOpName) =
@@ -2942,7 +2986,9 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
     member bc.CurrentQueueLength = reactor.CurrentQueueLength
 
     member bc.ClearCachesAsync (userOpName) =
-        reactor.EnqueueAndAwaitOpAsync (userOpName, "ClearCachesAsync", "", fun ctok -> 
+        reactor.EnqueueAndAwaitOpAsync (userOpName, "ClearCachesAsync", "", fun ctok ->
+            strongProjectReferenceRawFSharpAssemblyDataCache.Clear ()
+            strongProjectReferenceTimeStampCache.Clear ()
             parseCacheLock.AcquireLock (fun ltok -> 
                 checkFileInProjectCachePossiblyStale.Clear ltok
                 checkFileInProjectCache.Clear ltok

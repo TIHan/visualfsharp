@@ -74,7 +74,7 @@ type LanguageServicePerformanceOptions =
       { EnableInMemoryCrossProjectReferences = true
         AllowStaleCompletionResults = true
         TimeUntilStaleCompletion = 2000 // In ms, so this is 2 seconds
-        ProjectCheckCacheSize = 200 }
+        ProjectCheckCacheSize = 2 }
 
 [<CLIMutable>]
 type CodeLensOptions =
