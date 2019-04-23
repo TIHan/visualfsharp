@@ -1175,20 +1175,7 @@ module Utilities =
 /// Constructs the build data (IRawFSharpAssemblyData) representing the assembly when used 
 /// as a cross-assembly reference.  Note the assembly has not been generated on disk, so this is
 /// a virtualized view of the assembly contents as computed by background checking.
-type RawFSharpAssemblyDataBackedByLanguageService (tcConfig, tcGlobals, tcState: TcState, outfile, topAttrs, assemblyName, ilAssemRef) = 
-
-    let generatedCcu = tcState.Ccu
-    let exportRemapping = MakeExportRemapping generatedCcu generatedCcu.Contents
-                      
-    let sigData = 
-        let _sigDataAttributes, sigDataResources = Driver.EncodeInterfaceData(tcConfig, tcGlobals, exportRemapping, generatedCcu, outfile, true)
-        [ for r in sigDataResources  do
-            let ccuName = GetSignatureDataResourceName r
-            yield (ccuName, (fun () -> r.GetBytes())) ]
-
-    let autoOpenAttrs = topAttrs.assemblyAttrs |> List.choose (List.singleton >> TryFindFSharpStringAttribute tcGlobals tcGlobals.attrib_AutoOpenAttribute)
-
-    let ivtAttrs = topAttrs.assemblyAttrs |> List.choose (List.singleton >> TryFindFSharpStringAttribute tcGlobals tcGlobals.attrib_InternalsVisibleToAttribute)
+type RawFSharpAssemblyDataBackedByLanguageService (sigData, autoOpenAttrs, ivtAttrs, assemblyName, ilAssemRef) = 
 
     interface IRawFSharpAssemblyData with 
         member __.GetAutoOpenAttributes(_ilg) = autoOpenAttrs
@@ -1203,6 +1190,20 @@ type RawFSharpAssemblyDataBackedByLanguageService (tcConfig, tcGlobals, tcState:
         member __.HasAnyFSharpSignatureDataAttribute =  true
         member __.HasMatchingFSharpSignatureDataAttribute _ilg = true
 
+    static member Create (tcConfig, tcGlobals, tcState: TcState, outfile, topAttrs, assemblyName, ilAssemRef) =
+        let generatedCcu = tcState.Ccu
+        let exportRemapping = MakeExportRemapping generatedCcu generatedCcu.Contents
+                      
+        let sigData = 
+            let _sigDataAttributes, sigDataResources = Driver.EncodeInterfaceData(tcConfig, tcGlobals, exportRemapping, generatedCcu, outfile, true)
+            [ for r in sigDataResources  do
+                let ccuName = GetSignatureDataResourceName r
+                yield (ccuName, (fun () -> r.GetBytes())) ]
+
+        let autoOpenAttrs = topAttrs.assemblyAttrs |> List.choose (List.singleton >> TryFindFSharpStringAttribute tcGlobals tcGlobals.attrib_AutoOpenAttribute)
+
+        let ivtAttrs = topAttrs.assemblyAttrs |> List.choose (List.singleton >> TryFindFSharpStringAttribute tcGlobals tcGlobals.attrib_InternalsVisibleToAttribute)
+        RawFSharpAssemblyDataBackedByLanguageService (sigData, autoOpenAttrs, ivtAttrs, assemblyName, ilAssemRef)
 
 /// Manages an incremental build graph for the build of a single F# project
 type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInputs, nonFrameworkResolutions, unresolvedReferences, tcConfig: TcConfig, projectDirectory, outfile, 
@@ -1519,7 +1520,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                           if tcState.CreatesGeneratedProvidedTypes || hasTypeProviderAssemblyAttrib then
                             None
                           else
-                            Some  (RawFSharpAssemblyDataBackedByLanguageService (tcConfig, tcGlobals, tcState, outfile, topAttrs, assemblyName, ilAssemRef) :> IRawFSharpAssemblyData)
+                            Some  (RawFSharpAssemblyDataBackedByLanguageService.Create (tcConfig, tcGlobals, tcState, outfile, topAttrs, assemblyName, ilAssemRef) :> IRawFSharpAssemblyData)
 
                         with e -> 
                             errorRecoveryNoRange e

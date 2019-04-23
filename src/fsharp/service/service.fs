@@ -2326,6 +2326,28 @@ type FileVersion = int
 type ParseCacheLockToken() = interface LockToken
 type ScriptClosureCacheToken() = interface LockToken
 
+[<Sealed>]
+type ProjectFSharpAssemblyDataCache () =
+    let comparer =
+        { new IEqualityComparer<FSharpProjectOptions> with
+
+            member __.GetHashCode projectOptions =
+                match projectOptions.ProjectId with
+                | Some projectId -> projectId.GetHashCode ()
+                | _ -> projectOptions.ProjectFileName.GetHashCode ()
+
+            member __.Equals (projectOptions1, projectOptions2) =
+                FSharpProjectOptions.UseSameProject (projectOptions1, projectOptions2)
+        }
+
+    let cache = Dictionary<FSharpProjectOptions, IRawFSharpAssemblyData>(comparer)
+    let stampCache = Dictionary<FSharpProjectOptions, int64 * DateTime> ()
+
+    member __.Set (options, tcAssemblyData) =
+        cache.[options] <- tcAssemblyData
+
+    member __.CheckValidation
+
 
 // There is only one instance of this type, held in FSharpChecker
 type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors) as self =
