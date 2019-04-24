@@ -2350,7 +2350,7 @@ type ProjectAssemblyDataCache () =
 
     let cache = Dictionary<FSharpProjectOptions, IRawFSharpAssemblyData> (comparer)
     let stampCache = Dictionary<FSharpProjectOptions, int64 * DateTime> (comparer)
-    let projectFileStampCache = Dictionary<FSharpProjectOptions, Dictionary<string, int * DateTime>> (comparer)
+    let projectFileStampCache = Dictionary<FSharpProjectOptions, Dictionary<string, int * DateTime * ISourceText>> (comparer)
 
     let rec invalidateProject projectOptions stamp =
         cache.Remove projectOptions |> ignore
@@ -2378,18 +2378,18 @@ type ProjectAssemblyDataCache () =
     member __.Set (projectOptions, tcAssemblyData) =
         cache.[projectOptions] <- tcAssemblyData
 
-    member this.SetProjectFileStamp (projectOptions, fileName, fileStamp) =
+    member this.SetProjectFileStamp (projectOptions, fileName, fileStamp, sourceText) =
         match projectFileStampCache.TryGetValue projectOptions with
         | true, fileStampCache ->
             match fileStampCache.TryGetValue fileName with
-            | true, (oldFileStamp, _) ->
+            | true, (oldFileStamp, _, _) ->
                 if oldFileStamp <> fileStamp then
-                    fileStampCache.[fileName] <- (fileStamp, DateTime.UtcNow)
+                    fileStampCache.[fileName] <- (fileStamp, DateTime.UtcNow, sourceText)
             | _ ->
-                fileStampCache.[fileName] <- (fileStamp, DateTime.UtcNow)
+                fileStampCache.[fileName] <- (fileStamp, DateTime.UtcNow, sourceText)
         | _ ->
             projectFileStampCache.Add (projectOptions, Dictionary ())
-            this.SetProjectFileStamp (projectOptions, fileName, fileStamp)
+            this.SetProjectFileStamp (projectOptions, fileName, fileStamp, sourceText)
 
     member __.CheckProject projectOptions =
         checkProject projectOptions
@@ -2404,11 +2404,19 @@ type ProjectAssemblyDataCache () =
         | true, (_, timeStamp) -> Some timeStamp
         | _ -> None
 
-    member __.TryGetFileTimeStampCache (projectOptions, fileName) =
+    member __.TryGetFileTimeStamp (projectOptions, fileName) =
         match projectFileStampCache.TryGetValue projectOptions with
         | true, fileStampCache ->
             match fileStampCache.TryGetValue fileName with
-            | true, (_, timeStamp) -> Some timeStamp
+            | true, (_, timeStamp, _) -> Some timeStamp
+            | _ -> None
+        | _ -> None
+
+    member __.TryGetFileSourceText (projectOptions, fileName) =
+        match projectFileStampCache.TryGetValue projectOptions with
+        | true, fileStampCache ->
+            match fileStampCache.TryGetValue fileName with
+            | true, (_, _, sourceText) -> Some sourceText
             | _ -> None
         | _ -> None
 
@@ -2478,10 +2486,11 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
 
         let loadClosure = scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.TryGet (ltok, options))
 
-        let sourceFileGetTimeStamps =
+        let sourceFilesGetInfo =
             options.SourceFiles
             |> Array.map (fun sourceFile ->
-                fun () -> projectAssemblyDataCache.TryGetFileTimeStampCache (options, sourceFile)
+                (fun () -> projectAssemblyDataCache.TryGetFileTimeStamp (options, sourceFile)),
+                (fun () -> projectAssemblyDataCache.TryGetFileSourceText (options, sourceFile))
             )
             |> List.ofArray
 
@@ -2490,7 +2499,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                   (ctok, legacyReferenceResolver, defaultFSharpBinariesDir, frameworkTcImportsCache, loadClosure, Array.toList options.SourceFiles, 
                    Array.toList options.OtherOptions, projectReferences, options.ProjectDirectory, 
                    options.UseScriptResolutionRules, keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds,
-                   tryGetMetadataSnapshot, suggestNamesForErrors, sourceFileGetTimeStamps)
+                   tryGetMetadataSnapshot, suggestNamesForErrors, sourceFilesGetInfo)
 
         // We're putting the builder in the cache, so increment its count.
         let decrement = IncrementalBuilder.KeepBuilderAlive builderOpt
@@ -2728,7 +2737,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         async {
             try
                 projectAssemblyDataCache.CheckProject options
-                projectAssemblyDataCache.SetProjectFileStamp (options, filename, fileVersion)
+                projectAssemblyDataCache.SetProjectFileStamp (options, filename, fileVersion, sourceText)
 
                 if implicitlyStartBackgroundWork then 
                     reactor.CancelBackgroundOp() // cancel the background work, since we will start new work after we're done
@@ -2774,7 +2783,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         async {
             try 
                 projectAssemblyDataCache.CheckProject options
-                projectAssemblyDataCache.SetProjectFileStamp (options, filename, fileVersion)
+                projectAssemblyDataCache.SetProjectFileStamp (options, filename, fileVersion, sourceText)
 
                 if implicitlyStartBackgroundWork then 
                     reactor.CancelBackgroundOp() // cancel the background work, since we will start new work after we're done
@@ -2803,7 +2812,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         async {
             try 
                 projectAssemblyDataCache.CheckProject options
-                projectAssemblyDataCache.SetProjectFileStamp (options, filename, fileVersion)
+                projectAssemblyDataCache.SetProjectFileStamp (options, filename, fileVersion, sourceText)
 
                 let strGuid = "_ProjectId=" + (options.ProjectId |> Option.defaultValue "null")
                 Logger.LogBlockMessageStart (filename + strGuid) LogCompilerFunctionId.Service_ParseAndCheckFileInProject

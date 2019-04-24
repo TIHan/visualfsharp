@@ -9,6 +9,7 @@ open System.Collections.Generic
 open System.IO
 open System.Threading
 open FSharp.Compiler
+open FSharp.Compiler.Text
 open FSharp.Compiler.NameResolution
 open FSharp.Compiler.Tastops
 open FSharp.Compiler.Lib
@@ -1209,7 +1210,7 @@ type RawFSharpAssemblyDataBackedByLanguageService (sigData, autoOpenAttrs, ivtAt
 type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInputs, nonFrameworkResolutions, unresolvedReferences, tcConfig: TcConfig, projectDirectory, outfile, 
                         assemblyName, niceNameGen: Ast.NiceNameGenerator, lexResourceManager, 
                         sourceFiles, loadClosureOpt: LoadClosure option, 
-                        keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds, sourceFileGetTimeStamps) =
+                        keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds, sourceFilesGetInfo) =
 
     let tcConfigP = TcConfigProvider.Constant tcConfig
     let importsInvalidated = new Event<string>()
@@ -1227,9 +1228,9 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         ((sourceFiles, flags) ||> List.map2 (fun (m, nm) flag -> (m, nm, (flag, isExe))))
 
     let sourceFiles =
-        (sourceFilesOnly, sourceFileGetTimeStamps)
-        ||> List.map2 (fun (m, nm, (flag, isExe)) getTimeStamp ->
-            (m, nm, (flag, isExe), getTimeStamp)
+        (sourceFilesOnly, sourceFilesGetInfo)
+        ||> List.map2 (fun (m, nm, (flag, isExe)) (tryGetTimeStamp, tryGetSourceText) ->
+            (m, nm, (flag, isExe), tryGetTimeStamp, tryGetSourceText)
         )
 
     let defaultTimeStamp = DateTime.UtcNow
@@ -1246,7 +1247,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
     let allDependencies =
         [| yield! basicDependencies
-           for (_, f, _, _) in sourceFiles do
+           for (_, f, _, _, _) in sourceFiles do
                 yield f |]
 
     // The IncrementalBuilder needs to hold up to one item that needs to be disposed, which is the tcImports for the incremental
@@ -1276,9 +1277,9 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     /// This is a build task function that gets placed into the build rules as the computation for a VectorStamp
     ///
     /// Get the timestamp of the given file name.
-    let StampFileNameTask (cache: TimeStampCache) _ctok (_sourceRange: range, filename: string, _isLastCompiled: bool * bool, getTimeStamp: unit -> DateTime option) =
+    let StampFileNameTask (cache: TimeStampCache) _ctok (_sourceRange: range, filename: string, _isLastCompiled: bool * bool, tryGetTimeStamp: unit -> DateTime option, _tryGetSourceText: unit -> ISourceText option) =
         assertNotDisposed()
-        match getTimeStamp () with
+        match tryGetTimeStamp () with
         | Some timeStamp -> 
             cache.SetFileTimeStamp (filename, timeStamp)
             timeStamp
@@ -1288,7 +1289,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     /// This is a build task function that gets placed into the build rules as the computation for a VectorMap
     ///
     /// Parse the given file and return the given input.
-    let ParseTask ctok (sourceRange: range, filename: string, isLastCompiland, _getTimeStamp: unit -> DateTime option) =
+    let ParseTask ctok (sourceRange: range, filename: string, isLastCompiland, _tryGetTimeStamp: unit -> DateTime option, tryGetSourceText: unit -> ISourceText option) =
         assertNotDisposed()
         DoesNotRequireCompilerThreadTokenAndCouldPossiblyBeMadeConcurrent  ctok
 
@@ -1298,7 +1299,12 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
         try  
             IncrementalBuilderEventTesting.MRU.Add(IncrementalBuilderEventTesting.IBEParsed filename)
-            let input = ParseOneInputFile(tcConfig, lexResourceManager, [], filename, isLastCompiland, errorLogger, (*retryLocked*)true)
+            let input =
+                match tryGetSourceText () with
+                | Some sourceText ->
+                    ParseOneInputFileSourceText(tcConfig, lexResourceManager, [], filename, sourceText, isLastCompiland, errorLogger)
+                | _ ->
+                    ParseOneInputFile(tcConfig, lexResourceManager, [], filename, isLastCompiland, errorLogger, (*retryLocked*)true)
             fileParsed.Trigger filename
 
             input, sourceRange, filename, errorLogger.GetErrors ()
@@ -1558,7 +1564,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     // START OF BUILD DESCRIPTION
 
     // Inputs
-    let fileNamesNode               = InputVector<range * string * (bool * bool) * (unit -> DateTime option)> "FileNames"
+    let fileNamesNode               = InputVector<range * string * (bool * bool) * (unit -> DateTime option) * (unit -> ISourceText option)> "FileNames"
     let referencedAssembliesNode    = InputVector<Choice<string, IProjectReference>*(TimeStampCache -> CompilationThreadToken -> DateTime)> "ReferencedAssemblies"
         
     // Build
@@ -1721,7 +1727,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         
     member __.GetSlotOfFileName(filename: string) =
         // Get the slot of the given file and force it to build.
-        let CompareFileNames (_, f2, _, _) = 
+        let CompareFileNames (_, f2, _, _, _) = 
             let result = 
                    String.Compare(filename, f2, StringComparison.CurrentCultureIgnoreCase)=0
                 || String.Compare(FileSystem.GetFullPathShim filename, FileSystem.GetFullPathShim f2, StringComparison.CurrentCultureIgnoreCase)=0
@@ -1754,7 +1760,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         return ParseTask ctok results
       }
 
-    member __.SourceFiles  = sourceFiles  |> List.map (fun (_, f, _, _) -> f)
+    member __.SourceFiles  = sourceFiles  |> List.map (fun (_, f, _, _, _) -> f)
 
     /// CreateIncrementalBuilder (for background type checking). Note that fsc.fs also
     /// creates an incremental builder used by the command line compiler.
@@ -1767,7 +1773,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                        projectReferences, projectDirectory,
                        useScriptResolutionRules, keepAssemblyContents,
                        keepAllBackgroundResolutions, maxTimeShareMilliseconds,
-                       tryGetMetadataSnapshot, suggestNamesForErrors, sourceFileGetTimeStamps) =
+                       tryGetMetadataSnapshot, suggestNamesForErrors, sourceFilesGetInfo) =
       let useSimpleResolutionSwitch = "--simpleresolution"
 
       cancellable {
@@ -1880,7 +1886,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                                         keepAssemblyContents=keepAssemblyContents, 
                                         keepAllBackgroundResolutions=keepAllBackgroundResolutions, 
                                         maxTimeShareMilliseconds=maxTimeShareMilliseconds, 
-                                        sourceFileGetTimeStamps=sourceFileGetTimeStamps)
+                                        sourceFilesGetInfo=sourceFilesGetInfo)
             return Some builder
           with e -> 
             errorRecoveryNoRange e

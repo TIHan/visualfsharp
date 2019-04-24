@@ -3457,6 +3457,16 @@ let ParseOneInputFile (tcConfig: TcConfig, lexResourceManager, conditionalCompil
        else error(Error(FSComp.SR.buildInvalidSourceFileExtension(SanitizeFileName filename tcConfig.implicitIncludeDir), rangeStartup))
     with e -> (* errorR(Failure("parse failed")); *) errorRecovery e rangeStartup; None 
      
+let ParseOneInputFileSourceText (tcConfig: TcConfig, lexResourceManager, conditionalCompilationDefines, filename, sourceText, isLastCompiland, errorLogger) =
+    try 
+       let lower = String.lowercase filename
+       if List.exists (Filename.checkSuffix lower) (FSharpSigFileSuffixes@FSharpImplFileSuffixes) then  
+            if not(FileSystem.SafeExists filename) then
+                error(Error(FSComp.SR.buildCouldNotFindSourceFile filename, rangeStartup))
+            let lexbuf = UnicodeLexing.SourceTextAsLexbuf (sourceText)
+            ParseOneInputLexbuf(tcConfig, lexResourceManager, conditionalCompilationDefines, lexbuf, filename, isLastCompiland, errorLogger)
+       else error(Error(FSComp.SR.buildInvalidSourceFileExtension(SanitizeFileName filename tcConfig.implicitIncludeDir), rangeStartup))
+    with e -> (* errorR(Failure("parse failed")); *) errorRecovery e rangeStartup; None 
 
 [<Sealed>] 
 type TcAssemblyResolutions(tcConfig: TcConfig, results: AssemblyResolution list, unresolved: UnresolvedAssemblyReference list) = 
