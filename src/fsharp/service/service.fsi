@@ -307,8 +307,14 @@ type public FSharpParsingOptions =
     }
     static member Default: FSharpParsingOptions
 
+type FSharpReferencedProject =
+    {
+        DllPath: string
+        ProjectOptions: FSharpProjectOptions
+    }
+
 /// <summary>A set of information describing a project or script build configuration.</summary>
-type public FSharpProjectOptions = 
+and public FSharpProjectOptions = 
     { 
       // Note that this may not reduce to just the project directory, because there may be two projects in the same directory.
       ProjectFileName: string
@@ -324,7 +330,7 @@ type public FSharpProjectOptions =
 
       /// The command line arguments for the other projects referenced by this project, indexed by the
       /// exact text used in the "-r:" reference in FSharpProjectOptions.
-      ReferencedProjects: (string * FSharpProjectOptions)[]
+      ReferencedProjects: FSharpReferencedProject list
 
       /// When true, the typechecking environment is known a priori to be incomplete, for
       /// example when a .fs file is opened outside of a project. In this case, the number of error 
@@ -352,6 +358,8 @@ type public FSharpProjectOptions =
       /// If two sets of options both have stamps, then they are considered equal
       /// if and only if the stamps are equal
       Stamp: int64 option
+
+      DependentStamp: int64 option
     }
          
 /// The result of calling TypeCheckResult including the possibility of abort and background compiler not caught up.

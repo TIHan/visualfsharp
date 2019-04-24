@@ -1771,14 +1771,21 @@ module internal Parser =
 
 type UnresolvedReferencesSet = UnresolvedReferencesSet of UnresolvedAssemblyReference list
 
+
+type FSharpReferencedProject =
+    {
+        DllPath: string
+        ProjectOptions: FSharpProjectOptions
+    }
+
 // NOTE: may be better just to move to optional arguments here
-type FSharpProjectOptions =
+and FSharpProjectOptions =
     { 
       ProjectFileName: string
       ProjectId: string option
       SourceFiles: string[]
       OtherOptions: string[]
-      ReferencedProjects: (string * FSharpProjectOptions)[]
+      ReferencedProjects: FSharpReferencedProject list
       IsIncompleteTypeCheckEnvironment : bool
       UseScriptResolutionRules : bool      
       LoadTime : System.DateTime
@@ -1786,6 +1793,7 @@ type FSharpProjectOptions =
       OriginalLoadReferences: (range * string) list
       ExtraProjectInfo : obj option
       Stamp : int64 option
+      DependentStamp: int64 option
     }
     member x.ProjectOptions = x.OtherOptions
     /// Whether the two parse options refer to the same project.
@@ -1808,9 +1816,9 @@ type FSharpProjectOptions =
         options1.UnresolvedReferences = options2.UnresolvedReferences &&
         options1.OriginalLoadReferences = options2.OriginalLoadReferences &&
         options1.ReferencedProjects.Length = options2.ReferencedProjects.Length &&
-        Array.forall2 (fun (n1,a) (n2,b) ->
-            n1 = n2 && 
-            FSharpProjectOptions.AreSameForChecking(a,b)) options1.ReferencedProjects options2.ReferencedProjects &&
+        List.forall2 (fun a b ->
+            a.DllPath = b.DllPath &&
+            FSharpProjectOptions.AreSameForChecking(a.ProjectOptions,b.ProjectOptions)) options1.ReferencedProjects options2.ReferencedProjects &&
         options1.LoadTime = options2.LoadTime
 
     /// Compute the project directory.
@@ -2327,7 +2335,7 @@ type ParseCacheLockToken() = interface LockToken
 type ScriptClosureCacheToken() = interface LockToken
 
 [<Sealed>]
-type ProjectFSharpAssemblyDataCache () =
+type ProjectAssemblyDataCache () =
     let comparer =
         { new IEqualityComparer<FSharpProjectOptions> with
 
@@ -2343,11 +2351,48 @@ type ProjectFSharpAssemblyDataCache () =
     let cache = Dictionary<FSharpProjectOptions, IRawFSharpAssemblyData>(comparer)
     let stampCache = Dictionary<FSharpProjectOptions, int64 * DateTime> ()
 
-    member __.Set (options, tcAssemblyData) =
-        cache.[options] <- tcAssemblyData
+    let rec invalidateProject projectOptions stamp =
+        cache.Remove projectOptions |> ignore
+        stampCache.[projectOptions] <- (stamp, DateTime.UtcNow)
+        checkReferencedProjects projectOptions
 
-    member __.CheckValidation
+    and checkReferencedProjects projectOptions =
+        projectOptions.ReferencedProjects
+        |> List.iter (fun referencedProject ->
+            checkProject referencedProject.ProjectOptions
+        )
 
+    and checkProject projectOptions =
+        match projectOptions.DependentStamp, stampCache.TryGetValue projectOptions with
+        | Some stamp, (true, (oldStamp, _)) ->
+            if stamp <> oldStamp then
+                invalidateProject projectOptions stamp
+        | Some stamp, (false, _) ->
+            invalidateProject projectOptions stamp
+        | _ ->
+            // No dependent stamp, remove everything.
+            cache.Remove projectOptions |> ignore
+            stampCache.Remove projectOptions |> ignore
+
+    member __.Set (projectOptions, tcAssemblyData) =
+        cache.[projectOptions] <- tcAssemblyData
+
+    member __.CheckProject projectOptions =
+        checkProject projectOptions
+
+    member __.TryGetAssemblyData projectOptions =
+        match cache.TryGetValue projectOptions with
+        | true, tcAssemblyData -> Some tcAssemblyData
+        | _ -> None
+
+    member __.TryGetTimeStamp projectOptions =
+        match stampCache.TryGetValue projectOptions with
+        | true, (_, timeStamp) -> Some timeStamp
+        | _ -> None
+
+    member __.Clear () =
+        cache.Clear ()
+        stampCache.Clear ()
 
 // There is only one instance of this type, held in FSharpChecker
 type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors) as self =
@@ -2375,31 +2420,39 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
     let scriptClosureCacheLock = Lock<ScriptClosureCacheToken>()
     let frameworkTcImportsCache = FrameworkImportsCache(frameworkTcImportsCacheStrongSize)
 
+    let projectAssemblyDataCache = ProjectAssemblyDataCache ()
+
     /// CreateOneIncrementalBuilder (for background type checking). Note that fsc.fs also
     /// creates an incremental builder used by the command line compiler.
     let CreateOneIncrementalBuilder (ctok, options:FSharpProjectOptions, userOpName) = 
       cancellable {
         Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "CreateOneIncrementalBuilder", options.ProjectFileName)
         let projectReferences =  
-            [ for (nm,opts) in options.ReferencedProjects do
+            [ for referencedProject in options.ReferencedProjects do
                
                // Don't use cross-project references for FSharp.Core, since various bits of code require a concrete FSharp.Core to exist on-disk.
                // The only solutions that have these cross-project references to FSharp.Core are VisualFSharp.sln and FSharp.sln. The only ramification
                // of this is that you need to build FSharp.Core to get intellisense in those projects.
 
-               if (try Path.GetFileNameWithoutExtension(nm) with _ -> "") <> GetFSharpCoreLibraryName() then
+               if (try Path.GetFileNameWithoutExtension(referencedProject.DllPath) with _ -> "") <> GetFSharpCoreLibraryName() then
 
                  yield
                     { new IProjectReference with 
                         member x.EvaluateRawContents(ctok) = 
                           cancellable {
-                            Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "ParseAndCheckProjectImpl", nm)
-                            let! r = self.ParseAndCheckProjectImpl(opts, ctok, userOpName + ".CheckReferencedProject("+nm+")")
-                            return r.RawFSharpAssemblyData 
+                            match projectAssemblyDataCache.TryGetAssemblyData referencedProject.ProjectOptions with
+                            | Some tcAssemblyData -> return Some tcAssemblyData
+                            | _ ->
+                                Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "ParseAndCheckProjectImpl", referencedProject.DllPath)
+                                let! r = self.ParseAndCheckProjectImpl(referencedProject.ProjectOptions, ctok, userOpName + ".CheckReferencedProject("+referencedProject.DllPath+")")
+                                return r.RawFSharpAssemblyData 
                           }
                         member x.TryGetLogicalTimeStamp(cache, ctok) = 
-                            self.TryGetLogicalTimeStampForProject(cache, ctok, opts, userOpName + ".TimeStampReferencedProject("+nm+")")
-                        member x.FileName = nm } ]
+                            match projectAssemblyDataCache.TryGetTimeStamp referencedProject.ProjectOptions with
+                            | Some timeStamp -> Some timeStamp
+                            | _ ->
+                                self.TryGetLogicalTimeStampForProject(cache, ctok, referencedProject.ProjectOptions, userOpName + ".TimeStampReferencedProject("+referencedProject.DllPath+")")
+                        member x.FileName = referencedProject.DllPath } ]
 
         let loadClosure = scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.TryGet (ltok, options))
         let! builderOpt, diagnostics = 
@@ -2644,6 +2697,8 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         let execWithReactorAsync action = reactor.EnqueueAndAwaitOpAsync(userOpName, "CheckFileInProjectAllowingStaleCachedResults ", filename, action)
         async {
             try
+                projectAssemblyDataCache.CheckProject options
+
                 if implicitlyStartBackgroundWork then 
                     reactor.CancelBackgroundOp() // cancel the background work, since we will start new work after we're done
 
@@ -2687,6 +2742,8 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         let execWithReactorAsync action = reactor.EnqueueAndAwaitOpAsync(userOpName, "CheckFileInProject", filename, action)
         async {
             try 
+                projectAssemblyDataCache.CheckProject options
+
                 if implicitlyStartBackgroundWork then 
                     reactor.CancelBackgroundOp() // cancel the background work, since we will start new work after we're done
                 let! builderOpt,creationErrors, decrement = execWithReactorAsync (fun ctok -> getOrCreateBuilderAndKeepAlive (ctok, options, userOpName))
@@ -2713,6 +2770,8 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         let execWithReactorAsync action = reactor.EnqueueAndAwaitOpAsync(userOpName, "ParseAndCheckFileInProject", filename, action)
         async {
             try 
+                projectAssemblyDataCache.CheckProject options
+
                 let strGuid = "_ProjectId=" + (options.ProjectId |> Option.defaultValue "null")
                 Logger.LogBlockMessageStart (filename + strGuid) LogCompilerFunctionId.Service_ParseAndCheckFileInProject
 
@@ -2810,6 +2869,11 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             return FSharpCheckProjectResults (options.ProjectFileName, None, keepAssemblyContents, creationErrors, None)
         | Some builder -> 
             let! (tcProj, ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt)  = builder.GetCheckResultsAndImplementationsForProject(ctok)
+
+            match tcAssemblyDataOpt with
+            | Some tcAssemblyData -> projectAssemblyDataCache.Set (options, tcAssemblyData)
+            | _ -> ()
+
             let errorOptions = tcProj.TcConfig.errorSeverityOptions
             let fileName = TcGlobals.DummyFileNameForRangesWithoutASpecificLocation
             let errors = [| yield! creationErrors; yield! ErrorHelpers.CreateErrorInfos (errorOptions, true, fileName, tcProj.TcErrors, suggestNamesForErrors) |]
@@ -2887,7 +2951,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                     ProjectId = None
                     SourceFiles = loadClosure.SourceFiles |> List.map fst |> List.toArray
                     OtherOptions = otherFlags 
-                    ReferencedProjects= [| |]  
+                    ReferencedProjects= []  
                     IsIncompleteTypeCheckEnvironment = false
                     UseScriptResolutionRules = true 
                     LoadTime = loadedTimeStamp
@@ -2895,6 +2959,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                     OriginalLoadReferences = loadClosure.OriginalLoadReferences
                     ExtraProjectInfo=extraProjectInfo
                     Stamp = optionsStamp
+                    DependentStamp = None
                 }
             scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.Set(ltok, options, loadClosure)) // Save the full load closure for later correlation.
             return options, errors.Diagnostics
@@ -3241,14 +3306,15 @@ type FSharpChecker(legacyReferenceResolver, projectCacheSize, keepAssemblyConten
           ProjectId = None
           SourceFiles = [| |] // the project file names will be inferred from the ProjectOptions
           OtherOptions = argv 
-          ReferencedProjects= [| |]  
+          ReferencedProjects= []  
           IsIncompleteTypeCheckEnvironment = false
           UseScriptResolutionRules = false
           LoadTime = loadedTimeStamp
           UnresolvedReferences = None
           OriginalLoadReferences=[]
           ExtraProjectInfo=extraProjectInfo
-          Stamp = None }
+          Stamp = None
+          DependentStamp = None }
 
     member ic.GetParsingOptionsFromCommandLineArgs(initialSourceFiles, argv, ?isInteractive) =
         let isInteractive = defaultArg isInteractive false

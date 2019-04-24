@@ -309,9 +309,11 @@ type internal ProjectSitesAndFiles() =
     and getProjectOptionsForProjectSite(enableInMemoryCrossProjectReferences, tryGetOptionsForReferencedProject, projectSite, serviceProvider, projectId, fileName, extraProjectInfo, projectOptionsTable,  useUniqueStamp) =
         let referencedProjectFileNames, referencedProjectOptions = 
             if enableInMemoryCrossProjectReferences then
-                referencedProjectsOf(enableInMemoryCrossProjectReferences, tryGetOptionsForReferencedProject, projectSite, serviceProvider, extraProjectInfo, projectOptionsTable, useUniqueStamp)
-                |> Array.unzip
-            else [| |], [| |]
+                let referencedProjectFileNames, referencedProjectOptions =
+                    referencedProjectsOf(enableInMemoryCrossProjectReferences, tryGetOptionsForReferencedProject, projectSite, serviceProvider, extraProjectInfo, projectOptionsTable, useUniqueStamp)
+                    |> Array.unzip
+                referencedProjectFileNames, (referencedProjectOptions |> Seq.map (fun (dllPath, options) -> { DllPath = dllPath; ProjectOptions = options }) |> List.ofSeq)
+            else [| |], []
         let option =
             let newOption () = {
                 ProjectFileName = projectSite.ProjectFileName
@@ -326,6 +328,7 @@ type internal ProjectSitesAndFiles() =
                 OriginalLoadReferences = []
                 ExtraProjectInfo=extraProjectInfo 
                 Stamp = if useUniqueStamp then (stamp <- stamp + 1L; Some stamp) else None 
+                DependentStamp = None
             }
             match projectId, projectOptionsTable with
             | Some id, Some optionsTable ->

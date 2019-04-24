@@ -78,27 +78,11 @@ module private FSharpProjectOptionsHelpers =
                 member __.Unused4() = hier.Unused4()
         }
 
-    let hasProjectVersionChanged (oldProject: Project) (newProject: Project) =
-        oldProject.Version <> newProject.Version
-
-    let hasDependentVersionChanged (oldProject: Project) (newProject: Project) =
-        let oldProjectRefs = oldProject.ProjectReferences
-        let newProjectRefs = newProject.ProjectReferences
-        oldProjectRefs.Count() <> newProjectRefs.Count() ||
-        (oldProjectRefs, newProjectRefs)
-        ||> Seq.exists2 (fun p1 p2 ->
-            let doesProjectIdDiffer = p1.ProjectId <> p2.ProjectId
-            let p1 = oldProject.Solution.GetProject(p1.ProjectId)
-            let p2 = newProject.Solution.GetProject(p2.ProjectId)
-            doesProjectIdDiffer || p1.Version <> p2.Version
-        )
-
-    let isProjectInvalidated (oldProject: Project) (newProject: Project) (settings: EditorOptions) =
-        let hasProjectVersionChanged = hasProjectVersionChanged oldProject newProject
-        if settings.LanguageServicePerformance.EnableInMemoryCrossProjectReferences then
-            hasProjectVersionChanged || hasDependentVersionChanged oldProject newProject
-        else
-            hasProjectVersionChanged
+    [<RequireQualifiedAccess>]
+    type ProjectChanged =
+        | None
+        | Hard // added, removed, or newer project references
+        | Soft // project references had its files modified
 
 [<RequireQualifiedAccess>]
 type private FSharpProjectOptionsMessage =
@@ -134,7 +118,7 @@ type private FSharpProjectOptionsReactor (workspace: VisualStudioWorkspaceImpl, 
                             ProjectId = None
                             SourceFiles = [|document.FilePath|]
                             OtherOptions = [||]
-                            ReferencedProjects = [||]
+                            ReferencedProjects = []
                             IsIncompleteTypeCheckEnvironment = false
                             UseScriptResolutionRules = SourceFile.MustBeSingleFileProject (Path.GetFileName(document.FilePath))
                             LoadTime = DateTime.Now
@@ -142,6 +126,7 @@ type private FSharpProjectOptionsReactor (workspace: VisualStudioWorkspaceImpl, 
                             OriginalLoadReferences = []
                             ExtraProjectInfo= None
                             Stamp = Some(int64 (fileStamp.GetHashCode()))
+                            DependentStamp = None
                         }
 
                 cancellationToken.ThrowIfCancellationRequested()
@@ -161,93 +146,146 @@ type private FSharpProjectOptionsReactor (workspace: VisualStudioWorkspaceImpl, 
                 else
                     return Some(parsingOptions, projectOptions)
         }
-    
-    let rec tryComputeOptions (project: Project) (cancellationToken: CancellationToken) =
+
+    let rec tryComputeFSharpReferencedProjects (project: Project) (cancellationToken: CancellationToken) =
+        async {
+            if settings.LanguageServicePerformance.EnableInMemoryCrossProjectReferences then
+                // Because this code can be kicked off before the hack, HandleCommandLineChanges, occurs,
+                //     the command line options will not be available and we should bail if one of the project references does not give us anything.
+                let mutable canBail = false
+
+                let referencedProjects = ResizeArray ()
+                for projectReference in project.ProjectReferences do
+                    let referencedProject = project.Solution.GetProject(projectReference.ProjectId)
+                    if referencedProject.Language = FSharpConstants.FSharpLanguageName then
+                        match! tryComputeOptions referencedProject cancellationToken with
+                        | None -> 
+                            canBail <- true
+                        | Some(_, projectOptions) -> 
+                            referencedProjects.Add { DllPath = referencedProject.OutputFilePath; ProjectOptions = projectOptions }
+
+                if canBail then
+                    return None
+                else
+                    return
+                        referencedProjects
+                        |> List.ofSeq
+                        |> Some
+            else
+                return Some []
+        }
+
+    // Fully invalidate a project in the compiler service; will rebuild an incremental builder.
+    and invalidateOptions (oldProject: Project) (project: Project) (cancellationToken: CancellationToken) =
+        async {
+            cache.Remove oldProject.Id |> ignore
+            return! tryComputeOptions project cancellationToken
+        }
+
+    and updateOptions (oldProject: Project) (project: Project) (parsingOptions: FSharpParsingOptions) (projectOptions: FSharpProjectOptions) (cancellationToken: CancellationToken) =
+        async {
+            System.Diagnostics.Debug.Assert (oldProject.Id = project.Id, "OldProject and Project do not have the same ProjectId.")
+
+            // Something major in the project has changed: added/removed project references, added/removed/changed metadata references, modified command line options, order-changed/new/removed documents.
+            // We need to rebuild everything.
+            if oldProject.Version <> project.Version then
+                return! invalidateOptions oldProject project cancellationToken
+            else
+                // This path is to update the dependent stamp and referenced projects. 
+                // Referenced projects could have changed but not affect the project iself, so it's a minor update, such as a file changing in a project reference.
+                match! tryComputeFSharpReferencedProjects project cancellationToken with
+                | None ->
+                    // We have invalid project references. Invalidate project.
+                    return! invalidateOptions oldProject project cancellationToken
+                | Some referencedProjects ->
+                    let! projectDependentVersion = project.GetDependentVersionAsync cancellationToken |> Async.AwaitTask
+
+                    let dependentStamp = Some (int64 (projectDependentVersion.GetHashCode ()))
+
+                    let projectOptions = { projectOptions with ReferencedProjects = referencedProjects; DependentStamp = dependentStamp }
+                    cache.[project.Id] <- (project, parsingOptions, projectOptions)
+                    return Some (parsingOptions, projectOptions)
+        }
+
+    and tryComputeOptions (project: Project) (cancellationToken: CancellationToken) =
         async {
             let projectId = project.Id
             match cache.TryGetValue(projectId) with
             | false, _ ->
 
-                // Because this code can be kicked off before the hack, HandleCommandLineChanges, occurs,
-                //     the command line options will not be available and we should bail if one of the project references does not give us anything.
-                let mutable canBail = false
-            
-                let referencedProjects = ResizeArray()
+                match! tryComputeFSharpReferencedProjects project cancellationToken with
+                | None -> return None
+                | Some fsharpReferencedProjects ->
 
-                if settings.LanguageServicePerformance.EnableInMemoryCrossProjectReferences then
-                    for projectReference in project.ProjectReferences do
-                        let referencedProject = project.Solution.GetProject(projectReference.ProjectId)
-                        if referencedProject.Language = FSharpConstants.FSharpLanguageName then
-                            match! tryComputeOptions referencedProject cancellationToken with
-                            | None -> canBail <- true
-                            | Some(_, projectOptions) -> referencedProjects.Add(referencedProject.OutputFilePath, projectOptions)
+                    let hier = workspace.GetHierarchy(projectId)
+                    let projectSite = 
+                        match hier with
+                        // Legacy
+                        | (:? IProvideProjectSite as provideSite) -> provideSite.GetProjectSite()
+                        // Cps
+                        | _ -> 
+                            let provideSite = mapCpsProjectToSite(workspace, project, serviceProvider, cpsCommandLineOptions)
+                            provideSite.GetProjectSite()
 
-                if canBail then
-                    return None
-                else
+                    let otherOptions =
+                        project.ProjectReferences
+                        |> Seq.map (fun x -> "-r:" + project.Solution.GetProject(x.ProjectId).OutputFilePath)
+                        |> Array.ofSeq
+                        |> Array.append (
+                                project.MetadataReferences.OfType<PortableExecutableReference>()
+                                |> Seq.map (fun x -> "-r:" + x.FilePath)
+                                |> Array.ofSeq
+                                |> Array.append (
+                                        // Clear any references from CompilationOptions. 
+                                        // We get the references from Project.ProjectReferences/Project.MetadataReferences.
+                                        projectSite.CompilationOptions
+                                        |> Array.filter (fun x -> not (x.Contains("-r:")))
+                                    )
+                            )
 
-                let hier = workspace.GetHierarchy(projectId)
-                let projectSite = 
-                    match hier with
-                    // Legacy
-                    | (:? IProvideProjectSite as provideSite) -> provideSite.GetProjectSite()
-                    // Cps
-                    | _ -> 
-                        let provideSite = mapCpsProjectToSite(workspace, project, serviceProvider, cpsCommandLineOptions)
-                        provideSite.GetProjectSite()
+                    let! dependentVersion = project.GetDependentVersionAsync cancellationToken |> Async.AwaitTask
+                    let dependentStamp = Some (int64 (dependentVersion.GetHashCode ()))
 
-                let otherOptions =
-                    project.ProjectReferences
-                    |> Seq.map (fun x -> "-r:" + project.Solution.GetProject(x.ProjectId).OutputFilePath)
-                    |> Array.ofSeq
-                    |> Array.append (
-                            project.MetadataReferences.OfType<PortableExecutableReference>()
-                            |> Seq.map (fun x -> "-r:" + x.FilePath)
-                            |> Array.ofSeq
-                            |> Array.append (
-                                    // Clear any references from CompilationOptions. 
-                                    // We get the references from Project.ProjectReferences/Project.MetadataReferences.
-                                    projectSite.CompilationOptions
-                                    |> Array.filter (fun x -> not (x.Contains("-r:")))
-                                )
-                        )
+                    let projectOptions =
+                        {
+                            ProjectFileName = projectSite.ProjectFileName
+                            ProjectId = Some(projectId.ToFSharpProjectIdString())
+                            SourceFiles = projectSite.CompilationSourceFiles
+                            OtherOptions = otherOptions
+                            ReferencedProjects = fsharpReferencedProjects
+                            IsIncompleteTypeCheckEnvironment = projectSite.IsIncompleteTypeCheckEnvironment
+                            UseScriptResolutionRules = SourceFile.MustBeSingleFileProject (Path.GetFileName(project.FilePath))
+                            LoadTime = projectSite.LoadTime
+                            UnresolvedReferences = None
+                            OriginalLoadReferences = []
+                            ExtraProjectInfo= None
+                            Stamp = Some(int64 (project.Version.GetHashCode()))
+                            DependentStamp = dependentStamp
+                        }
 
-                let projectOptions =
-                    {
-                        ProjectFileName = projectSite.ProjectFileName
-                        ProjectId = Some(projectId.ToFSharpProjectIdString())
-                        SourceFiles = projectSite.CompilationSourceFiles
-                        OtherOptions = otherOptions
-                        ReferencedProjects = referencedProjects.ToArray()
-                        IsIncompleteTypeCheckEnvironment = projectSite.IsIncompleteTypeCheckEnvironment
-                        UseScriptResolutionRules = SourceFile.MustBeSingleFileProject (Path.GetFileName(project.FilePath))
-                        LoadTime = projectSite.LoadTime
-                        UnresolvedReferences = None
-                        OriginalLoadReferences = []
-                        ExtraProjectInfo= None
-                        Stamp = Some(int64 (project.Version.GetHashCode()))
-                    }
+                    cancellationToken.ThrowIfCancellationRequested()
 
-                cancellationToken.ThrowIfCancellationRequested()
+                    // This can happen if we didn't receive the callback from HandleCommandLineChanges yet.
+                    if Array.isEmpty projectOptions.SourceFiles then
+                        return None
+                    else
+                        checkerProvider.Checker.InvalidateConfiguration(projectOptions, startBackgroundCompileIfAlreadySeen = false, userOpName = "computeOptions")
 
-                // This can happen if we didn't receive the callback from HandleCommandLineChanges yet.
-                if Array.isEmpty projectOptions.SourceFiles then
-                    return None
-                else
-                    checkerProvider.Checker.InvalidateConfiguration(projectOptions, startBackgroundCompileIfAlreadySeen = false, userOpName = "computeOptions")
+                        let parsingOptions, _ = checkerProvider.Checker.GetParsingOptionsFromProjectOptions(projectOptions)
 
-                    let parsingOptions, _ = checkerProvider.Checker.GetParsingOptionsFromProjectOptions(projectOptions)
+                        cache.[projectId] <- (project, parsingOptions, projectOptions)
 
-                    cache.[projectId] <- (project, parsingOptions, projectOptions)
-
-                    return Some(parsingOptions, projectOptions)
+                        return Some(parsingOptions, projectOptions)
   
             | true, (oldProject, parsingOptions, projectOptions) ->
-                if isProjectInvalidated oldProject project settings then
-                    cache.Remove(projectId) |> ignore
-                    return! tryComputeOptions project cancellationToken
-                else
-                    return Some(parsingOptions, projectOptions)
+                let! oldDependentVersion = oldProject.GetDependentVersionAsync cancellationToken |> Async.AwaitTask
+                let! dependentVersion = project.GetDependentVersionAsync cancellationToken |> Async.AwaitTask
+
+                // If something changed, update the project options
+                if oldDependentVersion <> dependentVersion then
+                    return! updateOptions oldProject project parsingOptions projectOptions cancellationToken
+                else                 
+                    return Some (parsingOptions, projectOptions)
         }
 
     let loop (agent: MailboxProcessor<FSharpProjectOptionsMessage>) =

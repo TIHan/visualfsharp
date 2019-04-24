@@ -361,14 +361,15 @@ type internal FSharpSource_DEPRECATED(service:LanguageService_DEPRECATED, textLi
                   ProjectId = None
                   SourceFiles = [| fileName |]
                   OtherOptions = flags
-                  ReferencedProjects = [| |]
+                  ReferencedProjects = []
                   IsIncompleteTypeCheckEnvironment = true
                   UseScriptResolutionRules = false
                   LoadTime = new System.DateTime(2000,1,1)   // dummy data, just enough to get a parse
                   UnresolvedReferences = None
                   OriginalLoadReferences = []
                   ExtraProjectInfo=None 
-                  Stamp = None }
+                  Stamp = None
+                  DependentStamp = None }
                 |> ic.GetParsingOptionsFromProjectOptions
 
             ic.ParseFile(fileName,  FSharp.Compiler.Text.SourceText.ofString (source.GetText()), co) |> Async.RunSynchronously
