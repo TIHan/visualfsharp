@@ -2348,8 +2348,8 @@ type ProjectAssemblyDataCache () =
                 FSharpProjectOptions.UseSameProject (projectOptions1, projectOptions2)
         }
 
-    let cache = Dictionary<FSharpProjectOptions, IRawFSharpAssemblyData>(comparer)
-    let stampCache = Dictionary<FSharpProjectOptions, int64 * DateTime> ()
+    let cache = Dictionary<FSharpProjectOptions, IRawFSharpAssemblyData> (comparer)
+    let stampCache = Dictionary<FSharpProjectOptions, int64 * DateTime> (comparer)
 
     let rec invalidateProject projectOptions stamp =
         cache.Remove projectOptions |> ignore
