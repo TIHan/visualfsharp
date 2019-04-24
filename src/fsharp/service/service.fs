@@ -2350,6 +2350,7 @@ type ProjectAssemblyDataCache () =
 
     let cache = Dictionary<FSharpProjectOptions, IRawFSharpAssemblyData> (comparer)
     let stampCache = Dictionary<FSharpProjectOptions, int64 * DateTime> (comparer)
+    let projectFileStampCache = Dictionary<FSharpProjectOptions, Dictionary<string, int * DateTime>> (comparer)
 
     let rec invalidateProject projectOptions stamp =
         cache.Remove projectOptions |> ignore
@@ -2377,6 +2378,19 @@ type ProjectAssemblyDataCache () =
     member __.Set (projectOptions, tcAssemblyData) =
         cache.[projectOptions] <- tcAssemblyData
 
+    member this.SetProjectFileStamp (projectOptions, fileName, fileStamp) =
+        match projectFileStampCache.TryGetValue projectOptions with
+        | true, fileStampCache ->
+            match fileStampCache.TryGetValue fileName with
+            | true, (oldFileStamp, _) ->
+                if oldFileStamp <> fileStamp then
+                    fileStampCache.[fileName] <- (fileStamp, DateTime.UtcNow)
+            | _ ->
+                fileStampCache.[fileName] <- (fileStamp, DateTime.UtcNow)
+        | _ ->
+            projectFileStampCache.Add (projectOptions, Dictionary ())
+            this.SetProjectFileStamp (projectOptions, fileName, fileStamp)
+
     member __.CheckProject projectOptions =
         checkProject projectOptions
 
@@ -2388,6 +2402,14 @@ type ProjectAssemblyDataCache () =
     member __.TryGetTimeStamp projectOptions =
         match stampCache.TryGetValue projectOptions with
         | true, (_, timeStamp) -> Some timeStamp
+        | _ -> None
+
+    member __.TryGetFileTimeStampCache (projectOptions, fileName) =
+        match projectFileStampCache.TryGetValue projectOptions with
+        | true, fileStampCache ->
+            match fileStampCache.TryGetValue fileName with
+            | true, (_, timeStamp) -> Some timeStamp
+            | _ -> None
         | _ -> None
 
     member __.Clear () =
@@ -2455,12 +2477,20 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                         member x.FileName = referencedProject.DllPath } ]
 
         let loadClosure = scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.TryGet (ltok, options))
+
+        let sourceFileGetTimeStamps =
+            options.SourceFiles
+            |> Array.map (fun sourceFile ->
+                fun () -> projectAssemblyDataCache.TryGetFileTimeStampCache (options, sourceFile)
+            )
+            |> List.ofArray
+
         let! builderOpt, diagnostics = 
             IncrementalBuilder.TryCreateBackgroundBuilderForProjectOptions
                   (ctok, legacyReferenceResolver, defaultFSharpBinariesDir, frameworkTcImportsCache, loadClosure, Array.toList options.SourceFiles, 
                    Array.toList options.OtherOptions, projectReferences, options.ProjectDirectory, 
                    options.UseScriptResolutionRules, keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds,
-                   tryGetMetadataSnapshot, suggestNamesForErrors)
+                   tryGetMetadataSnapshot, suggestNamesForErrors, sourceFileGetTimeStamps)
 
         // We're putting the builder in the cache, so increment its count.
         let decrement = IncrementalBuilder.KeepBuilderAlive builderOpt
@@ -2698,6 +2728,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         async {
             try
                 projectAssemblyDataCache.CheckProject options
+                projectAssemblyDataCache.SetProjectFileStamp (options, filename, fileVersion)
 
                 if implicitlyStartBackgroundWork then 
                     reactor.CancelBackgroundOp() // cancel the background work, since we will start new work after we're done
@@ -2743,6 +2774,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         async {
             try 
                 projectAssemblyDataCache.CheckProject options
+                projectAssemblyDataCache.SetProjectFileStamp (options, filename, fileVersion)
 
                 if implicitlyStartBackgroundWork then 
                     reactor.CancelBackgroundOp() // cancel the background work, since we will start new work after we're done
@@ -2771,6 +2803,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         async {
             try 
                 projectAssemblyDataCache.CheckProject options
+                projectAssemblyDataCache.SetProjectFileStamp (options, filename, fileVersion)
 
                 let strGuid = "_ProjectId=" + (options.ProjectId |> Option.defaultValue "null")
                 Logger.LogBlockMessageStart (filename + strGuid) LogCompilerFunctionId.Service_ParseAndCheckFileInProject

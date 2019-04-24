@@ -165,6 +165,7 @@ type TimeStampCache =
     new: defaultTimeStamp: DateTime -> TimeStampCache
     member GetFileTimeStamp: string -> DateTime
     member GetProjectReferenceTimeStamp: IProjectReference * CompilationThreadToken -> DateTime
+    member SetFileTimeStamp: string * DateTime -> unit
 
 and IProjectReference = 
 

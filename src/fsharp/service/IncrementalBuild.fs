@@ -1209,7 +1209,7 @@ type RawFSharpAssemblyDataBackedByLanguageService (sigData, autoOpenAttrs, ivtAt
 type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInputs, nonFrameworkResolutions, unresolvedReferences, tcConfig: TcConfig, projectDirectory, outfile, 
                         assemblyName, niceNameGen: Ast.NiceNameGenerator, lexResourceManager, 
                         sourceFiles, loadClosureOpt: LoadClosure option, 
-                        keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds) =
+                        keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds, sourceFileGetTimeStamps) =
 
     let tcConfigP = TcConfigProvider.Constant tcConfig
     let importsInvalidated = new Event<string>()
@@ -1222,9 +1222,15 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     let sourceFiles = tcConfig.GetAvailableLoadedSources() @ (sourceFiles |>List.map (fun s -> rangeStartup, s))
 
     // Mark up the source files with an indicator flag indicating if they are the last source file in the project
-    let sourceFiles = 
+    let sourceFilesOnly = 
         let flags, isExe = tcConfig.ComputeCanContainEntryPoint(sourceFiles |> List.map snd)
         ((sourceFiles, flags) ||> List.map2 (fun (m, nm) flag -> (m, nm, (flag, isExe))))
+
+    let sourceFiles =
+        (sourceFilesOnly, sourceFileGetTimeStamps)
+        ||> List.map2 (fun (m, nm, (flag, isExe)) getTimeStamp ->
+            (m, nm, (flag, isExe), getTimeStamp)
+        )
 
     let defaultTimeStamp = DateTime.UtcNow
 
@@ -1240,7 +1246,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
     let allDependencies =
         [| yield! basicDependencies
-           for (_, f, _) in sourceFiles do
+           for (_, f, _, _) in sourceFiles do
                 yield f |]
 
     // The IncrementalBuilder needs to hold up to one item that needs to be disposed, which is the tcImports for the incremental
@@ -1270,14 +1276,19 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     /// This is a build task function that gets placed into the build rules as the computation for a VectorStamp
     ///
     /// Get the timestamp of the given file name.
-    let StampFileNameTask (cache: TimeStampCache) _ctok (_m: range, filename: string, _isLastCompiland) =
+    let StampFileNameTask (cache: TimeStampCache) _ctok (_sourceRange: range, filename: string, _isLastCompiled: bool * bool, getTimeStamp: unit -> DateTime option) =
         assertNotDisposed()
-        cache.GetFileTimeStamp filename
+        match getTimeStamp () with
+        | Some timeStamp -> 
+            cache.SetFileTimeStamp (filename, timeStamp)
+            timeStamp
+        | _ ->
+            cache.GetFileTimeStamp filename
 
     /// This is a build task function that gets placed into the build rules as the computation for a VectorMap
     ///
     /// Parse the given file and return the given input.
-    let ParseTask ctok (sourceRange: range, filename: string, isLastCompiland) =
+    let ParseTask ctok (sourceRange: range, filename: string, isLastCompiland, _getTimeStamp: unit -> DateTime option) =
         assertNotDisposed()
         DoesNotRequireCompilerThreadTokenAndCouldPossiblyBeMadeConcurrent  ctok
 
@@ -1547,7 +1558,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     // START OF BUILD DESCRIPTION
 
     // Inputs
-    let fileNamesNode               = InputVector<range*string*(bool*bool)> "FileNames"
+    let fileNamesNode               = InputVector<range * string * (bool * bool) * (unit -> DateTime option)> "FileNames"
     let referencedAssembliesNode    = InputVector<Choice<string, IProjectReference>*(TimeStampCache -> CompilationThreadToken -> DateTime)> "ReferencedAssemblies"
         
     // Build
@@ -1710,7 +1721,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         
     member __.GetSlotOfFileName(filename: string) =
         // Get the slot of the given file and force it to build.
-        let CompareFileNames (_, f2, _) = 
+        let CompareFileNames (_, f2, _, _) = 
             let result = 
                    String.Compare(filename, f2, StringComparison.CurrentCultureIgnoreCase)=0
                 || String.Compare(FileSystem.GetFullPathShim filename, FileSystem.GetFullPathShim f2, StringComparison.CurrentCultureIgnoreCase)=0
@@ -1743,7 +1754,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         return ParseTask ctok results
       }
 
-    member __.SourceFiles  = sourceFiles  |> List.map (fun (_, f, _) -> f)
+    member __.SourceFiles  = sourceFiles  |> List.map (fun (_, f, _, _) -> f)
 
     /// CreateIncrementalBuilder (for background type checking). Note that fsc.fs also
     /// creates an incremental builder used by the command line compiler.
@@ -1756,7 +1767,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                        projectReferences, projectDirectory,
                        useScriptResolutionRules, keepAssemblyContents,
                        keepAllBackgroundResolutions, maxTimeShareMilliseconds,
-                       tryGetMetadataSnapshot, suggestNamesForErrors) =
+                       tryGetMetadataSnapshot, suggestNamesForErrors, sourceFileGetTimeStamps) =
       let useSimpleResolutionSwitch = "--simpleresolution"
 
       cancellable {
@@ -1868,7 +1879,8 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                                         resourceManager, sourceFilesNew, loadClosureOpt, 
                                         keepAssemblyContents=keepAssemblyContents, 
                                         keepAllBackgroundResolutions=keepAllBackgroundResolutions, 
-                                        maxTimeShareMilliseconds=maxTimeShareMilliseconds)
+                                        maxTimeShareMilliseconds=maxTimeShareMilliseconds, 
+                                        sourceFileGetTimeStamps=sourceFileGetTimeStamps)
             return Some builder
           with e -> 
             errorRecoveryNoRange e
