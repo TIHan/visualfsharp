@@ -730,6 +730,13 @@ val TypeCheckOneInputEventually :
     checkForErrors:(unit -> bool) * TcConfig * TcImports * TcGlobals * Ast.LongIdent option * NameResolution.TcResultsSink * TcState * Ast.ParsedInput  
            -> Eventually<(TcEnv * TopAttribs * TypedImplFile option * ModuleOrNamespaceType) * TcState>
 
+/// Try typecheck a single impl file quickly if the impl file has a corresponding sig file.
+/// This prevents a full type check on a impl file if there is a corresponding sig file by immediately returning.
+/// TcImplEnv will contain a dummy impl for this file.
+val TryQuickTypeCheckOneInputEventually :
+    checkForErrors:TcConfig * TcImports * TcGlobals * Ast.LongIdent option * NameResolution.TcResultsSink * TcState * Ast.ParsedInput  
+           -> Eventually<((TcEnv * TopAttribs * TypedImplFile option * ModuleOrNamespaceType) * TcState) option>
+
 /// Finish the checking of multiple inputs 
 val TypeCheckMultipleInputsFinish: (TcEnv * TopAttribs * 'T option * 'U) list * TcState -> (TcEnv * TopAttribs * 'T list * 'U list) * TcState
     

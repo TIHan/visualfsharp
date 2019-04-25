@@ -1406,14 +1406,18 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
                     let input, moduleNamesDict = DeduplicateParsedInputModuleName tcAcc.tcModuleNamesDict input
 
+                    let! quickResult = TryQuickTypeCheckOneInputEventually(tcConfig, tcAcc.tcImports, tcAcc.tcGlobals, None, TcResultsSink.WithSink sink, tcAcc.tcState, input)
                     let! (tcEnvAtEndOfFile, topAttribs, implFile, ccuSigForFile), tcState = 
-                        TypeCheckOneInputEventually 
-                            ((fun () -> hadParseErrors || errorLogger.ErrorCount > 0), 
-                             tcConfig, tcAcc.tcImports, 
-                             tcAcc.tcGlobals, 
-                             None, 
-                             TcResultsSink.WithSink sink, 
-                             tcAcc.tcState, input)
+                        match quickResult with
+                        | Some result -> Eventually.Done result
+                        | _ ->
+                            TypeCheckOneInputEventually 
+                                ((fun () -> hadParseErrors || errorLogger.ErrorCount > 0), 
+                                 tcConfig, tcAcc.tcImports, 
+                                 tcAcc.tcGlobals, 
+                                 None, 
+                                 TcResultsSink.WithSink sink, 
+                                 tcAcc.tcState, input)
                         
                     /// Only keep the typed interface files when doing a "full" build for fsc.exe, otherwise just throw them away
                     let implFile = if keepAssemblyContents then implFile else None
