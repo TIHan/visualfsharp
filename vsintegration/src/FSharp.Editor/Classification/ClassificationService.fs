@@ -25,10 +25,8 @@ open FSharp.Compiler.SourceCodeServices
 type internal FSharpClassificationService
     [<ImportingConstructor>]
     (
-        checkerProvider: FSharpCheckerProvider,
         projectInfoManager: FSharpProjectOptionsManager
     ) =
-    static let userOpName = "SemanticColorization"
 
     interface IEditorClassificationService with
         // Do not perform classification if we don't have project options (#defines matter)
@@ -38,7 +36,7 @@ type internal FSharpClassificationService
             async {
                 use _logBlock = Logger.LogBlock(LogEditorFunctionId.Classification_Syntactic)
 
-                let defines = projectInfoManager.GetCompilationDefinesForEditingDocument(document)  
+                let defines = projectInfoManager.GetCompilationDefines document  
                 let! sourceText = document.GetTextAsync(cancellationToken)  |> Async.AwaitTask
                 result.AddRange(Tokenizer.getClassifiedSpans(document.Id, sourceText, textSpan, Some(document.FilePath), defines, cancellationToken))
             } |> RoslynHelpers.StartAsyncUnitAsTask cancellationToken
@@ -47,9 +45,7 @@ type internal FSharpClassificationService
             asyncMaybe {
                 use _logBlock = Logger.LogBlock(LogEditorFunctionId.Classification_Semantic)
 
-                let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document, cancellationToken)
-                let! sourceText = document.GetTextAsync(cancellationToken)
-                let! _, _, checkResults = checkerProvider.Checker.ParseAndCheckDocument(document, projectOptions, sourceText = sourceText, allowStaleResults = false, userOpName=userOpName) 
+                let! _, _, checkResults, sourceText = projectInfoManager.TryParseAndCheckDocument (document, cancellationToken) 
                 // it's crucial to not return duplicated or overlapping `ClassifiedSpan`s because Find Usages service crashes.
                 let targetRange = RoslynHelpers.TextSpanToFSharpRange(document.FilePath, textSpan, sourceText)
                 let classificationData = checkResults.GetSemanticClassification (Some targetRange) |> Array.distinctBy fst

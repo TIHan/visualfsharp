@@ -12,15 +12,13 @@ open System.Runtime.InteropServices
 type internal FSharpBraceMatchingService 
     [<ImportingConstructor>]
     (
-        checkerProvider: FSharpCheckerProvider,
         projectInfoManager: FSharpProjectOptionsManager
     ) =
-    
-    static let defaultUserOpName = "BraceMatching"
 
-    static member GetBraceMatchingResult(checker: FSharpChecker, sourceText: SourceText, fileName, parsingOptions: FSharpParsingOptions, position: int, userOpName: string, [<Optional; DefaultParameterValue(false)>] forFormatting: bool) = 
+    static member GetBraceMatchingResult(document, projectInfoManager: FSharpProjectOptionsManager, position: int, cancellationToken, [<Optional; DefaultParameterValue(false)>] forFormatting: bool) = 
         async {
-            let! matchedBraces = checker.MatchBraces(fileName, sourceText.ToFSharpSourceText(), parsingOptions, userOpName)
+            let! matchedBraces = projectInfoManager.GetMatchingBraces (document, cancellationToken)
+            let! sourceText = document.GetTextAsync cancellationToken |> Async.AwaitTask
             let isPositionInRange range = 
                 match RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, range) with
                 | None -> false
@@ -36,9 +34,8 @@ type internal FSharpBraceMatchingService
     interface IBraceMatcher with
         member this.FindBracesAsync(document, position, cancellationToken) = 
             asyncMaybe {
-                let! parsingOptions, _options = projectInfoManager.TryGetOptionsForEditingDocumentOrProject(document, cancellationToken)
                 let! sourceText = document.GetTextAsync(cancellationToken)
-                let! (left, right) = FSharpBraceMatchingService.GetBraceMatchingResult(checkerProvider.Checker, sourceText, document.Name, parsingOptions, position, defaultUserOpName)
+                let! (left, right) = FSharpBraceMatchingService.GetBraceMatchingResult(document, projectInfoManager, position, cancellationToken)
                 let! leftSpan = RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, left)
                 let! rightSpan = RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, right)
                 return BraceMatchingResult(leftSpan, rightSpan)
