@@ -4317,11 +4317,12 @@ type TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAssemblyResolu
         let optDataReaders = ilModule.GetRawFSharpOptimizationData(m, ilShortAssemName, filename)
 
         let ccuRawDataAndInfos = 
-            ilModule.GetRawFSharpSignatureData(m, ilShortAssemName, filename)
+            let sigDatas = ilModule.GetRawFSharpSignatureData(m, ilShortAssemName, filename)
+            sigDatas
             |> List.map (fun (ccuName, sigDataReader) -> 
                 let minfo, optDatas, data = 
                     match ilModule.TryGetSignature () with
-                    | Some minfo -> minfo, Map.Empty, { RawData=minfo; FixupThunks= [||] }
+                    | Some minfo when sigDatas.Length = 1 -> minfo, Map.Empty, { RawData=minfo; FixupThunks= [||] }
                     | _ ->
                         let data = GetSignatureData (filename, ilScopeRef, ilModule.TryGetILModuleDef(), sigDataReader)
                         let optDatas = Map.ofList optDataReaders
