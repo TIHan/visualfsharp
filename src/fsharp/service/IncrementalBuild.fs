@@ -1190,6 +1190,8 @@ type RawFSharpAssemblyDataBackedByLanguageService (tcConfig, tcGlobals, tcState:
 
     let ivtAttrs = topAttrs.assemblyAttrs |> List.choose (List.singleton >> TryFindFSharpStringAttribute tcGlobals tcGlobals.attrib_InternalsVisibleToAttribute)
 
+    let si = { mspec = generatedCcu.Contents; compileTimeWorkingDir = tcConfig.implicitIncludeDir; usesQuotations = generatedCcu.UsesFSharp20PlusQuotations }
+
     interface IRawFSharpAssemblyData with 
         member __.GetAutoOpenAttributes(_ilg) = autoOpenAttrs
         member __.GetInternalsVisibleToAttributes(_ilg) =  ivtAttrs
@@ -1202,6 +1204,7 @@ type RawFSharpAssemblyDataBackedByLanguageService (tcConfig, tcGlobals, tcState:
         member __.ILAssemblyRefs = [] // These are not significant for service scenarios
         member __.HasAnyFSharpSignatureDataAttribute =  true
         member __.HasMatchingFSharpSignatureDataAttribute _ilg = true
+        member __.TryGetSignature () = Some si
 
 
 /// Manages an incremental build graph for the build of a single F# project

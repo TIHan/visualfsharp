@@ -161,6 +161,7 @@ type IRawFSharpAssemblyData =
     abstract ILScopeRef: ILScopeRef
     abstract ILAssemblyRefs: ILAssemblyRef list
     abstract ShortAssemblyName: string
+    abstract TryGetSignature: unit -> PickledCcuInfo option
 
 type TimeStampCache = 
     new: defaultTimeStamp: DateTime -> TimeStampCache

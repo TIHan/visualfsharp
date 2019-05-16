@@ -1899,6 +1899,7 @@ type IRawFSharpAssemblyData =
     abstract ShortAssemblyName: string
     abstract HasAnyFSharpSignatureDataAttribute: bool
     abstract HasMatchingFSharpSignatureDataAttribute: ILGlobals -> bool
+    abstract TryGetSignature: unit -> PickledCcuInfo option
 
 /// Cache of time stamps as we traverse a project description
 type TimeStampCache(defaultTimeStamp: DateTime) = 
@@ -3708,6 +3709,7 @@ type RawFSharpAssemblyDataBackedByFileOnDisk (ilModule: ILModuleDef, ilAssemblyR
          member __.HasMatchingFSharpSignatureDataAttribute ilg = 
             let attrs = GetCustomAttributesOfILModule ilModule
             List.exists (IsMatchingSignatureDataVersionAttr ilg (IL.parseILVersion Internal.Utilities.FSharpEnvironment.FSharpBinaryMetadataFormatRevision)) attrs
+         member __.TryGetSignature () = None
 
 
 //----------------------------------------------------------------------------
@@ -4317,12 +4319,16 @@ type TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAssemblyResolu
         let ccuRawDataAndInfos = 
             ilModule.GetRawFSharpSignatureData(m, ilShortAssemName, filename)
             |> List.map (fun (ccuName, sigDataReader) -> 
-                let data = GetSignatureData (filename, ilScopeRef, ilModule.TryGetILModuleDef(), sigDataReader)
+                let minfo, optDatas, data = 
+                    match ilModule.TryGetSignature () with
+                    | Some minfo -> minfo, Map.Empty, { RawData=minfo; FixupThunks= [||] }
+                    | _ ->
+                        let data = GetSignatureData (filename, ilScopeRef, ilModule.TryGetILModuleDef(), sigDataReader)
+                        let optDatas = Map.ofList optDataReaders
 
-                let optDatas = Map.ofList optDataReaders
+                        data.RawData, optDatas, data
 
-                let minfo: PickledCcuInfo = data.RawData 
-                let mspec = minfo.mspec 
+                let mspec = minfo.mspec
 
 #if !NO_EXTENSIONTYPING
                 let invalidateCcu = new Event<_>()
