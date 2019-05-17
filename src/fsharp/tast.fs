@@ -5560,7 +5560,6 @@ let primEntityRefAsmFusionEq (x: EntityRef) (y: EntityRef) =
                 tref1.Name = tref2.Name && tref1.Enclosing = tref2.Enclosing && 
                 (
                     match tref1.Scope, tref2.Scope with
-                    | AbstractIL.IL.ILScopeRef.Local, AbstractIL.IL.ILScopeRef.Local when x.Stamp = y.Stamp -> true
                     | AbstractIL.IL.ILScopeRef.Assembly asmRef1, AbstractIL.IL.ILScopeRef.Assembly asmRef2 ->
                         (isPrimaryAssemblyRef asmRef1 && isPrimaryAssemblyRef asmRef2) || (asmRef1.Name = asmRef2.Name && asmRef1.PublicKey = asmRef2.PublicKey)
                     | _ -> false
