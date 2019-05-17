@@ -5547,6 +5547,28 @@ let fslibValRefEq fslibCcu vref1 vref2 =
             (nm1 = nm2)
         | _ -> false
     | _ -> false
+
+let primEntityRefAsmFusionEq (x: EntityRef) (y: EntityRef) =
+    let isPrimaryAssemblyRef (asmRef: AbstractIL.IL.ILAssemblyRef) =
+        asmRef.Name = AbstractIL.IL.PrimaryAssembly.Mscorlib.Name ||
+        asmRef.Name = AbstractIL.IL.PrimaryAssembly.NetStandard.Name ||
+        asmRef.Name = AbstractIL.IL.PrimaryAssembly.System_Runtime.Name
+    (
+        if not x.IsProvidedErasedTycon && not x.IsProvidedNamespace && not y.IsProvidedErasedTycon && not y.IsProvidedNamespace then
+            match x.CompiledRepresentation, y.CompiledRepresentation with 
+            | CompiledTypeRepr.ILAsmNamed(tref1, _, _), CompiledTypeRepr.ILAsmNamed(tref2, _, _) -> 
+                tref1.Name = tref2.Name && tref1.Enclosing = tref2.Enclosing && 
+                (
+                    match tref1.Scope, tref2.Scope with
+                    | AbstractIL.IL.ILScopeRef.Local, AbstractIL.IL.ILScopeRef.Local when x.Stamp = y.Stamp -> true
+                    | AbstractIL.IL.ILScopeRef.Assembly asmRef1, AbstractIL.IL.ILScopeRef.Assembly asmRef2 ->
+                        (isPrimaryAssemblyRef asmRef1 && isPrimaryAssemblyRef asmRef2) || (asmRef1.Name = asmRef2.Name && asmRef1.PublicKey = asmRef2.PublicKey)
+                    | _ -> false
+                )
+            | _ -> false
+        else
+            false
+    )
   
 /// Primitive routine to compare two EntityRef's for equality
 /// This takes into account the possibility that they may have type forwarders
@@ -5554,7 +5576,7 @@ let primEntityRefEq compilingFslib fslibCcu (x: EntityRef) (y: EntityRef) =
     x === y ||
     
     if x.IsResolved && y.IsResolved && not compilingFslib then
-        x.ResolvedTarget === y.ResolvedTarget 
+        x.ResolvedTarget === y.ResolvedTarget || primEntityRefAsmFusionEq x y
     elif not x.IsLocalRef && not y.IsLocalRef &&
         (// Two tcrefs with identical paths are always equal
          nonLocalRefEq x.nlr y.nlr || 
