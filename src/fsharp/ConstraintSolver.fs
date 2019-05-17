@@ -798,6 +798,24 @@ and SolveAnonInfoEqualsAnonInfo (csenv: ConstraintSolverEnv) m2 (anonInfo1: Anon
     else 
         ResultD ())
 
+and tyconRefEqApprox (x: EntityRef) (y: EntityRef) =
+    let checkLocals (x: EntityRef) (y: EntityRef) =
+        if x.Stamp <> y.Stamp && (x.IsLocalRef && y.IsLocalRef) then
+            false
+        elif x.IsLocalRef <> y.IsLocalRef then
+            false
+        else
+            true
+    (
+        if not x.IsProvidedErasedTycon && not x.IsProvidedNamespace && not y.IsProvidedErasedTycon && not y.IsProvidedNamespace && checkLocals x y then
+            match x.CompiledRepresentation, y.CompiledRepresentation with 
+            | CompiledTypeRepr.ILAsmNamed(tref1, _, _), CompiledTypeRepr.ILAsmNamed(tref2, _, _) -> 
+                tref1.Name = tref2.Name && tref1.Enclosing = tref2.Enclosing
+            | _ -> false
+        else
+            false
+    )
+
 /// Add the constraint "ty1 = ty2" to the constraint problem. 
 /// Propagate all effects of adding this constraint, e.g. to solve type variables 
 and SolveTypeEqualsType (csenv: ConstraintSolverEnv) ndeep m2 (trace: OptionalTrace) (cxsln:(TraitConstraintInfo * TraitConstraintSln) option) ty1 ty2 = 
@@ -833,7 +851,7 @@ and SolveTypeEqualsType (csenv: ConstraintSolverEnv) ndeep m2 (trace: OptionalTr
     | (TType_app (tc2, [ms]), _) when (tc2.IsMeasureableReprTycon && typeEquiv csenv.g sty2 (reduceTyconRefMeasureableOrProvided csenv.g tc2 [ms]))
         -> SolveTypeEqualsType csenv ndeep m2 trace None ms (TType_measure Measure.One)
 
-    | TType_app (tc1, l1), TType_app (tc2, l2) when tyconRefEq g tc1 tc2  -> SolveTypeEqualsTypeEqns csenv ndeep m2 trace None l1 l2
+    | TType_app (tc1, l1), TType_app (tc2, l2) when tyconRefEq g tc1 tc2 || tyconRefEqApprox tc1 tc2 -> SolveTypeEqualsTypeEqns csenv ndeep m2 trace None l1 l2
     | TType_app (_, _), TType_app (_, _)   ->  localAbortD
     | TType_tuple (tupInfo1, l1), TType_tuple (tupInfo2, l2)      -> 
         if evalTupInfoIsStruct tupInfo1 <> evalTupInfoIsStruct tupInfo2 then ErrorD (ConstraintSolverError(FSComp.SR.tcTupleStructMismatch(), csenv.m, m2)) else
