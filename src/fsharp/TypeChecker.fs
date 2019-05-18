@@ -17476,7 +17476,21 @@ let AddCcuToTcEnv(g, amap, scopem, env, assemblyName, ccu, autoOpens, internalsV
     env
 
 let CreateInitialTcEnv(g, amap, scopem, assemblyName, ccus) =
-    (emptyTcEnv g, ccus) ||> List.fold (fun env (ccu, autoOpens, internalsVisible) -> 
+    let tcEnv =
+        let cpath = CompPath(ILScopeRef.Assembly (ILAssemblyRef.Create (assemblyName, None, None, false, None, None)), []) //compPathInternal // allow internal access initially
+        { eNameResEnv = NameResolutionEnv.Empty g
+          eUngeneralizableItems = []
+          ePath = []
+          eCompPath = cpath // dummy 
+          eAccessPath = cpath // dummy 
+          eAccessRights = computeAccessRights cpath [] None // compute this field 
+          eInternalsVisibleCompPaths = []
+          eContextInfo = ContextInfo.NoContext
+          eModuleOrNamespaceTypeAccumulator = ref (NewEmptyModuleOrNamespaceType Namespace)
+          eFamilyType = None
+          eCtorInfo = None
+          eCallerMemberName = None }
+    (tcEnv, ccus) ||> List.fold (fun env (ccu, autoOpens, internalsVisible) -> 
         try 
             AddCcuToTcEnv(g, amap, scopem, env, assemblyName, ccu, autoOpens, internalsVisible)
         with e -> 

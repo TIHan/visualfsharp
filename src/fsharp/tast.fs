@@ -5548,7 +5548,7 @@ let fslibValRefEq fslibCcu vref1 vref2 =
         | _ -> false
     | _ -> false
 
-let primILTypeRefAsmFusionEq (tref1: ILTypeRef) (tref2: ILTypeRef) =
+let primILTypeRefAssemblUnificationEq (tref1: ILTypeRef) (tref2: ILTypeRef) =
     let isPrimaryAssemblyRef (asmRef: AbstractIL.IL.ILAssemblyRef) =
         asmRef.Name = AbstractIL.IL.PrimaryAssembly.Mscorlib.Name ||
         asmRef.Name = AbstractIL.IL.PrimaryAssembly.NetStandard.Name ||
@@ -5562,10 +5562,10 @@ let primILTypeRefAsmFusionEq (tref1: ILTypeRef) (tref2: ILTypeRef) =
         | _ -> false
     )
 
-let primEntityRefAsmFusionEq (x: EntityRef) (y: EntityRef) =
-    if not x.IsProvidedErasedTycon && not x.IsProvidedNamespace && not y.IsProvidedErasedTycon && not y.IsProvidedNamespace then
+let primEntityRefAssemblyUnificationEq (x: EntityRef) (y: EntityRef) =
+    if not x.IsModuleOrNamespace && not x.IsProvidedErasedTycon && not x.IsProvidedNamespace && not y.IsProvidedErasedTycon && not y.IsProvidedNamespace then
         match x.CompiledRepresentation, y.CompiledRepresentation with 
-        | CompiledTypeRepr.ILAsmNamed(tref1, _, _), CompiledTypeRepr.ILAsmNamed(tref2, _, _) -> primILTypeRefAsmFusionEq tref1 tref2
+        | CompiledTypeRepr.ILAsmNamed(tref1, _, _), CompiledTypeRepr.ILAsmNamed(tref2, _, _) -> primILTypeRefAssemblUnificationEq tref1 tref2
         | _ -> false
     else false
   
@@ -5575,7 +5575,7 @@ let primEntityRefEq compilingFslib fslibCcu (x: EntityRef) (y: EntityRef) =
     x === y ||
     
     if x.IsResolved && y.IsResolved && not compilingFslib then
-        x.ResolvedTarget === y.ResolvedTarget || primEntityRefAsmFusionEq x y
+        x.ResolvedTarget === y.ResolvedTarget || primEntityRefAssemblyUnificationEq x y
     elif not x.IsLocalRef && not y.IsLocalRef &&
         (// Two tcrefs with identical paths are always equal
          nonLocalRefEq x.nlr y.nlr || 
