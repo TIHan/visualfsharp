@@ -4931,7 +4931,7 @@ and remapParentRef tyenv p =
 and mapImmediateValsAndTycons ft fv (x: ModuleOrNamespaceType) = 
     let vals = x.AllValsAndMembers |> QueueList.map fv
     let tycons = x.AllEntities |> QueueList.map ft
-    new ModuleOrNamespaceType(x.ModuleOrNamespaceKind, vals, tycons)
+    new ModuleOrNamespaceTypeImpl(x.ModuleOrNamespaceKind, vals, tycons) :> ModuleOrNamespaceType
     
 and copyVal compgen (v: Val) = 
     match compgen with 

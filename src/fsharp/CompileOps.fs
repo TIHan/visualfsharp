@@ -4322,7 +4322,15 @@ type TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAssemblyResolu
             |> List.map (fun (ccuName, sigDataReader) -> 
                 let minfo, optDatas, data = 
                     match ilModule.TryGetSignature () with
-                    | Some minfo when sigDatas.Length = 1 -> minfo, Map.Empty, { RawData=minfo; FixupThunks= [||] }
+                    | Some minfo when sigDatas.Length = 1 -> 
+                        let minfo = 
+                            { minfo with 
+                                mspec = 
+                                    { minfo.mspec with 
+                                        entity_modul_contents = MaybeLazy.Strict ((RetargetingModuleOrNamespaceType minfo.mspec.ModuleOrNamespaceType) :> ModuleOrNamespaceType) 
+                                    } 
+                            }
+                        minfo, Map.Empty, { RawData=minfo; FixupThunks= [||] }
                     | _ ->
                         let data = GetSignatureData (filename, ilScopeRef, ilModule.TryGetILModuleDef(), sigDataReader)
                         let optDatas = Map.ofList optDataReaders

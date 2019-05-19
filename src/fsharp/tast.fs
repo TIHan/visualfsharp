@@ -1794,8 +1794,58 @@ and
 
     override x.ToString() = sprintf "%+A" x 
 
+and [<AbstractClass>] 
+    ModuleOrNamespaceType () =
+        
+    abstract ModuleOrNamespaceKind: ModuleOrNamespaceKind
+
+    abstract AllValsAndMembers: QueueList<Val>
+
+    abstract AllEntities: QueueList<Entity>
+
+    abstract AddModuleOrNamespaceByMutation: modul: ModuleOrNamespace -> unit
+
+    abstract AddProvidedTypeEntity: entity: Entity -> unit
+
+    abstract AddEntity: tycon: Tycon -> ModuleOrNamespaceType
+
+    abstract AddVal: vspec: Val -> ModuleOrNamespaceType
+
+    abstract ActivePatternElemRefLookupTable: NameMap<ActivePatternElemRef> option ref
+
+    abstract TypeDefinitions: Entity list
+
+    abstract ExceptionDefinitions: Entity list
+
+    abstract ModuleAndNamespaceDefinitions: Entity list
+
+    abstract TypeAndExceptionDefinitions: Entity list
+
+    abstract TypesByDemangledNameAndArity: m: range -> LayeredMap<NameArityPair, Tycon>
+
+    abstract TypesByAccessNames: LayeredMultiMap<string, Tycon>
+
+    abstract TypesByMangledName: NameMap<Tycon>
+
+    abstract AllEntitiesByCompiledAndLogicalMangledNames: NameMap<Entity>
+
+    abstract AllEntitiesByLogicalMangledName: NameMap<Entity>
+
+    abstract AllValsAndMembersByPartialLinkageKey: MultiMap<ValLinkagePartialKey, Val>
+
+    abstract TryLinkVal: ccu: CcuThunk * key: ValLinkageFullKey -> Val voption
+
+    abstract AllValsByLogicalName: NameMap<Val>
+
+    abstract AllValsAndMembersByLogicalNameUncached: MultiMap<string, Val>
+
+    abstract ExceptionDefinitionsByDemangledName: NameMap<Tycon>
+
+    abstract ModulesAndNamespacesByDemangledName: NameMap<ModuleOrNamespace>
+
 and [<Sealed; StructuredFormatDisplay("{DebugText}")>]
-    ModuleOrNamespaceType(kind: ModuleOrNamespaceKind, vals: QueueList<Val>, entities: QueueList<Entity>) = 
+    ModuleOrNamespaceTypeImpl(kind: ModuleOrNamespaceKind, vals: QueueList<Val>, entities: QueueList<Entity>) = 
+    inherit ModuleOrNamespaceType ()
 
     /// Mutation used during compilation of FSharp.Core.dll
     let mutable entities = entities 
@@ -1826,26 +1876,26 @@ and [<Sealed; StructuredFormatDisplay("{DebugText}")>]
     let allValsByLogicalNameCache: NameMap<Val> option ref = ref None
   
     /// Namespace or module-compiled-as-type? 
-    member mtyp.ModuleOrNamespaceKind = kind 
+    override mtyp.ModuleOrNamespaceKind = kind 
               
     /// Values, including members in F# types in this module-or-namespace-fragment. 
-    member mtyp.AllValsAndMembers = vals
+    override mtyp.AllValsAndMembers = vals
 
     /// Type, mapping mangled name to Tycon, e.g. 
     ////     "Dictionary`2" --> Tycon 
     ////     "ListModule" --> Tycon with module info
     ////     "FooException" --> Tycon with exception info
-    member mtyp.AllEntities = entities
+    override mtyp.AllEntities = entities
 
     /// Mutation used during compilation of FSharp.Core.dll
-    member mtyp.AddModuleOrNamespaceByMutation(modul: ModuleOrNamespace) =
+    override mtyp.AddModuleOrNamespaceByMutation(modul: ModuleOrNamespace) =
         entities <- QueueList.appendOne entities modul
         modulesByDemangledNameCache := None          
         allEntitiesByMangledNameCache := None       
 
 #if !NO_EXTENSIONTYPING
     /// Mutation used in hosting scenarios to hold the hosted types in this module or namespace
-    member mtyp.AddProvidedTypeEntity(entity: Entity) = 
+    override mtyp.AddProvidedTypeEntity(entity: Entity) = 
         entities <- QueueList.appendOne entities entity
         tyconsByMangledNameCache := None          
         tyconsByDemangledNameAndArityCache := None
@@ -1854,49 +1904,49 @@ and [<Sealed; StructuredFormatDisplay("{DebugText}")>]
 #endif 
           
     /// Return a new module or namespace type with an entity added.
-    member mtyp.AddEntity(tycon: Tycon) = 
-        ModuleOrNamespaceType(kind, vals, entities.AppendOne tycon)
+    override mtyp.AddEntity(tycon: Tycon) = 
+        ModuleOrNamespaceTypeImpl(kind, vals, entities.AppendOne tycon) :> ModuleOrNamespaceType
           
     /// Return a new module or namespace type with a value added.
-    member mtyp.AddVal(vspec: Val) = 
-        ModuleOrNamespaceType(kind, vals.AppendOne vspec, entities)
+    override mtyp.AddVal(vspec: Val) = 
+        ModuleOrNamespaceTypeImpl(kind, vals.AppendOne vspec, entities) :> ModuleOrNamespaceType
           
     /// Get a table of the active patterns defined in this module.
-    member mtyp.ActivePatternElemRefLookupTable = activePatternElemRefCache
+    override mtyp.ActivePatternElemRefLookupTable = activePatternElemRefCache
   
     /// Get a list of types defined within this module, namespace or type. 
-    member mtyp.TypeDefinitions = entities |> Seq.filter (fun x -> not x.IsExceptionDecl && not x.IsModuleOrNamespace) |> Seq.toList
+    override mtyp.TypeDefinitions = entities |> Seq.filter (fun x -> not x.IsExceptionDecl && not x.IsModuleOrNamespace) |> Seq.toList
 
     /// Get a list of F# exception definitions defined within this module, namespace or type. 
-    member mtyp.ExceptionDefinitions = entities |> Seq.filter (fun x -> x.IsExceptionDecl) |> Seq.toList
+    override mtyp.ExceptionDefinitions = entities |> Seq.filter (fun x -> x.IsExceptionDecl) |> Seq.toList
 
     /// Get a list of module and namespace definitions defined within this module, namespace or type. 
-    member mtyp.ModuleAndNamespaceDefinitions = entities |> Seq.filter (fun x -> x.IsModuleOrNamespace) |> Seq.toList
+    override mtyp.ModuleAndNamespaceDefinitions = entities |> Seq.filter (fun x -> x.IsModuleOrNamespace) |> Seq.toList
 
     /// Get a list of type and exception definitions defined within this module, namespace or type. 
-    member mtyp.TypeAndExceptionDefinitions = entities |> Seq.filter (fun x -> not x.IsModuleOrNamespace) |> Seq.toList
+    override mtyp.TypeAndExceptionDefinitions = entities |> Seq.filter (fun x -> not x.IsModuleOrNamespace) |> Seq.toList
 
     /// Get a table of types defined within this module, namespace or type. The 
     /// table is indexed by both name and generic arity. This means that for generic 
     /// types "List`1", the entry (List, 1) will be present.
-    member mtyp.TypesByDemangledNameAndArity m = 
+    override mtyp.TypesByDemangledNameAndArity m = 
         cacheOptRef tyconsByDemangledNameAndArityCache (fun () -> 
            LayeredMap.Empty.AddAndMarkAsCollapsible( mtyp.TypeAndExceptionDefinitions |> List.map (fun (tc: Tycon) -> KeyTyconByDemangledNameAndArity tc.LogicalName (tc.Typars m) tc) |> List.toArray))
 
     /// Get a table of types defined within this module, namespace or type. The 
     /// table is indexed by both name and, for generic types, also by mangled name.
-    member mtyp.TypesByAccessNames = 
+    override mtyp.TypesByAccessNames = 
         cacheOptRef tyconsByAccessNamesCache (fun () -> 
              LayeredMultiMap.Empty.AddAndMarkAsCollapsible (mtyp.TypeAndExceptionDefinitions |> List.toArray |> Array.collect (fun (tc: Tycon) -> KeyTyconByAccessNames tc.LogicalName tc)))
 
     // REVIEW: we can remove this lookup and use AllEntitiedByMangledName instead?
-    member mtyp.TypesByMangledName = 
+    override mtyp.TypesByMangledName = 
         let addTyconByMangledName (x: Tycon) tab = NameMap.add x.LogicalName x tab 
         cacheOptRef tyconsByMangledNameCache (fun () -> 
              List.foldBack addTyconByMangledName mtyp.TypeAndExceptionDefinitions Map.empty)
 
     /// Get a table of entities indexed by both logical and compiled names
-    member mtyp.AllEntitiesByCompiledAndLogicalMangledNames: NameMap<Entity> = 
+    override mtyp.AllEntitiesByCompiledAndLogicalMangledNames: NameMap<Entity> = 
         let addEntityByMangledName (x: Entity) tab = 
             let name1 = x.LogicalName
             let name2 = x.CompiledName
@@ -1908,13 +1958,13 @@ and [<Sealed; StructuredFormatDisplay("{DebugText}")>]
              QueueList.foldBack addEntityByMangledName entities Map.empty)
 
     /// Get a table of entities indexed by both logical name
-    member mtyp.AllEntitiesByLogicalMangledName: NameMap<Entity> = 
+    override mtyp.AllEntitiesByLogicalMangledName: NameMap<Entity> = 
         let addEntityByMangledName (x: Entity) tab = NameMap.add x.LogicalName x tab 
         QueueList.foldBack addEntityByMangledName entities Map.empty
 
     /// Get a table of values and members indexed by partial linkage key, which includes name, the mangled name of the parent type (if any),
     /// and the method argument count (if any).
-    member mtyp.AllValsAndMembersByPartialLinkageKey = 
+    override mtyp.AllValsAndMembersByPartialLinkageKey = 
         let addValByMangledName (x: Val) tab = 
            if x.IsCompiledAsTopLevel then
                let key = x.GetLinkagePartialKey()
@@ -1925,7 +1975,7 @@ and [<Sealed; StructuredFormatDisplay("{DebugText}")>]
              QueueList.foldBack addValByMangledName vals MultiMap.empty)
 
     /// Try to find the member with the given linkage key in the given module.
-    member mtyp.TryLinkVal(ccu: CcuThunk, key: ValLinkageFullKey) = 
+    override mtyp.TryLinkVal(ccu: CcuThunk, key: ValLinkageFullKey) = 
         mtyp.AllValsAndMembersByPartialLinkageKey
           |> MultiMap.find key.PartialKey
           |> List.tryFind (fun v -> match key.TypeForLinkage with 
@@ -1934,7 +1984,7 @@ and [<Sealed; StructuredFormatDisplay("{DebugText}")>]
           |> ValueOptionInternal.ofOption
 
     /// Get a table of values indexed by logical name
-    member mtyp.AllValsByLogicalName = 
+    override mtyp.AllValsByLogicalName = 
         let addValByName (x: Val) tab = 
            // Note: names may occur twice prior to raising errors about this in PostTypeCheckSemanticChecks
            // Earlier ones take precedence since we report errors about the later ones
@@ -1946,7 +1996,7 @@ and [<Sealed; StructuredFormatDisplay("{DebugText}")>]
            QueueList.foldBack addValByName vals Map.empty)
 
     /// Compute a table of values and members indexed by logical name.
-    member mtyp.AllValsAndMembersByLogicalNameUncached = 
+    override mtyp.AllValsAndMembersByLogicalNameUncached = 
         let addValByName (x: Val) tab = 
             if not x.IsCompilerGenerated then 
                 MultiMap.add x.LogicalName x tab 
@@ -1955,19 +2005,121 @@ and [<Sealed; StructuredFormatDisplay("{DebugText}")>]
         QueueList.foldBack addValByName vals MultiMap.empty
 
     /// Get a table of F# exception definitions indexed by demangled name, so 'FailureException' is indexed by 'Failure'
-    member mtyp.ExceptionDefinitionsByDemangledName = 
+    override mtyp.ExceptionDefinitionsByDemangledName = 
         let add (tycon: Tycon) acc = NameMap.add tycon.LogicalName tycon acc
         cacheOptRef exconsByDemangledNameCache (fun () -> 
             List.foldBack add mtyp.ExceptionDefinitions Map.empty)
 
     /// Get a table of nested module and namespace fragments indexed by demangled name (so 'ListModule' becomes 'List')
-    member mtyp.ModulesAndNamespacesByDemangledName = 
+    override mtyp.ModulesAndNamespacesByDemangledName = 
         let add (entity: Entity) acc = 
             if entity.IsModuleOrNamespace then 
                 NameMap.add entity.DemangledModuleOrNamespaceName entity acc
             else acc
         cacheOptRef modulesByDemangledNameCache (fun () -> 
             QueueList.foldBack add entities Map.empty)
+
+    [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
+    member x.DebugText = x.ToString()
+
+    override x.ToString() = "ModuleOrNamespaceType(...)"
+
+and [<Sealed; StructuredFormatDisplay("{DebugText}")>]
+    RetargetingModuleOrNamespaceType(target: ModuleOrNamespaceType) = 
+    inherit ModuleOrNamespaceType ()
+  
+    /// Namespace or module-compiled-as-type? 
+    override mtyp.ModuleOrNamespaceKind = target.ModuleOrNamespaceKind 
+              
+    /// Values, including members in F# types in this module-or-namespace-fragment. 
+    override mtyp.AllValsAndMembers = target.AllValsAndMembers
+
+    /// Type, mapping mangled name to Tycon, e.g. 
+    ////     "Dictionary`2" --> Tycon 
+    ////     "ListModule" --> Tycon with module info
+    ////     "FooException" --> Tycon with exception info
+    override mtyp.AllEntities = target.AllEntities
+
+    /// Mutation used during compilation of FSharp.Core.dll
+    override mtyp.AddModuleOrNamespaceByMutation(modul: ModuleOrNamespace) =
+        target.AddModuleOrNamespaceByMutation(modul)
+
+#if !NO_EXTENSIONTYPING
+    /// Mutation used in hosting scenarios to hold the hosted types in this module or namespace
+    override mtyp.AddProvidedTypeEntity(entity: Entity) = 
+        target.AddProvidedTypeEntity(entity)          
+#endif 
+          
+    /// Return a new module or namespace type with an entity added.
+    override mtyp.AddEntity(tycon: Tycon) = 
+        target.AddEntity(tycon)
+          
+    /// Return a new module or namespace type with a value added.
+    override mtyp.AddVal(vspec: Val) = 
+        target.AddVal(vspec)
+          
+    /// Get a table of the active patterns defined in this module.
+    override mtyp.ActivePatternElemRefLookupTable = target.ActivePatternElemRefLookupTable
+  
+    /// Get a list of types defined within this module, namespace or type. 
+    override mtyp.TypeDefinitions = target.TypeDefinitions
+
+    /// Get a list of F# exception definitions defined within this module, namespace or type. 
+    override mtyp.ExceptionDefinitions = target.ExceptionDefinitions
+
+    /// Get a list of module and namespace definitions defined within this module, namespace or type. 
+    override mtyp.ModuleAndNamespaceDefinitions = target.ModuleAndNamespaceDefinitions
+
+    /// Get a list of type and exception definitions defined within this module, namespace or type. 
+    override mtyp.TypeAndExceptionDefinitions = target.TypeAndExceptionDefinitions
+
+    /// Get a table of types defined within this module, namespace or type. The 
+    /// table is indexed by both name and generic arity. This means that for generic 
+    /// types "List`1", the entry (List, 1) will be present.
+    override mtyp.TypesByDemangledNameAndArity m = 
+        target.TypesByDemangledNameAndArity m
+
+    /// Get a table of types defined within this module, namespace or type. The 
+    /// table is indexed by both name and, for generic types, also by mangled name.
+    override mtyp.TypesByAccessNames = 
+        target.TypesByAccessNames
+
+    // REVIEW: we can remove this lookup and use AllEntitiedByMangledName instead?
+    override mtyp.TypesByMangledName = 
+        target.TypesByMangledName
+
+    /// Get a table of entities indexed by both logical and compiled names
+    override mtyp.AllEntitiesByCompiledAndLogicalMangledNames: NameMap<Entity> = 
+        target.AllEntitiesByCompiledAndLogicalMangledNames
+
+    /// Get a table of entities indexed by both logical name
+    override mtyp.AllEntitiesByLogicalMangledName: NameMap<Entity> = 
+        target.AllEntitiesByLogicalMangledName
+
+    /// Get a table of values and members indexed by partial linkage key, which includes name, the mangled name of the parent type (if any),
+    /// and the method argument count (if any).
+    override mtyp.AllValsAndMembersByPartialLinkageKey = 
+        target.AllValsAndMembersByPartialLinkageKey
+
+    /// Try to find the member with the given linkage key in the given module.
+    override mtyp.TryLinkVal(ccu: CcuThunk, key: ValLinkageFullKey) = 
+        target.TryLinkVal(ccu, key)
+
+    /// Get a table of values indexed by logical name
+    override mtyp.AllValsByLogicalName = 
+        target.AllValsByLogicalName
+
+    /// Compute a table of values and members indexed by logical name.
+    override mtyp.AllValsAndMembersByLogicalNameUncached = 
+        target.AllValsAndMembersByLogicalNameUncached
+
+    /// Get a table of F# exception definitions indexed by demangled name, so 'FailureException' is indexed by 'Failure'
+    override mtyp.ExceptionDefinitionsByDemangledName = 
+        target.ExceptionDefinitionsByDemangledName
+
+    /// Get a table of nested module and namespace fragments indexed by demangled name (so 'ListModule' becomes 'List')
+    override mtyp.ModulesAndNamespacesByDemangledName = 
+        target.ModulesAndNamespacesByDemangledName
 
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText = x.ToString()
@@ -1981,7 +2133,7 @@ and Tycon = Entity
 and Construct = 
       
     static member NewModuleOrNamespaceType mkind tycons vals = 
-        ModuleOrNamespaceType(mkind, QueueList.ofList vals, QueueList.ofList tycons)
+        ModuleOrNamespaceTypeImpl(mkind, QueueList.ofList vals, QueueList.ofList tycons) :> ModuleOrNamespaceType
 
     static member NewEmptyModuleOrNamespaceType mkind = 
         Construct.NewModuleOrNamespaceType mkind [] []
@@ -2060,7 +2212,7 @@ and Construct =
             entity_typars= LazyWithContext.NotLazy []
             entity_tycon_repr = repr
             entity_tycon_tcaug=TyconAugmentation.Create()
-            entity_modul_contents = MaybeLazy.Lazy (lazy new ModuleOrNamespaceType(Namespace, QueueList.ofList [], QueueList.ofList []))
+            entity_modul_contents = MaybeLazy.Lazy (lazy (new ModuleOrNamespaceTypeImpl(Namespace, QueueList.ofList [], QueueList.ofList []) :> ModuleOrNamespaceType))
             // Generated types get internal accessibility
             entity_pubpath = Some pubpath
             entity_cpath = Some cpath
@@ -5547,27 +5699,6 @@ let fslibValRefEq fslibCcu vref1 vref2 =
             (nm1 = nm2)
         | _ -> false
     | _ -> false
-
-let primILTypeRefAssemblUnificationEq (tref1: ILTypeRef) (tref2: ILTypeRef) =
-    let isPrimaryAssemblyRef (asmRef: AbstractIL.IL.ILAssemblyRef) =
-        asmRef.Name = AbstractIL.IL.PrimaryAssembly.Mscorlib.Name ||
-        asmRef.Name = AbstractIL.IL.PrimaryAssembly.NetStandard.Name ||
-        asmRef.Name = AbstractIL.IL.PrimaryAssembly.System_Runtime.Name
-
-    tref1.Name = tref2.Name && tref1.Enclosing = tref2.Enclosing && 
-    (
-        match tref1.Scope, tref2.Scope with
-        | AbstractIL.IL.ILScopeRef.Assembly asmRef1, AbstractIL.IL.ILScopeRef.Assembly asmRef2 ->
-            (isPrimaryAssemblyRef asmRef1 && isPrimaryAssemblyRef asmRef2) || (asmRef1.Name = asmRef2.Name && asmRef1.PublicKey = asmRef2.PublicKey)
-        | _ -> false
-    )
-
-let primEntityRefAssemblyUnificationEq (x: EntityRef) (y: EntityRef) =
-    if not x.IsModuleOrNamespace && not x.IsProvidedErasedTycon && not x.IsProvidedNamespace && not y.IsProvidedErasedTycon && not y.IsProvidedNamespace then
-        match x.CompiledRepresentation, y.CompiledRepresentation with 
-        | CompiledTypeRepr.ILAsmNamed(tref1, _, _), CompiledTypeRepr.ILAsmNamed(tref2, _, _) -> primILTypeRefAssemblUnificationEq tref1 tref2
-        | _ -> false
-    else false
   
 /// Primitive routine to compare two EntityRef's for equality
 /// This takes into account the possibility that they may have type forwarders
@@ -5575,7 +5706,7 @@ let primEntityRefEq compilingFslib fslibCcu (x: EntityRef) (y: EntityRef) =
     x === y ||
     
     if x.IsResolved && y.IsResolved && not compilingFslib then
-        x.ResolvedTarget === y.ResolvedTarget || primEntityRefAssemblyUnificationEq x y
+        x.ResolvedTarget === y.ResolvedTarget
     elif not x.IsLocalRef && not y.IsLocalRef &&
         (// Two tcrefs with identical paths are always equal
          nonLocalRefEq x.nlr y.nlr || 
@@ -5700,7 +5831,7 @@ let NewUnionCase id tys rty attribs docOption access: UnionCase =
       OtherRangeOpt = None } 
 
 let NewModuleOrNamespaceType mkind tycons vals = 
-    ModuleOrNamespaceType(mkind, QueueList.ofList vals, QueueList.ofList tycons)
+    ModuleOrNamespaceTypeImpl(mkind, QueueList.ofList vals, QueueList.ofList tycons) :> ModuleOrNamespaceType
 
 let NewEmptyModuleOrNamespaceType mkind = NewModuleOrNamespaceType mkind [] []
 
@@ -5871,7 +6002,7 @@ let CombineCcuContentFragments m l =
 
             let vals = QueueList.append mty1.AllValsAndMembers mty2.AllValsAndMembers
 
-            ModuleOrNamespaceType(kind, vals, QueueList.ofList entities)
+            ModuleOrNamespaceTypeImpl(kind, vals, QueueList.ofList entities) :> ModuleOrNamespaceType
 
         | Namespace, _ | _, Namespace -> 
             error(Error(FSComp.SR.tastNamespaceAndModuleWithSameNameInAssembly(textOfPath path), m))

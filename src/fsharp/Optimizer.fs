@@ -3295,9 +3295,9 @@ and OptimizeModuleExpr cenv env x =
             // probably more costly than copying specs anyway.
             let rec elimModTy (mtyp: ModuleOrNamespaceType) =                  
                 let mty = 
-                    new ModuleOrNamespaceType(kind=mtyp.ModuleOrNamespaceKind, 
+                    new ModuleOrNamespaceTypeImpl(kind=mtyp.ModuleOrNamespaceKind, 
                                               vals= (mtyp.AllValsAndMembers |> QueueList.filter (Zset.memberOf deadSet >> not)), 
-                                              entities= mtyp.AllEntities)
+                                              entities= mtyp.AllEntities) :> ModuleOrNamespaceType
                 mtyp.ModuleAndNamespaceDefinitions |> List.iter elimModSpec
                 mty
 

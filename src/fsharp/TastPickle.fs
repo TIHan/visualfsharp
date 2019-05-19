@@ -2315,7 +2315,7 @@ and u_modul_typ st =
           u_istype
           (u_qlist u_Val)
           (u_qlist u_entity_spec) st
-    ModuleOrNamespaceType(x1, x3, x5)
+    ModuleOrNamespaceTypeImpl(x1, x3, x5) :> ModuleOrNamespaceType
 
 
 //---------------------------------------------------------------------------
