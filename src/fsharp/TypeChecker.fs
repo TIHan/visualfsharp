@@ -17477,7 +17477,7 @@ let AddCcuToTcEnv(g, amap, scopem, env, assemblyName, ccu, autoOpens, internalsV
 
 let CreateInitialTcEnv(g, amap, scopem, assemblyName, ccus) =
     let tcEnv =
-        let cpath = CompPath(ILScopeRef.Assembly (ILAssemblyRef.Create (assemblyName, None, None, false, None, None)), []) //compPathInternal // allow internal access initially
+        let cpath = compPathInternal // allow internal access initially
         { eNameResEnv = NameResolutionEnv.Empty g
           eUngeneralizableItems = []
           ePath = []

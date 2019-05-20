@@ -3720,6 +3720,638 @@ let availableToOptionalCcu = function
     | ResolvedCcu ccu -> Some ccu
     | UnresolvedCcu _ -> None
 
+//----------------------------------------------------------------------------
+// RetargetingModuleOrNamespaceType
+//--------------------------------------------------------------------------
+
+let globalDictionaryTest = Dictionary<struct (int64 * int64), EntityRef> ()
+type RetargetingModuleOrNamespaceType(target: ModuleOrNamespaceType, thisCcu: CcuThunk, lazyCcus: Lazy<CcuThunk list>) = 
+    inherit ModuleOrNamespaceType ()
+
+    let isListEq (l1: 'T list) (l2: 'T list) =
+        (l1.Length = l2.Length) && List.forall2 (fun x y -> x === y) l1 l2
+
+    let isOptEq (opt1: 'T option) (opt2: 'T option) =
+        match opt1, opt2 with
+        | Some value1, Some value2 -> value1 === value2
+        | None, None -> true
+        | _ -> false
+
+    //let ccuHasType (ccu: CcuThunk) (nsname: string list) (tname: string) =
+    //    let matchNameSpace (entityOpt: Entity option) n =
+    //        match entityOpt with
+    //        | None -> None
+    //        | Some entity ->
+    //            entity.ModuleOrNamespaceType.AllEntitiesByCompiledAndLogicalMangledNames.TryFind n
+
+    //    match (Some ccu.Contents, nsname) ||> List.fold matchNameSpace with
+    //    | Some ns ->
+    //            match Map.tryFind tname ns.ModuleOrNamespaceType.TypesByMangledName with
+    //            | Some _ -> true
+    //            | None -> false
+    //    | None -> false
+
+    let rec retargetType inputTy =
+        match inputTy with
+
+        | TType_forall (typars, ty) ->
+            let typars2 = typars |> List.map retargetTypar
+            let ty2 = retargetType ty
+            if isListEq typars typars2 && ty === ty2 then
+                inputTy
+            else
+                TType_forall (typars2, ty2)
+
+        | TType_app (tcref, tinst) -> 
+            let tcref2 = retargetEntityRef tcref
+            let tinst2 = tinst |> List.map retargetType
+            if tcref === tcref2 && isListEq tinst tinst2 then
+                inputTy
+            else
+                TType_app (tcref2, tinst2)
+
+        | TType_anon (info, tys) ->
+            let tys2 = tys |> List.map retargetType
+            if isListEq tys tys2 then inputTy
+            else TType_anon (info, tys2)
+
+        | TType_tuple (info, tys) ->
+            let tys2 = tys |> List.map retargetType
+            if isListEq tys tys2 then inputTy
+            else TType_tuple (info, tys2)
+
+        | TType_fun (ty1, ty2) ->
+            let ty1' = retargetType ty1
+            let ty2' = retargetType ty2
+            if ty1 === ty1' && ty2 === ty2' then
+                inputTy
+            else
+                TType_fun (ty1', ty2')
+
+        | TType_ucase (ucref, tinst) ->
+            let ucref2 = retargetUnionCaseRef ucref
+            let tinst2 = tinst |> List.map retargetType
+            if ucref === ucref2 && isListEq tinst tinst2 then
+                inputTy
+            else
+                TType_ucase (ucref2, tinst2)
+
+        | TType_var typar ->
+            let typar2 = retargetTypar typar
+            if typar === typar2 then inputTy
+            else TType_var typar2
+
+        | TType_measure measure ->
+            let measure2 = retargetMeasure measure
+            if measure === measure2 then
+                inputTy
+            else
+                TType_measure measure2
+
+    and retargetMeasure input =
+        match input with
+
+        | Measure.Var typar ->
+            let typar2 = retargetTypar typar
+            if typar === typar2 then input
+            else Measure.Var typar2
+
+        | Measure.Con tcref ->
+            let tcref2 = retargetEntityRef tcref
+            if tcref === tcref2 then input
+            else Measure.Con tcref2
+
+        | Measure.Prod (measure1, measure2) ->
+            let measure1' = retargetMeasure measure1
+            let measure2' = retargetMeasure measure2
+            if measure1 === measure1' && measure2 === measure2' then
+                input
+            else
+                Measure.Prod (measure1', measure2')
+
+        | Measure.Inv measure ->
+            let measure2 = retargetMeasure measure
+            if measure === measure2 then input
+            else Measure.Inv measure2
+
+        | Measure.One -> input
+
+        | Measure.RationalPower (measure, rational) ->
+            let measure2 = retargetMeasure measure
+            if measure === measure2 then input
+            else Measure.RationalPower (measure2, rational)
+
+    and retargetUnionCaseRef input =
+        match input with
+        | UCRef (tcref, nm) ->
+            let tcref2 = retargetEntityRef tcref
+            if tcref === tcref2 then input
+            else UCRef (tcref2, nm)
+
+    and retargetTypar inputTypar =
+        let solution =
+            match inputTypar.typar_solution with
+            | Some ty -> Some (retargetType ty)
+            | _ -> None
+
+        let opt_data = 
+            match inputTypar.typar_opt_data with
+            | Some optData -> Some (retargetTyparOptData optData)
+            | _ -> None
+
+        if isOptEq inputTypar.typar_solution solution &&
+           isOptEq inputTypar.typar_opt_data opt_data
+        then
+            inputTypar
+        else
+            {
+                typar_id = inputTypar.typar_id
+                typar_flags = inputTypar.typar_flags
+                typar_stamp = newStamp ()
+                typar_solution = solution
+                typar_astype = Unchecked.defaultof<_>
+                typar_opt_data = opt_data
+            }
+
+    and retargetTyparOptData inputTyparOptData =
+        let constraints = inputTyparOptData.typar_constraints |> List.map retargetTyparConstraint
+        let attribs = inputTyparOptData.typar_attribs |> List.map retargetAttrib
+        if isListEq inputTyparOptData.typar_constraints constraints && isListEq inputTyparOptData.typar_attribs attribs then
+            inputTyparOptData
+        else
+            {
+                typar_il_name = inputTyparOptData.typar_il_name
+                typar_xmldoc = inputTyparOptData.typar_xmldoc
+                typar_constraints = constraints
+                typar_attribs = attribs
+            }
+
+    and retargetAttrib input =
+        match input with
+        | Attrib (tcref, kind, attribExprs, namedArgs, isAppliedToAGetterOrSetter, targetsOpt, m) ->
+            let tcref2 = retargetEntityRef tcref
+            let attribExprs2 = attribExprs |> List.map retargetAttribExpr
+            let namedArgs2 = namedArgs |> List.map retargetAttribNamedArg
+            
+            if tcref === tcref2 && isListEq attribExprs attribExprs2 && isListEq namedArgs namedArgs2 then
+                input
+            else
+                Attrib (tcref2, kind, attribExprs2, namedArgs2, isAppliedToAGetterOrSetter, targetsOpt, m)
+
+    and retargetAttribExpr input =
+        match input with
+        | AttribExpr (expr1, expr2) ->
+            let expr1' = retargetExpr expr1
+            let expr2' = retargetExpr expr2
+            if expr1 === expr1' && expr2 === expr2' then input
+            else AttribExpr (expr1', expr2')
+
+    and retargetAttribNamedArg input =
+        match input with
+        | AttribNamedArg (nm, ty, isField, attribExpr) ->
+            let ty2 = retargetType ty
+            let attribExpr2 = retargetAttribExpr attribExpr
+            if ty === ty2 && attribExpr === attribExpr2 then input
+            else AttribNamedArg (nm, ty2, isField, attribExpr2)
+
+    and retargetTyparConstraint inputTyparConstraint =
+        match inputTyparConstraint with
+
+        | TyparConstraint.CoercesTo (ty, m) ->
+            let ty2 = retargetType ty
+            if ty === ty2 then inputTyparConstraint
+            else TyparConstraint.CoercesTo (ty2, m)
+
+        | TyparConstraint.DefaultsTo (i, ty, m) ->
+            let ty2 = retargetType ty
+            if ty === ty2 then inputTyparConstraint
+            else TyparConstraint.DefaultsTo (i, ty2, m)
+
+        | TyparConstraint.SupportsNull _ ->
+            inputTyparConstraint
+
+        | TyparConstraint.MayResolveMember (info, m) ->
+            let info2 = retargetTraitConstraintInfo info
+            if info === info2 then inputTyparConstraint
+            else TyparConstraint.MayResolveMember (info2, m)
+
+        | TyparConstraint.IsNonNullableStruct _ ->
+            inputTyparConstraint
+
+        | TyparConstraint.IsReferenceType _ ->
+            inputTyparConstraint
+
+        | TyparConstraint.SimpleChoice (tys, m) ->
+            let tys2 = tys |> List.map retargetType
+            if isListEq tys tys2 then
+                inputTyparConstraint
+            else
+                TyparConstraint.SimpleChoice (tys, m)
+
+        | TyparConstraint.RequiresDefaultConstructor _ ->
+            inputTyparConstraint
+
+        | TyparConstraint.IsEnum (ty, m) ->
+            let ty2 = retargetType ty
+            if ty === ty2 then inputTyparConstraint
+            else TyparConstraint.IsEnum (ty2, m)
+
+        | TyparConstraint.SupportsComparison _ ->
+            inputTyparConstraint
+
+        | TyparConstraint.SupportsEquality _ ->
+            inputTyparConstraint
+
+        | TyparConstraint.IsDelegate (arg1Ty, arg2Ty, m) ->
+            let arg1Ty2 = retargetType arg1Ty
+            let arg2Ty2 = retargetType arg2Ty
+            if arg1Ty === arg1Ty2 && arg2Ty === arg2Ty2 then
+                inputTyparConstraint
+            else
+                TyparConstraint.IsDelegate (arg1Ty2, arg2Ty2, m)
+
+        | TyparConstraint.IsUnmanaged _ ->
+            inputTyparConstraint
+
+    and retargetTraitConstraintInfo inputInfo =
+        match inputInfo with
+        | TTrait (tys, nm, memFlags, argTys, rty, solution) ->
+            let tys2 = tys |> List.map retargetType
+            let argTys2 = argTys |> List.map retargetType
+            let rty2 = 
+                match rty with
+                | Some rty -> Some (retargetType rty)
+                | _ -> None
+            let solution2 =
+                match solution.contents with
+                | Some solution -> Some (retargetTraitConstraintSln solution)
+                | _ -> None
+
+            if isListEq tys tys2 &&
+               isListEq argTys argTys2 &&
+               isOptEq rty rty2 &&
+               isOptEq solution.contents solution2
+            then
+                inputInfo
+            else
+                TTrait (tys2, nm, memFlags, argTys2, rty2, ref solution2)
+
+    and retargetTraitConstraintSln inputSln =
+        match inputSln with
+
+        | TraitConstraintSln.FSMethSln (ty, vref, tinst) ->
+            let ty2 = retargetType ty
+            let vref2 = retargetValRef vref
+            let tinst2 = tinst |> List.map retargetType
+            if ty === ty2 && vref === vref2 && isListEq tinst tinst2 then
+                inputSln
+            else
+                TraitConstraintSln.FSMethSln (ty2, vref2, tinst2)
+
+        | TraitConstraintSln.FSRecdFieldSln (tinst, rfref, isSetProp) ->
+            let tinst2 = tinst |> List.map retargetType
+            let rfref2 = retargetRecdFieldRef rfref
+            if isListEq tinst tinst2 &&
+               rfref === rfref2
+            then
+                inputSln
+            else
+                TraitConstraintSln.FSRecdFieldSln (tinst2, rfref, isSetProp)
+
+        | TraitConstraintSln.FSAnonRecdFieldSln (info, tinst, i) ->
+            let tinst2 = tinst |> List.map retargetType
+            if isListEq tinst tinst2 then
+                inputSln
+            else
+                TraitConstraintSln.FSAnonRecdFieldSln (info, tinst2, i)
+
+        | TraitConstraintSln.ILMethSln (ty, extOpt, ilMethodRef, minst) ->
+            let ty2 = retargetType ty
+            let extOpt2 = 
+                match extOpt with
+                | Some ext -> Some (retargetILTypeRef ext)
+                | _ -> None
+            let ilMethodRef2 = retargetILMethodRef ilMethodRef
+            let minst2 = minst |> List.map retargetType
+            if ty === ty2 && isOptEq extOpt extOpt2 && isListEq minst minst2 then
+                inputSln
+            else
+                TraitConstraintSln.ILMethSln (ty2, extOpt2, ilMethodRef2, minst)
+
+        | TraitConstraintSln.ClosedExprSln expr ->
+            let expr2 = retargetExpr expr
+            if expr === expr2 then inputSln
+            else TraitConstraintSln.ClosedExprSln expr2
+
+        | TraitConstraintSln.BuiltInSln ->
+            inputSln
+
+    and retargetValRef inputVref =
+        let binding = 
+            if not (obj.ReferenceEquals (inputVref.binding, null)) then
+                retargetVal inputVref.binding
+            else
+                inputVref.binding
+
+        let nlr =
+            if not (obj.ReferenceEquals (inputVref.nlr, null)) && not (obj.ReferenceEquals (inputVref.binding, binding)) then
+                let enclosingEntity = retargetEntityRef inputVref.nlr.EnclosingEntity
+                let itemKey = retargetValLinkageFullKey inputVref.nlr.ItemKey
+                if inputVref.nlr.EnclosingEntity === enclosingEntity && inputVref.nlr.ItemKey === itemKey then
+                    inputVref.nlr
+                else
+                    {
+                        EnclosingEntity = enclosingEntity
+                        ItemKey = itemKey
+                    }
+            else
+                inputVref.nlr
+
+        if obj.ReferenceEquals (inputVref.binding, binding) && obj.ReferenceEquals (inputVref.nlr, nlr) then
+            inputVref
+        else
+            {
+                binding = binding
+                nlr = nlr
+            }
+
+    and retargetVal inputVal =
+        let ty = retargetType inputVal.val_type
+
+        let opt_data =
+            match inputVal.val_opt_data with
+            | Some optData -> Some (optData)
+            | _ -> None
+
+        if inputVal.val_type === ty && isOptEq inputVal.val_opt_data opt_data then
+            inputVal
+        else
+            { inputVal with
+                val_type = ty
+                val_stamp = newStamp ()
+                val_opt_data = opt_data
+            }
+
+    and _retargetValOptData inputOptData =
+        let repr_info = retargetValReprInfo inputOptData.val_repr_info
+
+        let member_info = 
+            match inputOptData.val_member_info with
+            | Some info -> Some (retargetValMemberInfo info)
+            | _ -> None
+
+        let declaring_entity = 
+            match inputOptData.val_declaring_entity with
+            | ParentRef.Parent pcref ->
+                let pcref2 = retargetEntityRef pcref
+                if pcref === pcref2 then
+                    inputOptData.val_declaring_entity
+                else
+                    ParentRef.Parent pcref2
+            | _ ->
+                inputOptData.val_declaring_entity
+
+        let attribs = inputOptData.val_attribs |> List.map retargetAttrib
+
+        if inputOptData.val_repr_info === repr_info &&
+           inputOptData.val_declaring_entity === declaring_entity && 
+           isListEq inputOptData.val_attribs attribs
+        then
+            inputOptData
+        else
+            { inputOptData with
+                val_defn = None
+                val_repr_info = repr_info
+                val_member_info = member_info
+                val_declaring_entity = declaring_entity
+                val_attribs = attribs
+            }
+
+    and retargetRecdFieldRef input =
+        match input with
+        | RFRef (tcref, fieldName) ->
+            let tcref2 = retargetEntityRef tcref
+            if tcref === tcref2 then input
+            else RFRef (tcref2, fieldName)
+
+    and retargetILTypeRef (input: ILTypeRef) =
+        let scope = retargetILScopeRef input.Scope
+        if input.Scope === scope then input
+        else ILTypeRef.Create (scope, input.Enclosing, input.Name)
+
+    and retargetILScopeRef input =
+        input
+
+    and retargetILMethodRef inputILMethodRef =
+        inputILMethodRef
+
+    and retargetExpr inputExpr =
+        inputExpr
+
+    and retargetValReprInfo inputInfo =
+        inputInfo
+
+    and retargetValMemberInfo inputInfo =
+        inputInfo
+
+    and retargetEntityRef input =
+        let binding = 
+            if not (obj.ReferenceEquals (input.binding, null)) then
+                retargetEntity input.binding
+            else
+                input.binding
+
+        let nlr =
+            if not (obj.ReferenceEquals (input.nlr, null)) then
+                match input.nlr with
+                | NonLocalEntityRef (currentCcu, path) ->
+                    let isPrimaryAssembly nm =
+                        PrimaryAssembly.Mscorlib.Name = nm ||
+                        PrimaryAssembly.NetStandard.Name = nm ||
+                        PrimaryAssembly.System_Runtime.Name = nm
+
+                    let ccu =
+                        lazyCcus.Force ()
+                        |> List.tryFind (fun ccu ->
+                            if not (obj.ReferenceEquals (ccu, thisCcu)) then
+                                if isPrimaryAssembly ccu.AssemblyName && isPrimaryAssembly currentCcu.AssemblyName then
+                                    not (isListEq ccu.RootModulesAndNamespaces currentCcu.RootModulesAndNamespaces)
+                                elif ccu.AssemblyName = currentCcu.AssemblyName then
+                                    not (isListEq ccu.RootModulesAndNamespaces currentCcu.RootModulesAndNamespaces)
+                                else
+                                    false
+                            else
+                                false
+                        )
+                    if ccu.IsNone then input.nlr
+                    else NonLocalEntityRef (ccu.Value, path)
+            else
+                input.nlr
+
+        let nlrStamp =
+            if not (obj.ReferenceEquals (nlr, null)) then
+                nlr.Ccu.Stamp
+            else
+                0L
+
+        match globalDictionaryTest.TryGetValue struct (input.Stamp, nlrStamp) with
+        | true, res -> res
+        | _ ->
+
+            if obj.ReferenceEquals (input.binding, binding) && obj.ReferenceEquals (input.nlr, nlr) then
+                input
+            else
+                let mutable tcref: EntityRef =
+                    {
+                        binding = if not (obj.ReferenceEquals (input.nlr, nlr)) then Unchecked.defaultof<_> else binding
+                        nlr = nlr
+                    }
+
+                if not (obj.ReferenceEquals (tcref.nlr, null)) then
+                    globalDictionaryTest.Add (struct (input.Stamp, tcref.nlr.Ccu.Stamp), tcref)
+                    tcref
+                else
+                    tcref
+
+    and retargetEntity (input: Entity) =
+        if input.IsModuleOrNamespace then
+            let mty = input.ModuleOrNamespaceType
+            let vals = mty.AllValsAndMembers |> Seq.map retargetVal |> QueueList.ofSeq
+            let entities = mty.AllEntities |> Seq.map retargetEntity |> QueueList.ofSeq
+            let mty2 = ModuleOrNamespaceTypeImpl (mty.ModuleOrNamespaceKind, vals, entities) :> ModuleOrNamespaceType
+            { input with entity_modul_contents = MaybeLazy.Strict mty2 }
+        else
+            let opt_data = 
+                match input.entity_opt_data with
+                | Some optData -> Some (retargetEntityOptionalData optData)
+                | _ -> None
+
+            if isOptEq input.entity_opt_data opt_data then
+                input
+            else
+                { input with 
+                    entity_opt_data = opt_data
+                }
+
+    and retargetEntityOptionalData input =
+        let tycon_abbrev = 
+            match input.entity_tycon_abbrev with
+            | Some ty -> Some (retargetType ty)
+            | _ -> None
+        
+        if isOptEq input.entity_tycon_abbrev tycon_abbrev then
+            input
+        else
+            { input with
+                entity_tycon_abbrev = tycon_abbrev
+            }
+
+    and retargetValLinkageFullKey input =
+        input
+
+    let lazyTarget =
+        lazy
+            let vals = target.AllValsAndMembers |> Seq.map retargetVal |> QueueList.ofSeq
+            let entities = target.AllEntities |> Seq.map retargetEntity |> QueueList.ofSeq
+            ModuleOrNamespaceTypeImpl (target.ModuleOrNamespaceKind, vals, entities)
+  
+    /// Namespace or module-compiled-as-type? 
+    override mtyp.ModuleOrNamespaceKind = target.ModuleOrNamespaceKind 
+              
+    /// Values, including members in F# types in this module-or-namespace-fragment. 
+    override mtyp.AllValsAndMembers = lazyTarget.Value.AllValsAndMembers
+
+    /// Type, mapping mangled name to Tycon, e.g. 
+    ////     "Dictionary`2" --> Tycon 
+    ////     "ListModule" --> Tycon with module info
+    ////     "FooException" --> Tycon with exception info
+    override mtyp.AllEntities = lazyTarget.Value.AllEntities
+
+    /// Mutation used during compilation of FSharp.Core.dll
+    override mtyp.AddModuleOrNamespaceByMutation(modul: ModuleOrNamespace) =
+        lazyTarget.Value.AddModuleOrNamespaceByMutation(modul)
+
+#if !NO_EXTENSIONTYPING
+    /// Mutation used in hosting scenarios to hold the hosted types in this module or namespace
+    override mtyp.AddProvidedTypeEntity(entity: Entity) = 
+        lazyTarget.Value.AddProvidedTypeEntity(entity)          
+#endif 
+          
+    /// Return a new module or namespace type with an entity added.
+    override mtyp.AddEntity(tycon: Tycon) = 
+        lazyTarget.Value.AddEntity(tycon)
+          
+    /// Return a new module or namespace type with a value added.
+    override mtyp.AddVal(vspec: Val) = 
+        lazyTarget.Value.AddVal(vspec)
+          
+    /// Get a table of the active patterns defined in this module.
+    override mtyp.ActivePatternElemRefLookupTable = lazyTarget.Value.ActivePatternElemRefLookupTable
+  
+    /// Get a list of types defined within this module, namespace or type. 
+    override mtyp.TypeDefinitions = lazyTarget.Value.TypeDefinitions
+
+    /// Get a list of F# exception definitions defined within this module, namespace or type. 
+    override mtyp.ExceptionDefinitions = lazyTarget.Value.ExceptionDefinitions
+
+    /// Get a list of module and namespace definitions defined within this module, namespace or type. 
+    override mtyp.ModuleAndNamespaceDefinitions = lazyTarget.Value.ModuleAndNamespaceDefinitions
+
+    /// Get a list of type and exception definitions defined within this module, namespace or type. 
+    override mtyp.TypeAndExceptionDefinitions = lazyTarget.Value.TypeAndExceptionDefinitions
+
+    /// Get a table of types defined within this module, namespace or type. The 
+    /// table is indexed by both name and generic arity. This means that for generic 
+    /// types "List`1", the entry (List, 1) will be present.
+    override mtyp.TypesByDemangledNameAndArity m = 
+        lazyTarget.Value.TypesByDemangledNameAndArity m
+
+    /// Get a table of types defined within this module, namespace or type. The 
+    /// table is indexed by both name and, for generic types, also by mangled name.
+    override mtyp.TypesByAccessNames = 
+        lazyTarget.Value.TypesByAccessNames
+
+    // REVIEW: we can remove this lookup and use AllEntitiedByMangledName instead?
+    override mtyp.TypesByMangledName = 
+        lazyTarget.Value.TypesByMangledName
+
+    /// Get a table of entities indexed by both logical and compiled names
+    override mtyp.AllEntitiesByCompiledAndLogicalMangledNames: NameMap<Entity> = 
+        lazyTarget.Value.AllEntitiesByCompiledAndLogicalMangledNames
+
+    /// Get a table of entities indexed by both logical name
+    override mtyp.AllEntitiesByLogicalMangledName: NameMap<Entity> = 
+        lazyTarget.Value.AllEntitiesByLogicalMangledName
+
+    /// Get a table of values and members indexed by partial linkage key, which includes name, the mangled name of the parent type (if any),
+    /// and the method argument count (if any).
+    override mtyp.AllValsAndMembersByPartialLinkageKey = 
+        lazyTarget.Value.AllValsAndMembersByPartialLinkageKey
+
+    /// Try to find the member with the given linkage key in the given module.
+    override mtyp.TryLinkVal(ccu: CcuThunk, key: ValLinkageFullKey) = 
+        lazyTarget.Value.TryLinkVal(ccu, key)
+
+    /// Get a table of values indexed by logical name
+    override mtyp.AllValsByLogicalName = 
+        lazyTarget.Value.AllValsByLogicalName
+
+    /// Compute a table of values and members indexed by logical name.
+    override mtyp.AllValsAndMembersByLogicalNameUncached = 
+        lazyTarget.Value.AllValsAndMembersByLogicalNameUncached
+
+    /// Get a table of F# exception definitions indexed by demangled name, so 'FailureException' is indexed by 'Failure'
+    override mtyp.ExceptionDefinitionsByDemangledName = 
+        lazyTarget.Value.ExceptionDefinitionsByDemangledName
+
+    /// Get a table of nested module and namespace fragments indexed by demangled name (so 'ListModule' becomes 'List')
+    override mtyp.ModulesAndNamespacesByDemangledName = 
+        lazyTarget.Value.ModulesAndNamespacesByDemangledName
+
+    [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
+    member x.DebugText = x.ToString()
+
+    override x.ToString() = "RetargetingModuleOrNamespaceType(...)"
 
 //----------------------------------------------------------------------------
 // TcConfigProvider
@@ -4320,14 +4952,20 @@ type TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAssemblyResolu
             let sigDatas = ilModule.GetRawFSharpSignatureData(m, ilShortAssemName, filename)
             sigDatas
             |> List.map (fun (ccuName, sigDataReader) -> 
+                let ccu = CcuThunk.CreateDelayed ccuName
                 let minfo, optDatas, data = 
                     match ilModule.TryGetSignature () with
                     | Some minfo when sigDatas.Length = 1 -> 
+                        let lazyCcus = 
+                            lazy
+                                (match importsBase with | Some imports -> imports.GetCcusInDeclOrder () | _ -> []) @
+                                tcImports.GetCcusInDeclOrder ()
+                        let mty = (RetargetingModuleOrNamespaceType (minfo.mspec.ModuleOrNamespaceType, ccu, lazyCcus)) :> ModuleOrNamespaceType
                         let minfo = 
                             { minfo with 
                                 mspec = 
                                     { minfo.mspec with 
-                                        entity_modul_contents = MaybeLazy.Strict ((RetargetingModuleOrNamespaceType minfo.mspec.ModuleOrNamespaceType) :> ModuleOrNamespaceType) 
+                                        entity_modul_contents = MaybeLazy.Strict mty 
                                     } 
                             }
                         minfo, Map.Empty, { RawData=minfo; FixupThunks= [||] }
@@ -4362,7 +5000,7 @@ type TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAssemblyResolu
                       MemberSignatureEquality= (fun ty1 ty2 -> Tastops.typeEquivAux EraseAll (tcImports.GetTcGlobals()) ty1 ty2)
                       TypeForwarders = ImportILAssemblyTypeForwarders(tcImports.GetImportMap, m, ilModule.GetRawTypeForwarders()) }
 
-                let ccu = CcuThunk.Create(ccuName, ccuData)
+                ccu.target <- ccuData
 
                 let optdata = 
                     lazy 
@@ -5329,7 +5967,7 @@ let GetInitialTcState(m, ccuName, tcConfig: TcConfig, tcGlobals, tcImports: TcIm
     ignore tcImports
 
     // TODO: Add logic to use ILScopeRef.Local from TcConfig.
-    let ilScopeRef = ILScopeRef.Assembly (ILAssemblyRef.Create (ccuName, None, None, false, None, None))
+    let ilScopeRef = ILScopeRef.Local //ILScopeRef.Assembly (ILAssemblyRef.Create (ccuName, None, None, false, None, None))
 
     // Create a ccu to hold all the results of compilation 
     let ccuType = NewCcuContents ilScopeRef m ccuName (NewEmptyModuleOrNamespaceType Namespace)
