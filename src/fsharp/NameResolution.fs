@@ -1380,7 +1380,18 @@ let unionCaseRefDefnEq g (uc1: UnionCaseRef) (uc2: UnionCaseRef) =
 let ItemsAreEffectivelyEqual g orig other =
     match orig, other  with
     | EntityUse ty1, EntityUse ty2 ->
-        tyconRefDefnEq g ty1 ty2
+        tyconRefDefnEq g ty1 ty2 ||
+        (
+            if ty1.IsResolved && ty2.IsResolved && not ty1.IsModuleOrNamespace && not ty2.IsModuleOrNamespace && not ty1.IsProvidedErasedTycon && ty2.IsProvidedErasedTycon && not ty1.IsProvidedNamespace && not ty2.IsProvidedNamespace then
+                let tref1 = ty1.CompiledRepresentationForNamedType
+                let tref2 = ty2.CompiledRepresentationForNamedType
+                tref1.Enclosing = tref2.Enclosing && tref1.Name = tref2.Name
+            elif not ty1.IsLocalRef && not ty2.IsLocalRef then
+                match ty1.nlr, ty2.nlr with
+                | NonLocalEntityRef (_, path1), NonLocalEntityRef (_, path2) -> path1 = path2
+            else
+                false
+        )
 
     | Item.TypeVar (nm1, tp1), Item.TypeVar (nm2, tp2) ->
         nm1 = nm2 &&
@@ -1503,24 +1514,94 @@ type TcSymbolUseData =
 /// are allocated (one per file), but they are large because the allUsesOfAllSymbols array is large.
 type TcSymbolUses(g, capturedNameResolutions: ResizeArray<CapturedNameResolution>, formatSpecifierLocations: (range * int)[]) =
 
-    // Make sure we only capture the information we really need to report symbol uses
-    let allUsesOfSymbols =
-        capturedNameResolutions
-        |> ResizeArray.mapToSmallArrayChunks (fun cnr -> { Item=cnr.Item; ItemOccurence=cnr.ItemOccurence; DisplayEnv=cnr.DisplayEnv; Range=cnr.Range })
+    let displayEnvComparer =
+        { new IEqualityComparer<DisplayEnv> with
 
-    let capturedNameResolutions = ()
-    do ignore capturedNameResolutions // don't capture this!
+            member __.GetHashCode _ = 0
+
+            member __.Equals (displayEnv1, displayEnv2) =
+                displayEnv1 === displayEnv2
+        }
+
+    let itemComparer =
+        { new IEqualityComparer<Item> with
+
+            member __.GetHashCode item =
+                match item with
+                | Item.Value _vref -> 0 //int vref.Stamp
+                | Item.UnionCase (_, _nm) -> 1 //nm.GetHashCode ()
+                | Item.ActivePatternResult (_info, _, _, _) -> 2 //info.GetHashCode ()
+                | Item.ActivePatternCase _aperef -> 3 //aperef.ActivePatternInfo.GetHashCode ()
+                | Item.ExnCase _tcref -> 4 //int tcref.Stamp
+                | Item.RecdField _info -> 5 //info.Name.GetHashCode ()
+                | Item.AnonRecdField (_info, _, _, _) -> 6 //int info.Stamp
+                | Item.NewDef _id -> 7 //id.idText.GetHashCode ()
+                | Item.ILField _info -> 8 //info.FieldName.GetHashCode ()
+                | Item.Event _info -> 9 //info.EventName.GetHashCode ()
+                | Item.Property (_nm, _) -> 10 //nm.GetHashCode ()
+                | Item.MethodGroup (_displayName, _, _) -> 11 //displayName.GetHashCode ()
+                | Item.CtorGroup (_nm, _) -> 12 //nm.GetHashCode ()
+                | Item.FakeInterfaceCtor _ty -> 13 //ty.GetAssemblyName().GetHashCode ()
+                | Item.DelegateCtor _ty -> 14 //ty.GetAssemblyName().GetHashCode ()
+                | Item.Types (_nm, _) -> 15 //nm.GetHashCode ()
+                | Item.CustomOperation (_nm, _, _) -> 16 //nm.GetHashCode ()
+                | Item.CustomBuilder (_nm, _) -> 17 //nm.GetHashCode ()
+                | Item.TypeVar (_nm, _) -> 18 //nm.GetHashCode ()
+                | Item.ModuleOrNamespaces _ -> 19
+                | Item.ImplicitOp (_id, _) -> 20 //id.idText.GetHashCode ()
+                | Item.ArgName (_id, _, _) -> 21 //id.idText.GetHashCode ()
+                | Item.SetterArg (_id, _) -> 22 //id.idText.GetHashCode ()
+                | Item.UnqualifiedType _ -> 23
+
+            member __.Equals (item1, item2) =
+                item1 === item2 || ItemsAreEffectivelyEqual g item1 item2
+        }
+
+    let lookup = Dictionary<DisplayEnv, Dictionary<ItemOccurence, Dictionary<Item, ResizeArray<range>>>>(displayEnvComparer)
+
+    do
+        for i = 0 to capturedNameResolutions.Count - 1 do
+            let cnr = capturedNameResolutions.[i]
+            let ioLookup =
+                match lookup.TryGetValue cnr.DisplayEnv with
+                | true, ioLookup -> ioLookup
+                | _ -> 
+                    let ioLookup = Dictionary()
+                    lookup.Add (cnr.DisplayEnv, ioLookup)
+                    ioLookup
+            let iLookup =
+                match ioLookup.TryGetValue cnr.ItemOccurence with
+                | true, iLookup -> iLookup
+                | _ -> 
+                    let iLookup = Dictionary(itemComparer)
+                    ioLookup.Add (cnr.ItemOccurence, iLookup)
+                    iLookup
+            let ranges =
+                match iLookup.TryGetValue cnr.Item with
+                | true, ranges -> ranges
+                | _ ->
+                    let ranges = ResizeArray()
+                    iLookup.Add (cnr.Item, ranges)
+                    ranges
+            ranges.Add cnr.Range
 
     member this.GetUsesOfSymbol item =
-        // This member returns what is potentially a very large array, which may approach the size constraints of the Large Object Heap.
-        // This is unlikely in practice, though, because we filter down the set of all symbol uses to those specifically for the given `item`.
-        // Consequently we have a much lesser chance of ending up with an array large enough to be promoted to the LOH.
-        [| for symbolUseChunk in allUsesOfSymbols do
-            for symbolUse in symbolUseChunk do
-                if protectAssemblyExploration false (fun () -> ItemsAreEffectivelyEqual g item symbolUse.Item) then
-                    yield symbolUse |]
+        let result = ResizeArray ()
+        lookup
+        |> Seq.iter (fun pair1 ->
+            pair1.Value
+            |> Seq.iter (fun pair2 ->
+                match pair2.Value.TryGetValue item with
+                | true, ranges ->
+                    for i = 0 to ranges.Count - 1 do
+                        result.Add { Item = item; ItemOccurence = pair2.Key; DisplayEnv = pair1.Key; Range = ranges.[i] }
+                | _ ->
+                    ()
+            )
+        )
+        result.ToArray ()
 
-    member this.AllUsesOfSymbols = allUsesOfSymbols
+    member this.AllUsesOfSymbols: TcSymbolUseData [] [] = [||]
 
     member this.GetFormatSpecifierLocationsAndArity() = formatSpecifierLocations
 
