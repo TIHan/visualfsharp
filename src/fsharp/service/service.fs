@@ -2291,7 +2291,7 @@ type ScriptClosureCacheToken() = interface LockToken
 
 
 // There is only one instance of this type, held in FSharpChecker
-type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors) as self =
+type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors, _isSnapshot) as self =
     // STATIC ROOT: FSharpLanguageServiceTestable.FSharpChecker.backgroundCompiler.reactor: The one and only Reactor
     let reactor = Reactor.Singleton
     let beforeFileChecked = Event<string * obj option>()
@@ -2315,89 +2315,6 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
 
     let scriptClosureCacheLock = Lock<ScriptClosureCacheToken>()
     let frameworkTcImportsCache = FrameworkImportsCache(frameworkTcImportsCacheStrongSize)
-
-    /// CreateOneIncrementalBuilder (for background type checking). Note that fsc.fs also
-    /// creates an incremental builder used by the command line compiler.
-    let CreateOneIncrementalBuilder (ctok, options:FSharpProjectOptions, userOpName) = 
-      cancellable {
-        Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "CreateOneIncrementalBuilder", options.ProjectFileName)
-        let projectReferences =  
-            [ for (nm,opts) in options.ReferencedProjects do
-               
-               // Don't use cross-project references for FSharp.Core, since various bits of code require a concrete FSharp.Core to exist on-disk.
-               // The only solutions that have these cross-project references to FSharp.Core are VisualFSharp.sln and FSharp.sln. The only ramification
-               // of this is that you need to build FSharp.Core to get intellisense in those projects.
-
-               if (try Path.GetFileNameWithoutExtension(nm) with _ -> "") <> GetFSharpCoreLibraryName() then
-
-                 yield
-                    { new IProjectReference with 
-                        member x.EvaluateRawContents(ctok) = 
-                          cancellable {
-                            Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "ParseAndCheckProjectImpl", nm)
-                            let! r = self.ParseAndCheckProjectImpl(opts, ctok, userOpName + ".CheckReferencedProject("+nm+")")
-                            return r.RawFSharpAssemblyData 
-                          }
-                        member x.TryGetLogicalTimeStamp(cache, ctok) = 
-                            self.TryGetLogicalTimeStampForProject(cache, ctok, opts, userOpName + ".TimeStampReferencedProject("+nm+")")
-                        member x.FileName = nm } ]
-
-        let loadClosure = scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.TryGet (ltok, options))
-        let! builderOpt, diagnostics = 
-            IncrementalBuilder.TryCreateBackgroundBuilderForProjectOptions
-                  (ctok, legacyReferenceResolver, defaultFSharpBinariesDir, frameworkTcImportsCache, loadClosure, Array.toList options.SourceFiles, 
-                   Array.toList options.OtherOptions, projectReferences, options.ProjectDirectory, 
-                   options.UseScriptResolutionRules, keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds,
-                   tryGetMetadataSnapshot, suggestNamesForErrors)
-
-        match builderOpt with 
-        | None -> ()
-        | Some builder -> 
-
-#if !NO_EXTENSIONTYPING
-            // Register the behaviour that responds to CCUs being invalidated because of type
-            // provider Invalidate events. This invalidates the configuration in the build.
-            builder.ImportsInvalidatedByTypeProvider.Add (fun _ -> 
-                self.InvalidateConfiguration(options, None, userOpName))
-#endif
-
-            // Register the callback called just before a file is typechecked by the background builder (without recording
-            // errors or intellisense information).
-            //
-            // This indicates to the UI that the file type check state is dirty. If the file is open and visible then 
-            // the UI will sooner or later request a typecheck of the file, recording errors and intellisense information.
-            builder.BeforeFileChecked.Add (fun file -> beforeFileChecked.Trigger(file, options.ExtraProjectInfo))
-            builder.FileParsed.Add (fun file -> fileParsed.Trigger(file, options.ExtraProjectInfo))
-            builder.FileChecked.Add (fun file -> fileChecked.Trigger(file, options.ExtraProjectInfo))
-            builder.ProjectChecked.Add (fun () -> projectChecked.Trigger (options.ProjectFileName, options.ExtraProjectInfo))
-
-        return (builderOpt, diagnostics)
-      }
-
-    // STATIC ROOT: FSharpLanguageServiceTestable.FSharpChecker.backgroundCompiler.incrementalBuildersCache. This root typically holds more 
-    // live information than anything else in the F# Language Service, since it holds up to 3 (projectCacheStrongSize) background project builds
-    // strongly.
-    // 
-    /// Cache of builds keyed by options.        
-    let incrementalBuildersCache = 
-        MruCache<CompilationThreadToken, FSharpProjectOptions, (IncrementalBuilder option * FSharpErrorInfo[])>
-                (keepStrongly=projectCacheSize, keepMax=projectCacheSize, 
-                 areSame =  FSharpProjectOptions.AreSameForChecking, 
-                 areSimilar =  FSharpProjectOptions.UseSameProject)
-
-    let getOrCreateBuilder (ctok, options, userOpName) =
-      cancellable {
-          RequireCompilationThread ctok
-          match incrementalBuildersCache.TryGet (ctok, options) with
-          | Some (builderOpt,creationErrors) -> 
-              Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_GettingCache
-              return builderOpt,creationErrors
-          | None -> 
-              Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_BuildingNewCache
-              let! (builderOpt,creationErrors) as info = CreateOneIncrementalBuilder (ctok, options, userOpName)
-              incrementalBuildersCache.Set (ctok, options, info)
-              return builderOpt, creationErrors
-      }
 
     let parseCacheLock = Lock<ParseCacheLockToken>()
     
@@ -2432,6 +2349,127 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             (HashIdentity.FromFunctions
                 hash
                 (fun (f1, o1, v1) (f2, o2, v2) -> f1 = f2 && v1 = v2 && FSharpProjectOptions.AreSameForChecking(o1, o2)))
+
+    let clearProjectFilesCache ltok (options: FSharpProjectOptions) =
+        options.SourceFiles
+        |> Array.iter (fun filename ->
+            checkFileInProjectCachePossiblyStale.RemoveAnySimilar(ltok, (filename, options))
+            checkFileInProjectCache.RemoveAnySimilar(ltok, (filename, 0, options))
+        )
+
+   // STATIC ROOT: FSharpLanguageServiceTestable.FSharpChecker.backgroundCompiler.incrementalBuildersCache. This root typically holds more 
+    // live information than anything else in the F# Language Service, since it holds up to 3 (projectCacheStrongSize) background project builds
+    // strongly.
+    // 
+    /// Cache of builds keyed by options.        
+    let incrementalBuildersCache = 
+        MruCache<CompilationThreadToken, FSharpProjectOptions, (IncrementalBuilder option * FSharpErrorInfo[])>
+                (keepStrongly=projectCacheSize, keepMax=projectCacheSize, 
+                 areSame =  FSharpProjectOptions.AreSameForChecking, 
+                 areSimilar =  FSharpProjectOptions.UseSameProject)
+
+    let invalidateProject ctok options =
+        incrementalBuildersCache.RemoveAnySimilar (ctok, options)
+        parseCacheLock.AcquireLock (fun ltok -> clearProjectFilesCache ltok options)
+
+    /// CreateOneIncrementalBuilder (for background type checking). Note that fsc.fs also
+    /// creates an incremental builder used by the command line compiler.
+    let rec CreateOneIncrementalBuilder (ctok, options:FSharpProjectOptions, userOpName) = 
+      cancellable {
+        Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "CreateOneIncrementalBuilder", options.ProjectFileName)
+
+        // When we creating a new incremental builder, it's going to invalidate everything in the cache.
+        // Therefore, let's invalidate everything.
+        invalidateProject ctok options
+        System.Diagnostics.Debug.WriteLine(sprintf "%A %A" options.ProjectFileName options.Stamp)
+        let! ct = Cancellable.token ()
+
+        let mutable didCancel = false
+        options.ReferencedProjects
+        |> Seq.iter (fun (_, referencedOptions) ->
+            match getOrCreateBuilder (ctok, referencedOptions, userOpName) |> Cancellable.run ct with
+            | ValueOrCancelled.Value _ -> ()
+            | _ -> didCancel <- true
+        )
+
+        if didCancel then
+            return! Cancellable.canceled ()
+        else
+
+        let projectReferences =  
+            [ for (nm,opts) in options.ReferencedProjects do
+               
+               // Don't use cross-project references for FSharp.Core, since various bits of code require a concrete FSharp.Core to exist on-disk.
+               // The only solutions that have these cross-project references to FSharp.Core are VisualFSharp.sln and FSharp.sln. The only ramification
+               // of this is that you need to build FSharp.Core to get intellisense in those projects.
+
+               if (try Path.GetFileNameWithoutExtension(nm) with _ -> "") <> GetFSharpCoreLibraryName() then
+
+                 yield
+                    { new IProjectReference with 
+                        member x.EvaluateRawContents(ctok) = 
+                          cancellable {
+                            match incrementalBuildersCache.TryGet (ctok, opts) with
+                            | Some _ ->
+                                Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "ParseAndCheckProjectImpl", nm)
+                                let! r = self.ParseAndCheckProjectImpl(opts, ctok, userOpName + ".CheckReferencedProject("+nm+")")
+                                return r.RawFSharpAssemblyData 
+                            | _ ->
+                                return None
+                          }
+                        member x.TryGetLogicalTimeStamp(cache, ctok) = 
+                            match incrementalBuildersCache.TryGet (ctok, opts) with
+                            | Some _ ->
+                                self.TryGetLogicalTimeStampForProject(cache, ctok, opts, userOpName + ".TimeStampReferencedProject("+nm+")")
+                            | _ ->
+                                None
+                        member x.FileName = nm } ]
+
+        let loadClosure = scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.TryGet (ltok, options))
+        let! builderOpt, diagnostics = 
+            IncrementalBuilder.TryCreateBackgroundBuilderForProjectOptions
+                  (ctok, legacyReferenceResolver, defaultFSharpBinariesDir, frameworkTcImportsCache, loadClosure, Array.toList options.SourceFiles, 
+                   Array.toList options.OtherOptions, projectReferences, options.ProjectDirectory, 
+                   options.UseScriptResolutionRules, keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds,
+                   tryGetMetadataSnapshot, suggestNamesForErrors)
+
+        match builderOpt with 
+        | None -> ()
+        | Some builder -> 
+
+#if !NO_EXTENSIONTYPING
+            // Register the behaviour that responds to CCUs being invalidated because of type
+            // provider Invalidate events. This invalidates the configuration in the build.
+            builder.ImportsInvalidatedByTypeProvider.Add (fun _ -> 
+                self.InvalidateConfiguration(options, None, userOpName))
+#endif
+
+            // Register the callback called just before a file is typechecked by the background builder (without recording
+            // errors or intellisense information).
+            //
+            // This indicates to the UI that the file type check state is dirty. If the file is open and visible then 
+            // the UI will sooner or later request a typecheck of the file, recording errors and intellisense information.
+            builder.BeforeFileChecked.Add (fun file -> beforeFileChecked.Trigger(file, options.ExtraProjectInfo))
+            builder.FileParsed.Add (fun file -> fileParsed.Trigger(file, options.ExtraProjectInfo))
+            builder.FileChecked.Add (fun file -> fileChecked.Trigger(file, options.ExtraProjectInfo))
+            builder.ProjectChecked.Add (fun () -> projectChecked.Trigger (options.ProjectFileName, options.ExtraProjectInfo))
+
+        return (builderOpt, diagnostics)
+      }
+
+    and getOrCreateBuilder (ctok, options, userOpName) =
+      cancellable {
+          RequireCompilationThread ctok
+          match incrementalBuildersCache.TryGet (ctok, options) with
+          | Some (builderOpt,creationErrors) -> 
+              Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_GettingCache
+              return builderOpt,creationErrors
+          | None -> 
+              Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_BuildingNewCache
+              let! (builderOpt,creationErrors) as info = CreateOneIncrementalBuilder (ctok, options, userOpName)
+              incrementalBuildersCache.Set (ctok, options, info)
+              return builderOpt, creationErrors
+      }
 
     static let mutable foregroundParseCount = 0
     static let mutable foregroundTypeCheckCount = 0
@@ -2838,6 +2876,10 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                 if startBackgroundCompileIfAlreadySeen then 
                    bc.CheckProjectInBackground(options, userOpName + ".StartBackgroundCompile"))
 
+    member bc.InvalidateProject(options: FSharpProjectOptions, userOpName) =
+        reactor.EnqueueOp(userOpName, "InvalidateProject: Stamp(" + (options.Stamp |> Option.defaultValue 0L).ToString() + ")", options.ProjectFileName, fun ctok -> 
+            invalidateProject ctok options)
+
     member bc.NotifyProjectCleaned (options : FSharpProjectOptions, userOpName) =
         reactor.EnqueueAndAwaitOpAsync(userOpName, "NotifyProjectCleaned", options.ProjectFileName, fun ctok -> 
          cancellable {
@@ -2918,9 +2960,9 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
 [<Sealed>]
 [<AutoSerializable(false)>]
 // There is typically only one instance of this type in a Visual Studio process.
-type FSharpChecker(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors) =
+type FSharpChecker(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors, ?isSnapshot) =
 
-    let backgroundCompiler = BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors)
+    let backgroundCompiler = BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors, isSnapshot)
 
     static let globalInstance = lazy FSharpChecker.Create()
         
@@ -3115,6 +3157,11 @@ type FSharpChecker(legacyReferenceResolver, projectCacheSize, keepAssemblyConten
     member ic.InvalidateConfiguration(options: FSharpProjectOptions, ?startBackgroundCompile, ?userOpName: string) =
         let userOpName = defaultArg userOpName "Unknown"
         backgroundCompiler.InvalidateConfiguration(options, startBackgroundCompile, userOpName)
+
+    /// Invalidate a project. Clears all caches related to this the project represented by the given FSharpProjectOptions, including check files, stale check files, etc.
+    member ic.InvalidateProject(options, ?userOpName: string) =
+        let userOpName = defaultArg userOpName "Unknown"
+        backgroundCompiler.InvalidateProject(options, userOpName)
 
     /// This function is called when a project has been cleaned, and thus type providers should be refreshed.
     member ic.NotifyProjectCleaned(options: FSharpProjectOptions, ?userOpName: string) =
