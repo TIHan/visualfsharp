@@ -2368,7 +2368,12 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                  areSame =  FSharpProjectOptions.AreSameForChecking, 
                  areSimilar =  FSharpProjectOptions.UseSameProject)
 
+    let cancelCache = ConcurrentDictionary ()
+
     let invalidateProject ctok options =
+        match incrementalBuildersCache.TryGetAny (ctok, options) with
+        | Some (Some builder, _) -> builder.CancelBuild ()
+        | _ -> ()
         incrementalBuildersCache.RemoveAnySimilar (ctok, options)
         parseCacheLock.AcquireLock (fun ltok -> clearProjectFilesCache ltok options)
 
@@ -2468,6 +2473,8 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
               Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_BuildingNewCache
               let! (builderOpt,creationErrors) as info = CreateOneIncrementalBuilder (ctok, options, userOpName)
               incrementalBuildersCache.Set (ctok, options, info)
+              if builderOpt.IsSome then
+                cancelCache.[options.ProjectFileName] <- builderOpt.Value 
               return builderOpt, creationErrors
       }
 

@@ -1210,11 +1210,13 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                         sourceFiles, loadClosureOpt: LoadClosure option, 
                         keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds) =
 
+    let gate = obj ()
     let tcConfigP = TcConfigProvider.Constant tcConfig
     let fileParsed = new Event<string>()
     let beforeFileChecked = new Event<string>()
     let fileChecked = new Event<string>()
     let projectChecked = new Event<unit>()
+    let mutable cts = new CancellationTokenSource ()
 #if !NO_EXTENSIONTYPING
     let importsInvalidatedByTypeProvider = new Event<string>()
 #endif
@@ -1411,7 +1413,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                     fullComputation |> 
                         Eventually.repeatedlyProgressUntilDoneOrTimeShareOverOrCanceled 
                             maxTimeShareMilliseconds
-                            CancellationToken.None
+                            cts.Token
                             (fun ctok f -> 
                                 // Reinstall the compilation globals each time we start or restart
                                 use unwind = new CompilationGlobalsScope (errorLogger, BuildPhase.TypeCheck) 
@@ -1562,6 +1564,17 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 #endif
 
     member __.AllDependenciesDeprecated = allDependencies
+
+    member __.CancelBuild () =
+        lock gate (fun () -> 
+            cts.Cancel ()
+            cts.Dispose ()
+            cts <- new CancellationTokenSource ()
+        )
+
+    override x.Finalize () =
+        cts.Cancel ()
+        cts.Dispose ()
 
     member __.Step (ctok: CompilationThreadToken) =  
       cancellable {

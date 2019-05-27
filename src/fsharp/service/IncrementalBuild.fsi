@@ -109,6 +109,9 @@ type internal IncrementalBuilder =
       /// The list of files the build depends on
       member AllDependenciesDeprecated : string[]
 
+      /// Cancels the current build.
+      member CancelBuild : unit -> unit
+
       /// Perform one step in the F# build. Return true if the background work is finished.
       member Step : CompilationThreadToken -> Cancellable<bool>
 
