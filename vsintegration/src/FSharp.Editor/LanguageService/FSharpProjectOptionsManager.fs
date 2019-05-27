@@ -128,36 +128,6 @@ module internal FSharpCompilationHelpers =
     let hasProjectChanged (oldProject: Project) (project: Project) =
         oldProject.Version <> project.Version
 
-    let checkProject cenv (oldProject: Project) (newProject: Project) ct =
-        async {
-            Debug.Assert (oldProject.Id = newProject.Id)
-
-            // while we are not invalidated, we should update the project itself in the cache.
-            updateProject cenv newProject
-
-            if hasProjectChanged oldProject newProject then
-                Logging.Logging.logInfof "*** invalidate project cache - %A" oldProject.Id
-                invalidateProjectCache cenv oldProject.Id
-                return false
-            elif cenv.enableInMemoryCrossProjectReferences then
-                let! oldVersion = oldProject.GetDependentVersionAsync ct |> Async.AwaitTask
-                let! newVersion = newProject.GetDependentVersionAsync ct |> Async.AwaitTask
-
-                if oldVersion <> newVersion then
-                    // invalidate any project that depends on this project
-                    newProject.Solution.GetProjectDependencyGraph().GetProjectsThatTransitivelyDependOnThisProject newProject.Id
-                    |> Seq.iter (fun projectId ->
-                        Logging.Logging.logInfof "*** Depend on this project - invalidate project cache - %A" projectId
-                        invalidateProjectCache cenv projectId
-                    )
-
-                    return true
-                else
-                    return true
-            else
-                return true
-        }
-
     let rec tryComputeOptionsByFile cenv (document: Document) (ct: CancellationToken) =
         async {
             let isScript = isScriptFile document.FilePath
@@ -204,8 +174,67 @@ module internal FSharpCompilationHelpers =
                 else
                     return Some(parsingOptions, projectOptions)
         }
+
+    let rec checkProject cenv (oldProject: Project) (newProject: Project) ct =
+        async {
+            Debug.Assert (oldProject.Id = newProject.Id)
+
+            if hasProjectChanged oldProject newProject then
+                Logging.Logging.logInfof "*** invalidate project cache - %A" oldProject.Id
+                invalidateProjectCache cenv oldProject.Id
+                return false
+            elif cenv.enableInMemoryCrossProjectReferences then
+                let! oldVersion = oldProject.GetDependentVersionAsync ct |> Async.AwaitTask
+                let! newVersion = newProject.GetDependentVersionAsync ct |> Async.AwaitTask
+
+                if oldVersion <> newVersion then
+                    // invalidate any project that depends on this project
+                    newProject.Solution.GetProjectDependencyGraph().GetProjectsThatTransitivelyDependOnThisProject newProject.Id
+                    |> Seq.iter (fun projectId ->
+                        Logging.Logging.logInfof "*** Depend on this project - invalidate project cache - %A" projectId
+                        invalidateProjectCache cenv projectId
+                    )
+
+                    match! tryComputeProjectReferences cenv newProject ct with
+                    | None -> 
+                        return false
+                    | Some referencedProjects ->
+                        match cenv.cache.TryGetValue newProject.Id with
+                        | true, (_, parsingOptions, projectOptions) ->
+                            
+                            cenv.cache.[newProject.Id] <- (newProject, parsingOptions, { projectOptions with ReferencedProjects = referencedProjects })
+                            return true
+                        | _ ->
+                            return false
+                else
+                    return true
+            else
+                return true
+        }
+
+    and tryComputeProjectReferences cenv (project: Project) ct =
+        async {
+            if cenv.enableInMemoryCrossProjectReferences then
+                // Because this code can be kicked off before the hack, HandleCommandLineChanges, occurs,
+                //     the command line options will not be available and we should bail if one of the project references does not give us anything.
+                let mutable canBail = false
+
+                let referencedProjects = ResizeArray()
+                for projectReference in project.ProjectReferences do
+                    let referencedProject = project.Solution.GetProject(projectReference.ProjectId)
+                    if referencedProject.Language = FSharpConstants.FSharpLanguageName then
+                        match! tryComputeOptions cenv referencedProject ct with
+                        | None -> canBail <- true
+                        | Some(_, projectOptions) -> referencedProjects.Add(referencedProject.OutputFilePath, projectOptions)
+                if canBail then
+                    return None
+                else
+                    return Some (referencedProjects.ToArray ())
+            else
+                return Some [||]
+        }
     
-    let rec tryComputeOptions cenv (project: Project) (ct: CancellationToken) =
+    and tryComputeOptions cenv (project: Project) (ct: CancellationToken) =
         async {
             let projectId = project.Id
             match cenv.cache.TryGetValue(projectId) with
