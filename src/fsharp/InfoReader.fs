@@ -28,7 +28,7 @@ let private SelectImmediateMemberVals g optFilter f (tcref: TyconRef) =
         // These cannot be selected directly via the "." notation. 
         // However, it certainly is useful to be able to publish these values, as we can in theory 
         // optimize code to make direct calls to these methods. 
-        | Some membInfo when not (ValRefIsExplicitImpl g vref) -> 
+        | Some membInfo when not (ValRefIsExplicitImpl g vref) || (vref.IsOverrideOrExplicitImpl && isInterfaceTyconRef membInfo.ApparentEnclosingEntity) -> 
             f membInfo vref
         | _ ->  
             None

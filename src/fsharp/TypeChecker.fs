@@ -11475,16 +11475,16 @@ and ApplyAbstractSlotInference (cenv: cenv) (envinner: TcEnv) (bindingTy, m, syn
 
        [], declaredTypars 
 
-and CheckForNonAbstractInterface declKind tcref memberFlags m =
+and CheckForNonAbstractInterface _declKind tcref memberFlags m =
     if isInterfaceTyconRef tcref then 
         if memberFlags.MemberKind = MemberKind.ClassConstructor then 
             error(Error(FSComp.SR.tcStaticInitializersIllegalInInterface(), m))
         elif memberFlags.MemberKind = MemberKind.Constructor then 
             error(Error(FSComp.SR.tcObjectConstructorsIllegalInInterface(), m))
-        elif memberFlags.IsOverrideOrExplicitImpl then 
-            error(Error(FSComp.SR.tcMemberOverridesIllegalInInterface(), m))
-        elif not (declKind=ExtrinsicExtensionBinding || memberFlags.IsDispatchSlot ) then
-            error(Error(FSComp.SR.tcConcreteMembersIllegalInInterface(), m))
+        //elif memberFlags.IsOverrideOrExplicitImpl then 
+        //    error(Error(FSComp.SR.tcMemberOverridesIllegalInInterface(), m))
+        //elif not (declKind=ExtrinsicExtensionBinding || memberFlags.IsDispatchSlot ) then
+        //    error(Error(FSComp.SR.tcConcreteMembersIllegalInInterface(), m))
 
 //-------------------------------------------------------------------------
 // TcLetrec - AnalyzeAndMakeAndPublishRecursiveValue s
@@ -15535,7 +15535,7 @@ module EstablishTypeDefinitionCores =
                         let implementedTys, inheritedTys =   
                             match kind with 
                             | TyconInterface -> 
-                                explicitImplements |> List.iter (fun (_, m) -> errorR(Error(FSComp.SR.tcInterfacesShouldUseInheritNotInterface(), m)))
+                                //explicitImplements |> List.iter (fun (_, m) -> errorR(Error(FSComp.SR.tcInterfacesShouldUseInheritNotInterface(), m)))
                                 (implementedTys @ inheritedTys), [] 
                             | _ -> implementedTys, inheritedTys
                         implementedTys, inheritedTys 

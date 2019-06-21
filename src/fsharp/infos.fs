@@ -1139,7 +1139,7 @@ type MethInfo =
     member minfo.IsAbstract =
         match minfo with
         | ILMeth(_, ilmeth, _) -> ilmeth.IsAbstract
-        | FSMeth(g, _, vref, _)  -> isInterfaceTy g minfo.ApparentEnclosingType  || vref.IsDispatchSlotMember
+        | FSMeth(_g, _, vref, _)  -> vref.IsDispatchSlotMember
         | DefaultStructCtor _ -> false
 #if !NO_EXTENSIONTYPING
         | ProvidedMeth(_, mi, _, m) -> mi.PUntaint((fun mi -> mi.IsAbstract), m)
