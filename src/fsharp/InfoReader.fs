@@ -19,23 +19,25 @@ open FSharp.Compiler.Tast
 open FSharp.Compiler.Tastops
 open FSharp.Compiler.TcGlobals
 
-/// Use the given function to select some of the member values from the members of an F# type
-let private SelectImmediateMemberVals g optFilter f (tcref: TyconRef) = 
+let private SelectAllImmediateMemberVals optFilter f (tcref: TyconRef) =
     let chooser (vref: ValRef) = 
         match vref.MemberInfo with 
-        // The 'when' condition is a workaround for the fact that values providing 
-        // override and interface implementations are published in inferred module types 
-        // These cannot be selected directly via the "." notation. 
-        // However, it certainly is useful to be able to publish these values, as we can in theory 
-        // optimize code to make direct calls to these methods. 
-        | Some membInfo when not (ValRefIsExplicitImpl g vref) || (vref.IsOverrideOrExplicitImpl && isInterfaceTyconRef membInfo.ApparentEnclosingEntity) -> 
-            f membInfo vref
-        | _ ->  
-            None
+        | Some membInfo -> f membInfo vref
+        | _ -> None
 
     match optFilter with 
     | None -> tcref.MembersOfFSharpTyconByName |> NameMultiMap.chooseRange chooser
     | Some nm -> tcref.MembersOfFSharpTyconByName |> NameMultiMap.find nm |> List.choose chooser
+
+/// Use the given function to select some of the member values from the members of an F# type
+let private SelectImmediateMemberVals g optFilter f (tcref: TyconRef) = 
+    tcref
+    |> SelectAllImmediateMemberVals optFilter (fun membInfo vref ->
+        if not (ValRefIsExplicitImpl g vref) then
+            f membInfo vref
+        else
+            None
+    )
 
 /// Check whether a name matches an optional filter
 let private checkFilter optFilter (nm: string) = match optFilter with None -> true | Some n2 -> nm = n2
@@ -82,7 +84,7 @@ let rec GetImmediateIntrinsicMethInfosOfTypeAux (optFilter, ad) g amap m origTy 
                 match tryDestAppTy g metadataTy with
                 | ValueNone -> []
                 | ValueSome tcref ->
-                    SelectImmediateMemberVals g optFilter (TrySelectMemberVal g optFilter origTy None) tcref
+                   SelectAllImmediateMemberVals optFilter (TrySelectMemberVal g optFilter origTy None) tcref
     let minfos = minfos |> List.filter (IsMethInfoAccessible amap m ad)
     minfos
 

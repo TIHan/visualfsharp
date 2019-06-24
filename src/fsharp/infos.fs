@@ -365,8 +365,9 @@ type ValRef with
 
     /// Check if an F#-declared member value is a virtual method
     member vref.IsVirtualMember =
+        let membInfo = vref.MemberInfo.Value
         let flags = vref.MemberInfo.Value.MemberFlags
-        flags.IsDispatchSlot || flags.IsOverrideOrExplicitImpl
+        flags.IsOverrideOrExplicitImpl && not (isNil membInfo.ImplementedSlotSigs)
 
     /// Check if an F#-declared member value is a dispatch slot
     member vref.IsDispatchSlotMember =
@@ -1139,7 +1140,7 @@ type MethInfo =
     member minfo.IsAbstract =
         match minfo with
         | ILMeth(_, ilmeth, _) -> ilmeth.IsAbstract
-        | FSMeth(_g, _, vref, _)  -> vref.IsDispatchSlotMember
+        | FSMeth(_g, _, vref, _)  -> not vref.IsVirtualMember
         | DefaultStructCtor _ -> false
 #if !NO_EXTENSIONTYPING
         | ProvidedMeth(_, mi, _, m) -> mi.PUntaint((fun mi -> mi.IsAbstract), m)
