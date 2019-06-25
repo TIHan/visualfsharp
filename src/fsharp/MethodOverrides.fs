@@ -512,6 +512,7 @@ module DispatchSlotChecking =
                           let isOptional = 
                               ListSet.contains (typeEquiv g) impliedTy availImpliedInterfaces
                           for reqdSlot in GetImmediateIntrinsicMethInfosOfType (None, AccessibleFromSomewhere) g amap reqdTyRange impliedTy do
+                            if reqdSlot.IsDispatchSlot then
                               yield RequiredSlot(reqdSlot, isOptional)
                   else
                       
@@ -744,7 +745,6 @@ let FinalTypeDefinitionChecksAtEndOfInferenceScope (infoReader: InfoReader, nenv
            && not tycon.IsTypeAbbrev
            && not tycon.IsMeasureableReprTycon
            && not tycon.IsAsmReprTycon
-           && not tycon.IsFSharpInterfaceTycon
            && not tycon.IsFSharpDelegateTycon then 
 
             DispatchSlotChecking.CheckImplementationRelationAtEndOfInferenceScope (infoReader, denv, nenv, sink, tycon, isImplementation) 

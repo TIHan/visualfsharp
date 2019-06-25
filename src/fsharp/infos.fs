@@ -1112,14 +1112,14 @@ type MethInfo =
     member x.IsDispatchSlot =
         match x with
         | ILMeth(_g, ilmeth, _) -> ilmeth.IsVirtual
-        | FSMeth(g, _, vref, _) as x ->
-            isInterfaceTy g x.ApparentEnclosingType  ||
-            vref.MemberInfo.Value.MemberFlags.IsDispatchSlot
+        | FSMeth(_, _, vref, _) -> vref.IsDispatchSlot
         | DefaultStructCtor _ -> false
 #if !NO_EXTENSIONTYPING
         | ProvidedMeth _ -> x.IsVirtual // Note: follow same implementation as ILMeth
 #endif
 
+    member x.IsDefaultInterfaceMember =
+        not x.IsAbstract && x.IsVirtual && isInterfaceTyconRef x.ApparentEnclosingTyconRef
 
     member x.IsFinal =
         not x.IsVirtual ||

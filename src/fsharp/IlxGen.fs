@@ -5606,7 +5606,7 @@ and ComputeFlagFixupsForMemberBinding cenv (v: Val, memberInfo: ValMemberInfo) =
          
              let useMethodImpl =
                 // REVIEW: it would be good to get rid of this special casing of Compare and GetHashCode during code generation
-                isInterfaceTy g oty &&
+                isInterfaceTy g oty && not (isInterfaceTyconRef tcref) &&
                 (let isCompare =
                     Option.isSome tcref.GeneratedCompareToValues &&
                      (typeEquiv g oty g.mk_IComparable_ty ||
@@ -6794,7 +6794,7 @@ and GenTypeDef cenv mgbuf lazyInitInfo eenv m (tycon: Tycon) =
 
                      for slotsig in memberInfo.ImplementedSlotSigs do
 
-                         if isInterfaceTy g slotsig.ImplementedType then
+                         if isInterfaceTy g slotsig.ImplementedType && not (isInterfaceTyconRef vref.MemberApparentEntity) then
 
                              match vref.ValReprInfo with
                              | Some _ ->
