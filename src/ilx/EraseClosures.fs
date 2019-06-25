@@ -122,6 +122,14 @@ type cenv =
       addFieldGeneratedAttrs: ILFieldDef -> ILFieldDef
       addFieldNeverAttrs: ILFieldDef -> ILFieldDef
       addMethodGeneratedAttrs: ILMethodDef -> ILMethodDef }
+
+    member this.GetClosureFullName n =
+        let i = n - 1
+        if i >= this.tref_Func.Length then
+            invalidArg "n" (sprintf "%i is larger than the %i maximum closures." n this.tref_Func.Length)
+        this.tref_Func.[i].FullName
+
+    member this.TypeFuncFullName = this.mkILTyFuncTy.TypeRef.FullName
   
 let addMethodGeneratedAttrsToTypeDef cenv (tdef: ILTypeDef) = 
     tdef.With(methods = (tdef.Methods.AsList |> List.map (fun md -> md |> cenv.addMethodGeneratedAttrs) |> mkILMethods))

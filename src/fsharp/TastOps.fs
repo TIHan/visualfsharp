@@ -2837,9 +2837,65 @@ let fullMangledPathToTyconRef (tcref: TyconRef) =
     match tcref with 
     | ERefLocal _ -> (match tcref.PublicPath with None -> [| |] | Some pp -> pp.EnclosingPath)
     | ERefNonLocal nlr -> nlr.EnclosingMangledPath
-  
-let qualifiedMangledNameOfTyconRef tcref nm = 
-    String.concat "-" (Array.toList (fullMangledPathToTyconRef tcref) @ [ tcref.LogicalName + "-" + nm ])
+
+let demangleGenericTypeName (logicalName: string) =
+    let pos = logicalName.LastIndexOf '`'
+    if pos = -1 then logicalName
+    else logicalName.Substring (0, pos)
+    
+// same as isNonErasedTypar in IlxGen
+let isNonErasedTypar (tp: Typar) = 
+    not tp.IsErased
+
+// same as DropErasedTypars in IlxGen
+let dropErasedTypars (tps: Typar list) =
+    tps |> List.filter isNonErasedTypar
+
+let rec qualifiedMangledNameOfType g ty =
+    let rec getGenericArgsText g tinst =
+        match tinst with
+        | [] -> System.String.Empty
+        | _ -> "<" + (tinst |> List.map (qualifiedMangledNameOfType g) |> String.concat ",") + ">"
+
+    let rec qualifiedMangledNameOfTyconRef g (tcref: TyconRef) tinst =
+        let logicalNameWithTypeArgs =
+            let logicalName = tcref.LogicalName
+            match tinst with
+            | [] -> logicalName
+            | _ -> (demangleGenericTypeName logicalName) + (getGenericArgsText g tinst)
+
+        String.concat "." (Array.append (fullMangledPathToTyconRef tcref) [|logicalNameWithTypeArgs|])
+
+    match stripTyEqnsAndMeasureEqns g ty with
+    | TType_app (tcref, tinst) ->
+        qualifiedMangledNameOfTyconRef g tcref tinst
+
+    | TType_tuple (tupInfo, args) ->
+        qualifiedMangledNameOfType g (mkCompiledTupleTy g (evalTupInfoIsStruct tupInfo) args)
+
+    | TType_fun (dty, returnTy) ->
+        (demangleGenericTypeName (g.ilxPubCloEnv.GetClosureFullName 1)) + (getGenericArgsText g [dty; returnTy])
+
+    | TType_anon (anonInfo, tinst) ->
+        let fullName = anonInfo.ILTypeRef.FullName
+        match tinst with
+        | [] -> fullName
+        | _ -> (demangleGenericTypeName fullName) + (getGenericArgsText g tinst)
+
+    | TType_ucase (ucref, tinst) ->
+        qualifiedMangledNameOfTyconRef g ucref.TyconRef tinst
+
+    | TType_forall (tps, tau) ->
+        let tps = tps |> List.filter isNonErasedTypar
+        if tps.IsEmpty then qualifiedMangledNameOfType g tau
+        else g.ilxPubCloEnv.TypeFuncFullName
+
+    | TType_var tp -> tp.Name
+
+    | TType_measure _ -> failwith "measure has been stripped; should not happen"
+
+let qualifiedMangledNameOfTypeAndMethod g ty nm =
+    qualifiedMangledNameOfType g ty + "." + nm
 
 let rec firstEq p1 p2 = 
     match p1 with

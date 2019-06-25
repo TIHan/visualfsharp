@@ -1047,7 +1047,7 @@ let MakeMemberDataAndMangledNameForMemberVal(g, tcref, isExtrinsic, attrs, optIm
              let text = if memberFlags.IsOverrideOrExplicitImpl then text + ".Override" else text
              text
         else
-            List.foldBack (tcrefOfAppTy g >> qualifiedMangledNameOfTyconRef) optIntfSlotTys logicalName
+            List.foldBack (qualifiedMangledNameOfTypeAndMethod g) optIntfSlotTys logicalName
     
     if not isCompGen && IsMangledOpName id.idText && IsInfixOperator id.idText then 
         let m = id.idRange

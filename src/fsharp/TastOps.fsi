@@ -1007,7 +1007,7 @@ val fullDisplayTextOfRecdFieldRef  : RecdFieldRef -> string
 val ticksAndArgCountTextOfTyconRef : TyconRef -> string
 
 /// A unique qualified name for each type definition, used to qualify the names of interface implementation methods
-val qualifiedMangledNameOfTyconRef : TyconRef -> string -> string
+val qualifiedMangledNameOfTypeAndMethod : TcGlobals -> TType -> string -> string
 
 val trimPathByDisplayEnv : DisplayEnv -> string list -> string
 

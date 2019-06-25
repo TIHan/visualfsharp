@@ -8,7 +8,15 @@ open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.Extensions.ILX 
 open FSharp.Compiler.AbstractIL.Extensions.ILX.Types
 
-type cenv
+[<Sealed>]
+type cenv =
+
+    /// The name of the closure type in the assembly using the '.' notation for nested types.
+    member GetClosureFullName: n: int -> string
+
+    /// The name of the FSharpTypeFunc type in the assembly using the '.' notation for nested types.
+    member TypeFuncFullName: string
+
 val mkCallFunc : cenv -> allocLocal:(ILType -> uint16) -> numThisGenParams:int -> ILTailcall -> IlxClosureApps -> ILInstr list
 
 val mkILFuncTy : cenv -> ILType -> ILType -> ILType
