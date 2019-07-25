@@ -710,28 +710,35 @@ let TryFindPropInfo infoReader m ad nm ty =
 let TryFindILIntrinisicOverriderMethInfo (infoReader: InfoReader) m ad ty (overrides: MethInfo) =
     let g = infoReader.g
 
-    match tryAppTy g ty, overrides with
-    | ValueSome (tcref, _), ILMeth (_, ilMethInfo, _) when tcref.IsILTycon ->
+    match overrides with
+    | ILMeth (_, ilMethInfo, _) ->
         let ilMeth = ilMethInfo.ILMethodRef
 
-        tcref.ILTyconRawMetadata.MethodImpls.AsList
-        |> List.tryFind (fun ilMethImpl -> 
-            let overridesRef = ilMethImpl.Overrides.MethodRef
-            overridesRef.Name = ilMeth.Name && overridesRef.ArgCount = ilMeth.ArgCount && 
-            overridesRef.GenericArity = ilMeth.GenericArity &&
-            overridesRef.DeclaringTypeRef.BasicQualifiedName = ilMethInfo.DeclaringTyconRef.CompiledRepresentationForNamedType.BasicQualifiedName
-        )
-        |> Option.bind (fun ilMethImpl ->
-            TryFindIntrinsicMethInfo infoReader m ad ilMethImpl.OverrideBy.Name ty
-            |> List.tryFind (fun methInfo ->
-                let overrideByRef = ilMethImpl.OverrideBy.MethodRef
-                overrideByRef.ArgCount = (match methInfo.NumArgs with [] -> 0 | count :: _ -> count) && 
-                overrideByRef.GenericArity = methInfo.GenericArity &&
-                overrideByRef.DeclaringTypeRef.BasicQualifiedName = methInfo.DeclaringTyconRef.CompiledRepresentationForNamedType.BasicQualifiedName
-            )
+        AllInterfacesOfType g infoReader.amap m AllowMultiIntfInstantiations.Yes ty
+        |> List.choose (fun ty ->
+            match tryAppTy g ty with
+            | ValueSome (tcref, _) when tcref.IsILTycon ->
+                tcref.ILTyconRawMetadata.MethodImpls.AsList
+                |> List.tryFind (fun ilMethImpl -> 
+                    let overridesRef = ilMethImpl.Overrides.MethodRef
+                    overridesRef.Name = ilMeth.Name && overridesRef.ArgCount = ilMeth.ArgCount && 
+                    overridesRef.GenericArity = ilMeth.GenericArity &&
+                    overridesRef.DeclaringTypeRef.BasicQualifiedName = ilMethInfo.DeclaringTyconRef.CompiledRepresentationForNamedType.BasicQualifiedName
+                )
+                |> Option.bind (fun ilMethImpl ->
+                    TryFindIntrinsicMethInfo infoReader m ad ilMethImpl.OverrideBy.Name ty
+                    |> List.tryFind (fun methInfo ->
+                        let overrideByRef = ilMethImpl.OverrideBy.MethodRef
+                        overrideByRef.ArgCount = (match methInfo.NumArgs with [] -> 0 | count :: _ -> count) && 
+                        overrideByRef.GenericArity = methInfo.GenericArity &&
+                        overrideByRef.DeclaringTypeRef.BasicQualifiedName = methInfo.DeclaringTyconRef.CompiledRepresentationForNamedType.BasicQualifiedName
+                    )
+                )
+            | _ ->
+                None
         )
     | _ ->
-        None
+        []
 
 //-------------------------------------------------------------------------
 // Helpers related to delegates and events - these use method searching hence are in this file
