@@ -33,7 +33,6 @@ let x = N.
             """
             [|
                 FSharpErrorSeverity.Error, 599, (8, 10, 8, 11), "Missing qualification after '.'"
-                FSharpErrorSeverity.Error, 222, (2, 1, 3, 1), "Files in libraries or multiple-file applications must begin with a namespace or module declaration. When using a module declaration at the start of a file the '=' sign is not allowed. If this is a top-level module, consider removing the = to resolve this error."
             |]
 
     [<Test>]
