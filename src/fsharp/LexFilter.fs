@@ -2091,6 +2091,60 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
             returnToken tokenLexbufState token
 
         | TYPE, _ -> 
+            let keywordName = "TYPE"
+            // compiling the source for FSharp.Core.dll uses crazy syntax like 
+            //     (# "unbox.any !0" type ('T) x : 'T #)
+            // where the type keyword is used inside an expression, so we must exempt FSharp.Core from some extra failed-parse-diagnostics-recovery-processing of the 'type' keyword
+            let mutable effectsToDo = []
+            if not compilingFsLib then
+                // ... <<< code with unmatched ( or [ or { or [| >>> ... "type" ...
+                // We want a TYPE or MODULE keyword to close any currently-open "expression" contexts, as though there were close delimiters in the file, so:
+                let rec nextOuterMostInterestingContextIsNamespaceOrModule offsideStack =
+                    match offsideStack with
+                    // next outermost is namespace or module
+                    | _ :: (CtxtNamespaceBody _ | CtxtModuleBody _) :: _ -> true
+                    // The context pair below is created a namespace/module scope when user explicitly uses 'begin'...'end',
+                    // and these can legally contain type definitions, so ignore this combo as uninteresting and recurse deeper
+                    | _ :: CtxtParen((BEGIN|STRUCT), _) :: CtxtSeqBlock(_, _, _) :: _ -> nextOuterMostInterestingContextIsNamespaceOrModule(offsideStack.Tail.Tail) 
+                    // at the top of the stack there is an implicit module
+                    | _ :: [] -> true 
+                    // anything else is a non-namespace/module
+                    | _ -> false
+                while not offsideStack.IsEmpty && (not(nextOuterMostInterestingContextIsNamespaceOrModule offsideStack)) &&
+                                                    (match offsideStack.Head with 
+                                                    // open-parens of sorts
+                                                    | CtxtParen((LPAREN|LBRACK|LBRACE|LBRACE_BAR|LBRACK_BAR), _) -> true
+                                                    // seq blocks
+                                                    | CtxtSeqBlock _ -> true 
+                                                    // vanillas
+                                                    | CtxtVanilla _ -> true 
+                                                    // preserve all other contexts
+                                                    | _ -> false) do
+                    match offsideStack.Head with
+                    | CtxtParen _ ->
+                        if debug then dprintf "%s at %a terminates CtxtParen()\n" keywordName outputPos tokenStartPos
+                        popCtxt()
+                    | CtxtSeqBlock(_, _, AddBlockEnd) ->  
+                        popCtxt()
+                        effectsToDo <- (fun() -> 
+                            if debug then dprintf "--> because %s is coming, inserting OBLOCKEND\n" keywordName
+                            delayTokenNoProcessing (tokenTup.UseLocation OBLOCKEND)) :: effectsToDo
+                    | CtxtSeqBlock(_, _, NoAddBlockEnd) ->  
+                        if debug then dprintf "--> because %s is coming, popping CtxtSeqBlock\n" keywordName
+                        popCtxt()
+                    | CtxtSeqBlock(_, _, AddOneSidedBlockEnd) ->  
+                        popCtxt()
+                        effectsToDo <- (fun() -> 
+                            if debug then dprintf "--> because %s is coming, inserting ORIGHT_BLOCK_END\n" keywordName
+                            delayTokenNoProcessing (tokenTup.UseLocation(ORIGHT_BLOCK_END))) :: effectsToDo
+                    | CtxtVanilla _ ->  
+                        if debug then dprintf "--> because %s is coming, popping CtxtVanilla\n" keywordName
+                        popCtxt()
+                    | _ -> failwith "impossible, the while loop guard just above prevents this"
+
+            for e in List.rev effectsToDo do
+                e() // push any END tokens after pushing the TYPE_IS_HERE and TYPE_COMING_SOON stuff, so that they come before those in the token stream
+                
             //insertComingSoonTokens("TYPE", TYPE_COMING_SOON, TYPE_IS_HERE)
             if debug then dprintf "TYPE, pushing CtxtTypeDefns(%a)\n" outputPos tokenStartPos
             pushCtxt tokenTup (CtxtTypeDefns tokenStartPos)
