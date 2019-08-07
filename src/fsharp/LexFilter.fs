@@ -2091,10 +2091,10 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
             returnToken tokenLexbufState token
 
         | TYPE, _ -> 
-            insertComingSoonTokens("TYPE", TYPE_COMING_SOON, TYPE_IS_HERE)
+            //insertComingSoonTokens("TYPE", TYPE_COMING_SOON, TYPE_IS_HERE)
             if debug then dprintf "TYPE, pushing CtxtTypeDefns(%a)\n" outputPos tokenStartPos
             pushCtxt tokenTup (CtxtTypeDefns tokenStartPos)
-            hwTokenFetch useBlockRule
+            returnToken tokenLexbufState token
 
         | TRY, _ -> 
             if debug then dprintf "Try, pushing CtxtTry(%a)\n" outputPos tokenStartPos

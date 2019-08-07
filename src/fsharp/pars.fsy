@@ -807,7 +807,7 @@ moduleSpecBlock:
 
 /* A group of type definitions in a signature */
 tyconSpfns:      
-  | typeKeyword tyconSpfnList 
+  | TYPE tyconSpfnList 
      { $2 }
 
 
@@ -967,7 +967,7 @@ classMemberSpfn:
      { if Option.isSome $2 then errorR(Error(FSComp.SR.parsVisibilityDeclarationsShouldComePriorToIdentifier(),rhs parseState 2))
        SynMemberSig.ValField($5 $1 true,rhs2 parseState 3 5) }
 
-  | opt_attributes  opt_declVisibility STATIC typeKeyword tyconSpfn 
+  | opt_attributes  opt_declVisibility STATIC TYPE tyconSpfn 
      { if Option.isSome $2 then errorR(Error(FSComp.SR.parsVisibilityDeclarationsShouldComePriorToIdentifier(),rhs parseState 2))
        SynMemberSig.NestedType($5,rhs2 parseState 3 5) }
 
@@ -1216,7 +1216,7 @@ moduleDefn:
         mkDefnBindings (mWhole,$3,$1,$2,mWhole) }
   
   /* 'type' definitions */
-  | opt_attributes opt_declVisibility typeKeyword tyconDefn tyconDefnList
+  | opt_attributes opt_declVisibility TYPE tyconDefn tyconDefnList
       { if Option.isSome $2 then errorR(Error(FSComp.SR.parsVisibilityDeclarationsShouldComePriorToIdentifier(),rhs parseState 2))
         let      (TypeDefn(ComponentInfo(cas,a,cs,b,c,d,d2,d3),e,f,g)) = $4
         let tc = (TypeDefn(ComponentInfo($1@cas,a,cs,b,c,d,d2,d3),e,f,g))
@@ -1405,7 +1405,7 @@ attributeTarget:
   | moduleKeyword COLON 
       { Some(ident("module",(rhs parseState 1))) } 
 
-  | typeKeyword COLON 
+  | TYPE COLON 
       { Some(ident("type",(rhs parseState 1))) } 
 
   | ident COLON { Some($1) } 
@@ -1880,7 +1880,7 @@ classDefnMember:
         assert (match declPat with SynPatForConstructorDecl _ -> true | _ -> false)
         [ SynMemberDefn.Member(Binding (None,NormalBinding,false,false,$1,grabXmlDoc(parseState,3),valSynData, declPat,None,expr,m,NoSequencePointAtInvisibleBinding),m) ] }
         
-  | opt_attributes opt_declVisibility STATIC typeKeyword tyconDefn 
+  | opt_attributes opt_declVisibility STATIC TYPE tyconDefn 
      {  if Option.isSome $2 then errorR(Error(FSComp.SR.parsVisibilityDeclarationsShouldComePriorToIdentifier(),rhs parseState 2))
         [ SynMemberDefn.NestedType($5,None,rhs2 parseState 3 5) ] }
 
@@ -3857,7 +3857,7 @@ parenExpr:
       { // silent recovery
         SynExpr.Paren (arbExpr("parenExpr1",(rhs parseState 1).EndRange),(rhs parseState 1),Some(rhs parseState 3),(rhs2 parseState 1 3)) } 
 
-  | LPAREN TYPE_COMING_SOON
+  | LPAREN TYPE
       { reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedParen())
         let lhsm = unionRangeWithPos (rhs parseState 1) (rhs parseState 2).Start
         arbExpr("parenExpr2tcs", lhsm) }
@@ -4033,7 +4033,7 @@ opt_atomicExprAfterType:
 
 opt_inlineAssemblyTypeArg:
   |  { [] }
-  | typeKeyword LPAREN typ rparen  {  [$3] }
+  | TYPE LPAREN typ rparen  {  [$3] }
 
 opt_inlineAssemblyReturnTypes:
   |  
@@ -5009,12 +5009,6 @@ opt_HIGH_PRECEDENCE_APP:
 opt_HIGH_PRECEDENCE_TYAPP:
   | HIGH_PRECEDENCE_TYAPP { }
   | /* EMPTY */   { }
-
-/* A 'type' keyword */
-typeKeyword:
-  | TYPE_COMING_SOON typeKeyword { }
-  | TYPE_IS_HERE { }
-  | TYPE { }
 
 /* A 'module' keyword */
 moduleKeyword:
