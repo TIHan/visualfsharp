@@ -2090,6 +2090,11 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
             pushCtxtSeqBlock(true, AddBlockEnd)
             returnToken tokenLexbufState token
 
+        | TYPE, _ when offsideStack |> List.exists (function | CtxtParen _ -> true | _ -> false) ->
+            popCtxt ()
+            delayToken tokenTup
+            returnToken tokenLexbufState token
+
         | TYPE, _ -> 
             let keywordName = "TYPE"
             // compiling the source for FSharp.Core.dll uses crazy syntax like 
@@ -2144,7 +2149,7 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
 
             for e in List.rev effectsToDo do
                 e() // push any END tokens after pushing the TYPE_IS_HERE and TYPE_COMING_SOON stuff, so that they come before those in the token stream
-                
+
             //insertComingSoonTokens("TYPE", TYPE_COMING_SOON, TYPE_IS_HERE)
             if debug then dprintf "TYPE, pushing CtxtTypeDefns(%a)\n" outputPos tokenStartPos
             pushCtxt tokenTup (CtxtTypeDefns tokenStartPos)
