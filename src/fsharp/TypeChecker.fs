@@ -669,7 +669,8 @@ let ShrinkContext env oldRange newRange =
     | ContextInfo.YieldInComputationExpression
     | ContextInfo.RuntimeTypeTest _
     | ContextInfo.DowncastUsedInsteadOfUpcast _ 
-    | ContextInfo.SequenceExpression _ ->
+    | ContextInfo.SequenceExpression _ 
+    | ContextInfo.NameOfExpression ->
         env
     | ContextInfo.CollectionElement (b,m) ->
         if not (Range.equals m oldRange) then env else
@@ -8824,6 +8825,7 @@ and delayRest rest mPrior delayed =
 
 /// Typecheck "nameof" expressions
 and TcNameOfExpr cenv env tpenv (synArg: SynExpr) = 
+    let env = { env with eContextInfo = ContextInfo.NameOfExpression }
 
     let rec stripParens expr =
         match expr with
@@ -8935,7 +8937,8 @@ and TcLongIdentThen cenv overallTy env tpenv (LongIdentWithDots(longId, _)) dela
 
     let ad = env.eAccessRights
     let typeNameResInfo = GetLongIdentTypeNameInfo delayed
-    let nameResolutionResult = ResolveLongIdentAsExprAndComputeRange cenv.tcSink cenv.nameResolver (rangeOfLid longId) ad env.eNameResEnv typeNameResInfo longId
+    let includeStaticAndInstanceMembers = match env.eContextInfo with ContextInfo.NameOfExpression -> true | _ -> false
+    let nameResolutionResult = ResolveLongIdentAsExprAndComputeRange cenv.tcSink cenv.nameResolver (rangeOfLid longId) ad env.eNameResEnv typeNameResInfo longId includeStaticAndInstanceMembers
     TcItemThen cenv overallTy env tpenv nameResolutionResult delayed
 
 //-------------------------------------------------------------------------
@@ -8946,6 +8949,7 @@ and TcItemThen cenv overallTy env tpenv (item, mItem, rest, afterResolution) del
     let g = cenv.g
     let delayed = delayRest rest mItem delayed
     let ad = env.eAccessRights
+    let isInNameOfExpr = match env.eContextInfo with ContextInfo.NameOfExpression -> true | _ -> false
     match item with 
     // x where x is a union case or active pattern result tag. 
     | (Item.UnionCase _ | Item.ExnCase _ | Item.ActivePatternResult _) as item -> 
@@ -9121,7 +9125,7 @@ and TcItemThen cenv overallTy env tpenv (item, mItem, rest, afterResolution) del
             // call to ResolveLongIdentAsExprAndComputeRange 
             error(Error(FSComp.SR.tcInvalidUseOfTypeName(), mItem))
 
-    | Item.MethodGroup (methodName, minfos, _) -> 
+    | Item.MethodGroup (methodName, minfos, _) when not isInNameOfExpr -> 
         // Static method calls Type.Foo(arg1, ..., argn) 
         let meths = List.map (fun minfo -> minfo, None) minfos
         match delayed with 
@@ -9167,7 +9171,7 @@ and TcItemThen cenv overallTy env tpenv (item, mItem, rest, afterResolution) del
 #endif
             TcMethodApplicationThen cenv env overallTy None tpenv None [] mItem mItem methodName ad NeverMutates false meths afterResolution NormalValUse [] ExprAtomicFlag.Atomic delayed 
 
-    | Item.CtorGroup(nm, minfos) ->
+    | Item.CtorGroup(nm, minfos) when not isInNameOfExpr ->
         let objTy = 
             match minfos with 
             | (minfo :: _) -> minfo.ApparentEnclosingType
@@ -9335,7 +9339,7 @@ and TcItemThen cenv overallTy env tpenv (item, mItem, rest, afterResolution) del
         resultExpr2, tpenv2
       
         
-    | Item.DelegateCtor ty ->
+    | Item.DelegateCtor ty when not isInNameOfExpr ->
         match delayed with 
         | ((DelayedApp (atomicFlag, arg, mItemAndArg)) :: otherDelayed) ->
             TcNewDelegateThen cenv overallTy env tpenv mItem mItemAndArg ty arg atomicFlag otherDelayed
@@ -9507,7 +9511,12 @@ and TcItemThen cenv overallTy env tpenv (item, mItem, rest, afterResolution) del
         match usageTextOpt() with
         | None -> error(Error(FSComp.SR.tcCustomOperationNotUsedCorrectly nm, mItem))
         | Some usageText -> error(Error(FSComp.SR.tcCustomOperationNotUsedCorrectly2(nm, usageText), mItem))
-    | _ -> error(Error(FSComp.SR.tcLookupMayNotBeUsedHere(), mItem))
+    | _ ->
+        if isInNameOfExpr then
+           // CallNameResolutionSink cenv.tcSink (mItem, env.NameEnv, item, item, emptyTyparInst, ItemOccurence.Use, env.DisplayEnv, env.eAccessRights)  
+            (mkUnit cenv.g mItem, tpenv)
+        else
+            error(Error(FSComp.SR.tcLookupMayNotBeUsedHere(), mItem))
 
 
 //-------------------------------------------------------------------------
@@ -9554,9 +9563,10 @@ and TcLookupThen cenv overallTy env tpenv mObjExpr objExpr objExprTy longId dela
     let item, mItem, rest, afterResolution = ResolveExprDotLongIdentAndComputeRange cenv.tcSink cenv.nameResolver mExprAndLongId ad env.eNameResEnv objExprTy longId findFlag false
     let mExprAndItem = unionRanges mObjExpr mItem
     let delayed = delayRest rest mExprAndItem delayed
+    let isInNameOfExpr = match env.eContextInfo with ContextInfo.NameOfExpression -> true | _ -> false
 
     match item with
-    | Item.MethodGroup (methodName, minfos, _) -> 
+    | Item.MethodGroup (methodName, minfos, _) when not isInNameOfExpr -> 
         let atomicFlag, tyargsOpt, args, delayed, tpenv = GetSynMemberApplicationArgs delayed tpenv 
         // We pass PossiblyMutates here because these may actually mutate a value type object 
         // To get better warnings we special case some of the few known mutate-a-struct method names 
@@ -9676,7 +9686,11 @@ and TcLookupThen cenv overallTy env tpenv mObjExpr objExpr objExprTy longId dela
         TcEventValueThen cenv overallTy env tpenv mItem mExprAndItem (Some(objExpr, objExprTy)) einfo delayed
      
     | (Item.FakeInterfaceCtor _ | Item.DelegateCtor _) -> error (Error (FSComp.SR.tcConstructorsCannotBeFirstClassValues(), mItem))
-    | _ -> error (Error (FSComp.SR.tcSyntaxFormUsedOnlyWithRecordLabelsPropertiesAndFields(), mItem))
+    | _ ->
+        if isInNameOfExpr then
+            (mkUnit cenv.g mItem, tpenv)
+        else
+            error (Error (FSComp.SR.tcSyntaxFormUsedOnlyWithRecordLabelsPropertiesAndFields(), mItem))
 
 and TcEventValueThen cenv overallTy env tpenv mItem mExprAndItem objDetails (einfo: EventInfo) delayed = 
     // Instance IL event (fake up event-as-value) 

@@ -154,6 +154,8 @@ type ContextInfo =
     | PatternMatchGuard of range
     /// The type equation comes from a sequence expression.
     | SequenceExpression of TType
+    /// The type equation comes from a nameof expression.
+    | NameOfExpression
 
 exception ConstraintSolverTupleDiffLengths              of displayEnv: DisplayEnv * TType list * TType list * range  * range
 exception ConstraintSolverInfiniteTypes                 of displayEnv: DisplayEnv * contextInfo: ContextInfo * TType * TType * range * range
