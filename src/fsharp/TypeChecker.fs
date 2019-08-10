@@ -8841,73 +8841,79 @@ and TcNameOfExpr cenv env tpenv (synArg: SynExpr) =
             | Result modref when delayed.IsEmpty && modref |> List.exists (p23 >> IsEntityAccessible cenv.amap m ad) -> 
                 () // resolved to a module or namespace, done with checks
             | _ -> 
-                let overallTy = match overallTyOpt with None -> NewInferenceType() | Some t -> t 
+                let (TypeNameResolutionInfo(_, staticArgsInfo)) = GetLongIdentTypeNameInfo delayed
+                match ResolveTypeLongIdent cenv.tcSink cenv.nameResolver ItemOccurence.UseInAttribute OpenQualified env.eNameResEnv ad longId staticArgsInfo PermitDirectReferenceToGeneratedType.No with
+                | Result tcref when delayed.IsEmpty && IsEntityAccessible cenv.amap m ad tcref -> 
+                    () // resolved to a type name, done with checks
+                | _ -> 
+                    let overallTy = match overallTyOpt with None -> NewInferenceType() | Some t -> t 
 
-                let rec checkItem overallTy tinst item m delayed = 
-                    CallNameResolutionSink cenv.tcSink (m, env.NameEnv, item, item, emptyTyparInst, ItemOccurence.Use, env.DisplayEnv, ad)
+                    let rec checkItem overallTy item m delayed = 
+                        CallNameResolutionSink cenv.tcSink (m, env.NameEnv, item, item, emptyTyparInst, ItemOccurence.Use, env.DisplayEnv, ad)
 
-                    match item with
-                    | Item.Value vref ->
-                        let result = checkDelayed vref.Type [] delayed
-                        UnifyTypes cenv env m overallTy vref.Type
-                        result
+                        match item with
+                        | Item.Value vref ->
+                            let result = checkDelayed vref.Type delayed
+                            UnifyTypes cenv env m overallTy vref.Type
+                            result
 
-                    | Item.Property (nm, pinfos) ->
-                        let meths = pinfos |> GettersOfPropInfos
-                        if isNil meths && not (isNil delayed) then error (Error (FSComp.SR.tcPropertyIsNotReadable nm, m))
+                        | Item.Property (nm, pinfos) ->
+                            let meths = pinfos |> GettersOfPropInfos
+                            if isNil meths && not (isNil delayed) then error (Error (FSComp.SR.tcPropertyIsNotReadable nm, m))
 
-                        match meths with
-                        | (_, Some pinfo) :: _ ->
-                            checkDelayed (pinfo.GetterMethod.GetFSharpReturnTy (cenv.amap, m, [])) [] delayed
+                            match meths with
+                            | (_, Some pinfo) :: _ ->
+                                checkDelayed (pinfo.GetterMethod.GetFSharpReturnTy (cenv.amap, m, [])) delayed
+                            | _ ->
+                                true
+
+                        | Item.ILField finfo ->
+                            UnifyTypes cenv env m overallTy finfo.ApparentEnclosingType
+                            checkDelayed (finfo.FieldType (cenv.amap, m)) delayed
+
+                        | Item.RecdField rfinfo ->
+                            UnifyTypes cenv env m overallTy rfinfo.DeclaringType
+                            checkDelayed rfinfo.FieldType delayed
+
+                        | Item.AnonRecdField (arfinfo, tinst, n, _) ->
+                            let fieldTy = List.item n tinst
+                            UnifyTypes cenv env m overallTy (TType_anon (arfinfo, tinst))
+                            checkDelayed fieldTy delayed
+
+                        | Item.Types (_, [ty]) ->
+                            match argsOfAppTy cenv.g ty, delayed with
+                            | [], _
+                            | _, DelayedTypeApp _ :: _ ->
+                                UnifyTypes cenv env m overallTy ty
+                                checkDelayed ty delayed
+                            | _ ->
+                                false
+
                         | _ ->
-                            true
+                            isNil delayed
 
-                    | Item.ILField finfo ->
-                        UnifyTypes cenv env m overallTy finfo.ApparentEnclosingType
-                        checkDelayed (finfo.FieldType (cenv.amap, m)) [] delayed
-
-                    | Item.RecdField rfinfo ->
-                        UnifyTypes cenv env m overallTy rfinfo.DeclaringType
-                        checkDelayed rfinfo.FieldType [] delayed
-
-                    | Item.AnonRecdField (arfinfo, tinst, n, _) ->
-                        let fieldTy = List.item n tinst
-                        UnifyTypes cenv env m overallTy (TType_anon (arfinfo, tinst))
-                        checkDelayed fieldTy [] delayed
-
-                    | Item.Types (_, [ty]) ->
-                        UnifyTypes cenv env m overallTy ty
-                        checkDelayed ty [] delayed
-
-                    | _ ->
-                        isNil delayed
-
-                and checkDelayed overallTy tinst delayed =
-                    match delayed with
-                    | ditem :: delayedTail ->
-                        match ditem with
-                        | DelayedDotLookup (longId, mLongId) ->
-                            let item, mItem, rest, _ = ResolveExprDotLongIdentAndComputeRange cenv.tcSink cenv.nameResolver mLongId ad env.eNameResEnv overallTy longId FindMemberFlag.IgnoreOverrides true
-                            let delayed = delayRest rest mItem delayedTail
-                            checkItem overallTy tinst item mItem delayed
-                        | DelayedTypeApp(types, _, _) ->
-                            let tinst =
-                                types
-                                |> List.map (fun synType ->
-                                    let ty, _ = TcTypeAndRecover cenv NewTyparsOK CheckCxs ItemOccurence.UseInType env tpenv synType
-                                    ty
-                                )
-                            checkDelayed overallTy tinst delayedTail
+                    and checkDelayed overallTy delayed =
+                        match delayed with
+                        | ditem :: delayedTail ->
+                            match ditem with
+                            | DelayedDotLookup (longId, mLongId) when not (List.isEmpty longId) ->
+                                let item, mItem, rest, _ = ResolveExprDotLongIdentAndComputeRange cenv.tcSink cenv.nameResolver mLongId ad env.eNameResEnv overallTy longId FindMemberFlag.IgnoreOverrides true
+                                let delayed = delayRest rest mItem delayedTail
+                                checkItem overallTy item mItem delayed
+                            | DelayedTypeApp(tyargs, _, mExprAndTypeArgs) ->
+                                let ty, _ = TcNestedTypeApplication cenv NewTyparsOK CheckCxs ItemOccurence.UseInType env tpenv mExprAndTypeArgs overallTy tyargs
+                                checkDelayed ty delayedTail
+                            | _ -> 
+                                false
                         | _ -> 
-                            false
-                    | _ -> 
-                        true
-
-                let item, rest = ResolveExprLongIdent cenv.tcSink cenv.nameResolver m ad env.eNameResEnv (GetLongIdentTypeNameInfo delayed) longId
-                let mItem = id.idRange
-                let delayed = delayRest rest mItem delayed
-                if not (checkItem overallTy [] item mItem delayed) then
-                    error (Error(FSComp.SR.expressionHasNoName(), m))
+                            true
+                    
+                    let (TypeNameResolutionInfo (_, staticArgsInfo)) = (GetLongIdentTypeNameInfo delayed)
+                    let typeNameResInfo = TypeNameResolutionInfo.ResolveToTypeRefs staticArgsInfo
+                    let item, rest = ResolveExprLongIdent cenv.tcSink cenv.nameResolver m ad env.eNameResEnv typeNameResInfo longId
+                    let delayed = delayRest rest id.idRange delayed
+                    if not (checkItem overallTy item id.idRange delayed) then
+                        error (Error(FSComp.SR.expressionHasNoName(), m))
 
             List.last longId
 
