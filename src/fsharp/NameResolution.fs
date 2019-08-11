@@ -4708,3 +4708,58 @@ let GetVisibleNamespacesAndModulesAtPoint (ncenv: NameResolver) (nenv: NameResol
              && EntityRefContainsSomethingAccessible ncenv m ad  x
              && not (IsTyconUnseen ad ncenv.g ncenv.amap m x))
     )
+
+/// Try to resolve a long identifier to a namespace, module or type definition
+let TryResolveLongIdentModuleOrNamespaceOrType sink (ncenv: NameResolver) occurence fullyQualified nenv ad (lid: Ident list) staticResInfo genOk =
+
+    let rec retry itemOpt lid rest resolve =
+        match rest with
+        | [] -> 
+            itemOpt, []
+        | nextId :: rest2 ->
+            let longId2 = lid @ [nextId]
+            match resolve longId2 with
+            | (Some _) as itemOpt2 ->
+                retry itemOpt2 longId2 rest2 resolve
+            | _ when itemOpt.IsSome ->
+                itemOpt, rest
+            | _ ->
+                retry itemOpt longId2 rest2 resolve
+
+    let resolveLongIdentModuleOrNamespace lid =
+        let m = rangeOfLid lid
+        let id, rest = List.headAndTail lid
+        match ResolveLongIndentAsModuleOrNamespaceOrStaticClass sink ResultCollectionSettings.AllResults ncenv.amap m false true fullyQualified nenv ad id rest true with
+        | Result modref ->
+            Some (Item.ModuleOrNamespaces (modref |> List.map (fun (_, r, _) -> r)), m, [])
+        | _ ->
+            None
+
+    let resolveLongIdentType lid =
+        let resolve lid =
+            let m = rangeOfLid lid
+            // Do not report anything in the sink because we are going to retry multiple times.
+            match ResolveTypeLongIdent TcResultsSink.NoSink ncenv occurence fullyQualified nenv ad lid staticResInfo genOk with
+            | Result tcref ->                      
+                Some (Item.Types(tcref.DisplayName, [FreshenTycon ncenv m tcref]), m)
+            | _ ->
+                None
+
+        match retry None [] lid resolve with
+        | Some (item, mItem), rest ->
+            Some (item, mItem, rest)
+        | _ ->
+            None
+
+    let itemModrefOpt = resolveLongIdentModuleOrNamespace lid
+
+    if itemModrefOpt.IsSome then
+        itemModrefOpt
+    else
+        match resolveLongIdentType lid with
+        | Some (item, mItem, _) as itemTypeOpt ->
+            // Now we can report in the sink because we found the correct type.
+            CallNameResolutionSink sink (mItem, nenv, item, item, emptyTyparInst, occurence, nenv.eDisplayEnv, ad)
+            itemTypeOpt
+        | _ ->
+            None
