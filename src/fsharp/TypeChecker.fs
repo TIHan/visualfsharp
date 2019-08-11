@@ -8837,10 +8837,10 @@ and TcNameOfExpr cenv env tpenv (synArg: SynExpr) =
         | LongOrSingleIdent (false, (LongIdentWithDots(longId, _)), _, _) when longId.Length > 0 ->
             let ad = env.eAccessRights
 
-            let rec checkItem currentLongId overallTy item m delayed = 
+            let rec checkItem overallTy item m delayed = 
                 match item with
                 | Item.Value vref ->
-                    let result = checkDelayed currentLongId vref.Type delayed
+                    let result = checkDelayedLookup vref.Type delayed
                     // This will take care of any inference with records.
                     UnifyTypes cenv env m overallTy vref.Type
                     result
@@ -8853,38 +8853,38 @@ and TcNameOfExpr cenv env tpenv (synArg: SynExpr) =
 
                     match meths with
                     | (_, Some pinfo) :: _ when not delayed.IsEmpty ->
-                        checkDelayed currentLongId (pinfo.GetterMethod.GetFSharpReturnTy (cenv.amap, m, [])) delayed
+                        checkDelayedLookup (pinfo.GetterMethod.GetFSharpReturnTy (cenv.amap, m, [])) delayed
                     | _ ->
                         // We have no dot lookups; we are finished.
                         true
 
                 | Item.ILField finfo ->
                     UnifyTypes cenv env m overallTy finfo.ApparentEnclosingType
-                    checkDelayed currentLongId (finfo.FieldType (cenv.amap, m)) delayed
+                    checkDelayedLookup (finfo.FieldType (cenv.amap, m)) delayed
 
                 | Item.RecdField rfinfo ->
                     UnifyTypes cenv env m overallTy rfinfo.DeclaringType
-                    checkDelayed currentLongId rfinfo.FieldType delayed
+                    checkDelayedLookup rfinfo.FieldType delayed
 
                 | Item.AnonRecdField (arfinfo, tinst, n, _) ->
                     let fieldTy = List.item n tinst
                     UnifyTypes cenv env m overallTy (TType_anon (arfinfo, tinst))
-                    checkDelayed currentLongId fieldTy delayed
+                    checkDelayedLookup fieldTy delayed
 
                 | Item.Types (_, [ty]) ->
-                    match tryDestAppTy cenv.g ty with
-                    | ValueSome tcref ->
-                        // Do not allow lack of or incorrect number of type arguments.
-                        // i.e. `nameof System.Collections.Generic.List` will return an error.
+                    match tryAppTy cenv.g ty with
+                    | ValueSome (tcref, tinst) ->
+                        let pathTypeArgs =
+                            tinst
+                            |> List.filter (isTyparTy cenv.g >> not)
+
                         match delayed with
-                        | DelayedTypeApp (synArgTys, _, mExprAndTypeArgs) :: _ ->
-                            let _, _ = TcTypeApp cenv NewTyparsOK CheckCxs ItemOccurence.UseInType env tpenv mExprAndTypeArgs tcref [] synArgTys
-                            ()
+                        | DelayedTypeApp(synArgTys, _, mExprAndTypeArgs) :: delayedTail ->
+                            let ty2, _ = TcTypeApp cenv NewTyparsOK CheckCxs ItemOccurence.UseInType env tpenv mExprAndTypeArgs tcref pathTypeArgs synArgTys
+                            checkDelayedLookup ty2 delayedTail
                         | _ ->
-                            let _, _ = TcTypeApp cenv NewTyparsOK CheckCxs ItemOccurence.UseInType env tpenv m tcref [] []
-                            ()
-                        UnifyTypes cenv env m overallTy ty
-                        checkDelayed currentLongId ty delayed
+                            let ty2, _ = TcTypeApp cenv NewTyparsOK CheckCxs ItemOccurence.UseInType env tpenv m tcref pathTypeArgs []
+                            checkDelayedLookup ty2 delayed
                     | _ ->
                         false
 
@@ -8896,21 +8896,23 @@ and TcNameOfExpr cenv env tpenv (synArg: SynExpr) =
                 | _ ->
                     isNil delayed
 
-            and checkDelayed currentLongId overallTy delayed =
+            and checkDelayedLookup overallTy delayed =
                 match delayed with
                 | ditem :: delayedTail ->
                     match ditem with
-                    | DelayedDotLookup (longId, _) when not (List.isEmpty longId) ->
-                        let newLongId = currentLongId @ longId
-                        let newLongIdRanges = newLongId |> List.map (fun id -> id.idRange)
-                        let lidd = LongIdentWithDots(newLongId, newLongIdRanges)
-                        check (Some overallTy) (SynExpr.LongIdent (false, lidd, None, newLongIdRanges |> List.reduce unionRanges)) delayedTail |> ignore
-                        true
+                    | DelayedDotLookup (longId, mLongId) when not (List.isEmpty longId) ->
+                        let (TypeNameResolutionInfo(_, staticArgsInfo)) = GetLongIdentTypeNameInfo delayed
 
-                    | DelayedTypeApp(synArgTys, _, mExprAndTypeArgs) ->
-                        // Evaluates generic types with substitution.
-                        let ty, _ = TcNestedTypeApplication cenv NewTyparsOK CheckCxs ItemOccurence.UseInType env tpenv mExprAndTypeArgs overallTy synArgTys
-                        checkDelayed currentLongId ty delayedTail
+                        let item, mItem, rest =
+                            match TryResolveTypeDotIdent cenv.tcSink cenv.nameResolver ItemOccurence.Use env.eNameResEnv ad staticArgsInfo overallTy longId with
+                            | Some (item, mItem, rest) -> 
+                                (item, mItem, rest)
+                            | _ ->
+                                let item, mItem, rest, _ = ResolveExprDotLongIdentAndComputeRange cenv.tcSink cenv.nameResolver mLongId ad env.eNameResEnv overallTy longId FindMemberFlag.IgnoreOverrides true
+                                (item, mItem, rest)
+
+                        let delayed = delayRest rest mItem delayedTail
+                        checkItem overallTy item mItem delayed
                     | _ -> 
                         false
                 | _ -> 
@@ -8931,14 +8933,14 @@ and TcNameOfExpr cenv env tpenv (synArg: SynExpr) =
             // If we are unable to resolve as a module, namespace, or type definition, treat the long identifier as an expression.
             let checkLongId longId overallTy delayed =
                 let (TypeNameResolutionInfo(_, staticArgsInfo)) as typeNameResInfo = GetLongIdentTypeNameInfo delayed
-                match TryResolveLongIdentModuleOrNamespaceOrType cenv.tcSink cenv.nameResolver ItemOccurence.Use OpenQualified env.eNameResEnv ad longId staticArgsInfo PermitDirectReferenceToGeneratedType.No with
+                match TryResolveModuleOrNamespaceOrTypeLongIdent cenv.tcSink cenv.nameResolver ItemOccurence.Use OpenQualified env.eNameResEnv ad longId staticArgsInfo PermitDirectReferenceToGeneratedType.No with
                 | Some (item, mItem, rest) when not (isItemNotAccessible item mItem) ->
-                    checkItem longId overallTy item mItem (delayRest rest mItem delayed)
+                    checkItem overallTy item mItem (delayRest rest mItem delayed)
                 | _ ->
                     // Not able to resolve the long identifier as a module, namespace, or type definition.
                     // This means we probably have an expression.
                     let item, rest = ResolveExprLongIdent cenv.tcSink cenv.nameResolver m ad env.eNameResEnv typeNameResInfo longId
-                    checkItem longId overallTy item m (delayRest rest m delayed)
+                    checkItem overallTy item m (delayRest rest m delayed)
 
             let overallTy = match overallTyOpt with None -> NewInferenceType() | Some t -> t 
             if not (checkLongId longId overallTy delayed) then

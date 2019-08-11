@@ -3269,8 +3269,7 @@ let FreshenRecdFieldRef (ncenv: NameResolver) m (rfref: RecdFieldRef) =
 /// determine any valid members
 //
 // QUERY (instantiationGenerator cleanup): it would be really nice not to flow instantiationGenerator to here.
-let private ResolveExprDotLongIdent (ncenv: NameResolver) m ad nenv ty (id: Ident) rest findFlag =
-    let typeNameResInfo = TypeNameResolutionInfo.Default
+let private ResolveExprDotLongIdent (ncenv: NameResolver) m ad nenv typeNameResInfo ty (id: Ident) rest findFlag =
     let adhoctDotSearchAccessible = AtMostOneResult m (ResolveLongIdentInTypePrim ncenv nenv LookupKind.Expr ResolutionInfo.Empty 1 m ad id rest findFlag typeNameResInfo ty)
     match adhoctDotSearchAccessible with
     | Exception _ ->
@@ -3407,7 +3406,7 @@ let ResolveExprDotLongIdentAndComputeRange (sink: TcResultsSink) (ncenv: NameRes
         let resInfo, item, rest =
             match lid with
             | id :: rest ->
-                ResolveExprDotLongIdent ncenv wholem ad nenv ty id rest findFlag
+                ResolveExprDotLongIdent ncenv wholem ad nenv TypeNameResolutionInfo.Default ty id rest findFlag
             | _ -> error(InternalError("ResolveExprDotLongIdentAndComputeRange", wholem))
         let itemRange = ComputeItemRange wholem lid rest
         resInfo, item, rest, itemRange
@@ -4709,8 +4708,8 @@ let GetVisibleNamespacesAndModulesAtPoint (ncenv: NameResolver) (nenv: NameResol
              && not (IsTyconUnseen ad ncenv.g ncenv.amap m x))
     )
 
-/// Try to resolve a long identifier to a namespace, module or type definition
-let TryResolveLongIdentModuleOrNamespaceOrType sink (ncenv: NameResolver) occurence fullyQualified nenv ad (lid: Ident list) staticResInfo genOk =
+/// Try to resolve a long identifier representing a namespace, module or type definition, and report it
+let TryResolveModuleOrNamespaceOrTypeLongIdent sink (ncenv: NameResolver) occurence fullyQualified nenv ad (lid: Ident list) staticResInfo genOk =
 
     let rec retry itemOpt lid rest resolve =
         match rest with
@@ -4763,3 +4762,14 @@ let TryResolveLongIdentModuleOrNamespaceOrType sink (ncenv: NameResolver) occure
             itemTypeOpt
         | _ ->
             None
+
+/// Try to resolve a dot long identifier representing a type definition and report it
+let TryResolveTypeDotIdent sink ncenv occurence nenv ad staticResInfo ty (longId: Ident list) =
+    let id, rest = List.headAndTail longId
+    let m = id.idRange
+    match ResolveExprDotLongIdent ncenv m ad nenv (TypeNameResolutionInfo.ResolveToTypeRefs staticResInfo) ty id rest FindMemberFlag.IgnoreOverrides with
+    | (_, (Item.Types(_, [_]) as item), rest2) ->
+        CallNameResolutionSink sink (m, nenv, item, item, emptyTyparInst, occurence, nenv.eDisplayEnv, ad)
+        Some (item, m, rest2)
+    | _ ->
+        None

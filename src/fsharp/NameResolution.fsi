@@ -543,5 +543,8 @@ val GetVisibleNamespacesAndModulesAtPoint : NameResolver -> NameResolutionEnv ->
 
 val IsItemResolvable : NameResolver -> NameResolutionEnv -> range -> AccessorDomain -> string list -> Item -> bool
 
-/// Try to resolve a long identifier to a namespace, module or type definition
-val TryResolveLongIdentModuleOrNamespaceOrType : TcResultsSink -> NameResolver -> ItemOccurence -> FullyQualifiedFlag -> NameResolutionEnv -> AccessorDomain -> Ident list -> TypeNameResolutionStaticArgsInfo -> PermitDirectReferenceToGeneratedType -> ((Item * range * Ident list) option)
+/// Try to resolve a long identifier representing a namespace, module or type definition, and report it
+val TryResolveModuleOrNamespaceOrTypeLongIdent : TcResultsSink -> NameResolver -> ItemOccurence -> FullyQualifiedFlag -> NameResolutionEnv -> AccessorDomain -> Ident list -> TypeNameResolutionStaticArgsInfo -> PermitDirectReferenceToGeneratedType -> (Item * range * Ident list) option
+
+/// Try to resolve a dot long identifier representing a type definition and report it
+val TryResolveTypeDotIdent : TcResultsSink -> NameResolver -> ItemOccurence -> NameResolutionEnv -> AccessorDomain -> TypeNameResolutionStaticArgsInfo -> TType -> Ident list -> (Item * range * Ident list) option
