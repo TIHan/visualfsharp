@@ -8850,9 +8850,15 @@ and TcNameOfExpr cenv env tpenv (synArg: SynExpr) =
                         if vref.IsTypeFunction then
                             isNil delayed
                         else
-                            let result = checkDelayed vref.Type delayed
+                            let ty =
+                                let vty = vref.Type
+                                if isByrefTy cenv.g vty then 
+                                    destByrefTy cenv.g vty
+                                else
+                                    vty
+                            let result = checkDelayed ty delayed
                             // This will take care of any inference with records.
-                            UnifyTypes cenv env m overallTy vref.Type
+                            UnifyTypes cenv env m overallTy ty
                             result
 
                     // TODO: Determine if this is the route to go.
