@@ -8915,7 +8915,7 @@ and TcNameOfExpr cenv env tpenv (synArg: SynExpr) =
                         | DelayedTypeApp (synArgTys, _, mExprAndTypeArgs) :: delayedTail ->
                             checkTypeApp mExprAndTypeArgs synArgTys delayedTail
                         | _ ->
-                            checkTypeApp m [] delayed
+                            checkDelayed ty delayed
                     | _ ->
                         error(Error(FSComp.SR.tcInvalidUseOfTypeName(), m))
 
