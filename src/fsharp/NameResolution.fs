@@ -4708,8 +4708,8 @@ let GetVisibleNamespacesAndModulesAtPoint (ncenv: NameResolver) (nenv: NameResol
              && not (IsTyconUnseen ad ncenv.g ncenv.amap m x))
     )
 
-/// Try to resolve a long identifier representing a namespace, module or type definition, and report it
-let TryResolveModuleOrNamespaceOrTypeLongIdent sink (ncenv: NameResolver) occurence fullyQualified nenv ad (lid: Ident list) staticResInfo genOk =
+/// Try to resolve a long identifier representing a namespace, module or type definition, and report it.
+let TryResolveLongIdentAsModuleOrNamespaceOrType sink (ncenv: NameResolver) occurence fullyQualified nenv ad (lid: Ident list) staticResInfo genOk =
 
     let rec retry itemOpt lid rest resolve =
         match rest with
@@ -4763,8 +4763,33 @@ let TryResolveModuleOrNamespaceOrTypeLongIdent sink (ncenv: NameResolver) occure
         | _ ->
             None
 
-/// Try to resolve a dot long identifier representing a type definition and report it
-let TryResolveTypeDotIdent sink ncenv occurence nenv ad staticResInfo ty (longId: Ident list) =
+/// Try to resolve a long identifier inside a `nameof` expression.
+/// Try to resolve the long identifier as module or namespace.
+/// If that fails, try to resolve as a type defintion as best as possible.
+/// If we resolved as a type definition, we may have extra dot lookups from the "rest".
+/// If we are unable to resolve as a module, namespace, or type definition, treat the long identifier as an expression.
+let ResolveLongIdentInNameOfExpr sink (ncenv: NameResolver) m ad nenv typeNameResInfo lid =
+    let isItemNotAccessible item m =
+        match item with
+        | Item.ModuleOrNamespaces modrefs ->
+            modrefs
+            |> List.forall (fun modref ->
+                not (IsEntityAccessible ncenv.amap m ad modref)
+            )
+        | _ -> false
+
+    let (TypeNameResolutionInfo(_, staticArgsInfo)) = typeNameResInfo
+    match TryResolveLongIdentAsModuleOrNamespaceOrType sink ncenv ItemOccurence.Use OpenQualified nenv ad lid staticArgsInfo PermitDirectReferenceToGeneratedType.No with
+    | Some (item, mItem, rest) when not (isItemNotAccessible item mItem) ->
+        (item, mItem, rest)
+    | _ ->
+        // Not able to resolve the long identifier as a module, namespace, or type definition.
+        // This means we probably have an expression.
+        let item, rest = ResolveExprLongIdent sink ncenv m ad nenv typeNameResInfo lid
+        (item, m, rest)
+
+/// Try to resolve a dot long identifier representing a type definition and report it.
+let TryResolveDotLongIdentAsType sink ncenv occurence nenv ad staticResInfo ty (longId: Ident list) =
     let id, rest = List.headAndTail longId
     let m = id.idRange
     match ResolveExprDotLongIdent ncenv m ad nenv (TypeNameResolutionInfo.ResolveToTypeRefs staticResInfo) ty id rest FindMemberFlag.IgnoreOverrides with
@@ -4773,3 +4798,14 @@ let TryResolveTypeDotIdent sink ncenv occurence nenv ad staticResInfo ty (longId
         Some (item, m, rest2)
     | _ ->
         None
+
+/// Try to resolve a long identifier after the dot inside a `nameof` expression and report it.
+/// Try to resolve the long identifier as a type definition as best as possible after the dot. i.e "A.B" where "B" can be resolved as a type.
+/// If we unable to resolve as a type, treat the long identifier as an expression.
+let ResolveDotLongIdentInNameOfExpr sink ncenv m ad nenv staticArgsInfo ty lid =
+    match TryResolveDotLongIdentAsType sink ncenv ItemOccurence.Use nenv ad staticArgsInfo ty lid with
+    | Some result -> result
+    | _ ->
+        let item, mItem, rest, _ = 
+            ResolveExprDotLongIdentAndComputeRange sink ncenv m ad nenv ty lid FindMemberFlag.IgnoreOverrides true
+        (item, mItem, rest)

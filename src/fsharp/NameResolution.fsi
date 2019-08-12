@@ -543,8 +543,14 @@ val GetVisibleNamespacesAndModulesAtPoint : NameResolver -> NameResolutionEnv ->
 
 val IsItemResolvable : NameResolver -> NameResolutionEnv -> range -> AccessorDomain -> string list -> Item -> bool
 
-/// Try to resolve a long identifier representing a namespace, module or type definition, and report it
-val TryResolveModuleOrNamespaceOrTypeLongIdent : TcResultsSink -> NameResolver -> ItemOccurence -> FullyQualifiedFlag -> NameResolutionEnv -> AccessorDomain -> Ident list -> TypeNameResolutionStaticArgsInfo -> PermitDirectReferenceToGeneratedType -> (Item * range * Ident list) option
+/// Try to resolve a long identifier inside a `nameof` expression.
+/// Try to resolve the long identifier as module or namespace.
+/// If that fails, try to resolve as a type defintion as best as possible.
+/// If we resolved as a type definition, we may have extra dot lookups from the "rest".
+/// If we are unable to resolve as a module, namespace, or type definition, treat the long identifier as an expression.
+val ResolveLongIdentInNameOfExpr : TcResultsSink -> NameResolver -> range -> AccessorDomain -> NameResolutionEnv -> TypeNameResolutionInfo -> Ident list -> Item * range * Ident list
 
-/// Try to resolve a dot long identifier representing a type definition and report it
-val TryResolveTypeDotIdent : TcResultsSink -> NameResolver -> ItemOccurence -> NameResolutionEnv -> AccessorDomain -> TypeNameResolutionStaticArgsInfo -> TType -> Ident list -> (Item * range * Ident list) option
+/// Try to resolve a long identifier after the dot inside a `nameof` expression and report it.
+/// Try to resolve the long identifier as a type definition as best as possible after the dot. i.e "A.B" where "B" can be resolved as a type.
+/// If we unable to resolve as a type, treat the long identifier as an expression.
+val ResolveDotLongIdentInNameOfExpr : TcResultsSink -> NameResolver -> range -> AccessorDomain -> NameResolutionEnv -> TypeNameResolutionStaticArgsInfo -> TType -> Ident list -> Item * range * Ident list
