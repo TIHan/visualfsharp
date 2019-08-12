@@ -4736,11 +4736,10 @@ let TryResolveLongIdentAsModuleOrNamespaceOrType sink (ncenv: NameResolver) occu
 
     let resolveLongIdentType lid =
         let resolve lid =
-            let m = rangeOfLid lid
-            // Do not report anything in the sink because we are going to retry multiple times.
-            match ResolveTypeLongIdent TcResultsSink.NoSink ncenv occurence fullyQualified nenv ad lid staticResInfo genOk with
+            match ResolveTypeLongIdent sink ncenv occurence fullyQualified nenv ad lid staticResInfo genOk with
             | Result tcref ->                      
-                Some (Item.Types(tcref.DisplayName, [FreshenTycon ncenv m tcref]), m)
+                let mItem = rangeOfLid lid
+                Some (Item.Types(tcref.DisplayName, [FreshenTycon ncenv mItem tcref]), mItem)
             | _ ->
                 None
 
@@ -4755,13 +4754,7 @@ let TryResolveLongIdentAsModuleOrNamespaceOrType sink (ncenv: NameResolver) occu
     if itemModrefOpt.IsSome then
         itemModrefOpt
     else
-        match resolveLongIdentType lid with
-        | Some (item, mItem, _) as itemTypeOpt ->
-            // Now we can report in the sink because we found the correct type.
-            CallNameResolutionSink sink (mItem, nenv, item, item, emptyTyparInst, occurence, nenv.eDisplayEnv, ad)
-            itemTypeOpt
-        | _ ->
-            None
+        resolveLongIdentType lid
 
 /// Try to resolve a long identifier inside a `nameof` expression.
 /// Try to resolve the long identifier as module or namespace.
@@ -4786,7 +4779,9 @@ let ResolveLongIdentInNameOfExpr sink (ncenv: NameResolver) m ad nenv typeNameRe
         // Not able to resolve the long identifier as a module, namespace, or type definition.
         // This means we probably have an expression.
         let item, rest = ResolveExprLongIdent sink ncenv m ad nenv typeNameResInfo lid
-        (item, m, rest)
+        let mItem = rangeOfLid lid
+        CallNameResolutionSink sink (mItem, nenv, item, item, emptyTyparInst, ItemOccurence.Use, nenv.eDisplayEnv, ad)
+        (item, mItem, rest)
 
 /// Try to resolve a dot long identifier representing a type definition and report it.
 let TryResolveDotLongIdentAsType sink ncenv occurence nenv ad staticResInfo ty (longId: Ident list) =

@@ -8841,19 +8841,34 @@ and TcNameOfExpr cenv env tpenv (synArg: SynExpr) =
             let rec checkItem overallTy item m delayed = 
                 match item with
                 | Item.Value vref ->
-                    let checkValRef (vref: ValRef) optInst m delayed =
-                        let _, _, _, _, _, _ = TcVal true cenv env tpenv vref optInst None m
-                        let result = checkDelayed vref.Type delayed
-                        // This will take care of any inference with records.
-                        UnifyTypes cenv env m overallTy vref.Type
-                        result
+                    CheckValAccessible m ad vref
+                    CheckValAttributes cenv.g vref m |> CommitOperationResult
 
                     match delayed with
-                    | (DelayedTypeApp(synArgTys, _, mExprAndTypeArgs) :: delayedTail) ->
-                        let checkTys tpenv kinds = TcTypesOrMeasures (Some kinds) cenv NewTyparsOK CheckCxs ItemOccurence.UseInType env tpenv synArgTys mExprAndTypeArgs
-                        checkValRef vref (Some (NormalValUse, checkTys)) mExprAndTypeArgs delayedTail
+                    | DelayedTypeApp _ :: _ -> false
                     | _ ->
-                        checkValRef vref None m delayed
+                        if vref.IsTypeFunction then
+                            isNil delayed
+                        else
+                            let result = checkDelayed vref.Type delayed
+                            // This will take care of any inference with records.
+                            UnifyTypes cenv env m overallTy vref.Type
+                            result
+
+                    // TODO: Determine if this is the route to go.
+                    //let checkValRef (vref: ValRef) optInst m delayed =
+                    //    let _, _, _, _, _, _ = TcVal true cenv env tpenv vref optInst None m
+                    //    let result = checkDelayed vref.Type delayed
+                    //    // This will take care of any inference with records.
+                    //    UnifyTypes cenv env m overallTy vref.Type
+                    //    result
+
+                    //match delayed with
+                    //| DelayedTypeApp (synArgTys, _, mExprAndTypeArgs) :: delayedTail ->
+                    //    let checkTys tpenv kinds = TcTypesOrMeasures (Some kinds) cenv NewTyparsOK CheckCxs ItemOccurence.UseInType env tpenv synArgTys mExprAndTypeArgs
+                    //    checkValRef vref (Some (NormalValUse, checkTys)) mExprAndTypeArgs delayedTail
+                    //| _ ->
+                    //    checkValRef vref None m delayed
 
                 | Item.Property (nm, pinfos) ->
                     let meths = pinfos |> GettersOfPropInfos
@@ -8897,7 +8912,7 @@ and TcNameOfExpr cenv env tpenv (synArg: SynExpr) =
                             checkDelayed ty2 delayed
 
                         match delayed with
-                        | DelayedTypeApp(synArgTys, _, mExprAndTypeArgs) :: delayedTail ->
+                        | DelayedTypeApp (synArgTys, _, mExprAndTypeArgs) :: delayedTail ->
                             checkTypeApp mExprAndTypeArgs synArgTys delayedTail
                         | _ ->
                             checkTypeApp m [] delayed
