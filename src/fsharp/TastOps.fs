@@ -5984,6 +5984,17 @@ let isRecdOrStructTyReadOnlyAux (g: TcGlobals) m isInref ty =
 let isRecdOrStructTyReadOnly g m ty =
     isRecdOrStructTyReadOnlyAux g m false ty
 
+let isFakeImmutableTy g m ty =
+    match tryDestAppTy g ty with
+    | ValueNone -> false
+    | ValueSome tcref ->
+        if not tcref.IsILStructOrEnumTycon then
+            false
+        else
+            not (isTyconRefReadOnly g m tcref) && 
+            isTyconRefAssumedReadOnly g tcref
+
+
 let CanTakeAddressOf g m isInref ty mut =
     match mut with 
     | NeverMutates -> true 

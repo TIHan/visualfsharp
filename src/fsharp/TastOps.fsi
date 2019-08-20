@@ -1608,6 +1608,8 @@ val isRecdOrStructTyconRefAssumedImmutable: TcGlobals -> TyconRef -> bool
 
 val isRecdOrStructTyReadOnly: TcGlobals -> range -> TType -> bool
 
+val isFakeImmutableTy: TcGlobals -> range -> TType -> bool
+
 val useGenuineField : Tycon -> RecdField -> bool 
 
 val ComputeFieldName : Tycon -> RecdField -> string

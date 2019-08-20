@@ -1458,7 +1458,7 @@ let MakeAndPublishVal cenv env (altActualParent, inSig, declKind, vrec, vscheme,
                 | _ -> 0x0
             // MethodImplOptions.NoInlining = 0x8
             let NO_INLINING = 0x8
-            if (implflags &&& NO_INLINING) <> 0x0 then
+            if (implflags &&& NO_INLINING) <> 0x0 || isFakeImmutableTy cenv.g m ty then
                 ValInline.Never
             else
                 inlineFlag
