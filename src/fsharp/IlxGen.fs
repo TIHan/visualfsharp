@@ -2575,7 +2575,7 @@ and GenLinearExpr cenv cgbuf eenv sp expr sequel canProcessSequencePoint (contf:
          when (cenv.opts.localOptimizationsAreOn || v.IsCompilerGenerated) && valEq bind.Var v.Deref ->
         GenLinearExpr cenv cgbuf eenv sp bind.Expr Continue (* canProcessSequencePoint *) true (contf << (fun Fake ->
             let ilty = GenType cenv.amap m eenv.tyenv (destByrefTy cenv.g v.Type)
-            CG.EmitInstrs cgbuf (pop 0) (Push [ilty]) [ mkNormalLdobj ilty ]
+            CG.EmitInstrs cgbuf (pop 1) (Push [ilty]) [ mkNormalLdobj ilty ]
             GenSequel cenv eenv.cloc cgbuf sequel
             Fake))
 

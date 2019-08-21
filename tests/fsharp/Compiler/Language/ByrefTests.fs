@@ -165,6 +165,18 @@ type Extensions =
 
 let doot (dt: inref<S>) =
     dt.Test().Test()
+
+[<MethodImpl(MethodImplOptions.NoInlining)>]
+let test (dt: S) = dt
+
+let test2 (dt: inref<S>) =
+    let z = dt.Test().Test()
+    test z
+
+let stress () =
+    let x = S()
+    for i = 1 to 1000000 do
+        test2 &x |> ignore
             """
 
         CompilerAssert.CompileLibraryAndVerifyIL source
