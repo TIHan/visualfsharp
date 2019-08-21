@@ -143,6 +143,49 @@ let test1 () =
 let test2 () =
     DateTime.Now.Test().Test().Date.Test().Test().Date.Test()
             """
+
+    [<Test>]
+    let ``Dereference return optimization``() =
+        let source =
+            """
+module Test
+
+open System.Runtime.CompilerServices
+
+[<Struct>]
+type S =
+
+    val X : int
+
+[<Extension; AbstractClass; Sealed>]
+type Extensions =
+
+    [<Extension; MethodImpl(MethodImplOptions.NoInlining)>]
+    static member Test(x: inref<S>) = &x
+
+let doot (dt: inref<S>) =
+    dt.Test().Test()
+            """
+
+        CompilerAssert.CompileLibraryAndVerifyIL source
+            (fun verifier ->
+                verifier.VerifyIL
+                            [
+                            """.method public static valuetype Test/S 
+              doot([in] valuetype Test/S& dt) cil managed
+      {
+        .param [1]
+        .custom instance void [System.Runtime]System.Runtime.CompilerServices.IsReadOnlyAttribute::.ctor() = ( 01 00 00 00 ) 
+        
+        .maxstack  8
+        IL_0000:  ldarg.0
+        IL_0001:  call       valuetype Test/S& modreq([System.Runtime]System.Runtime.InteropServices.InAttribute) Test/Extensions::Test(valuetype Test/S&)
+        IL_0006:  call       valuetype Test/S& modreq([System.Runtime]System.Runtime.InteropServices.InAttribute) Test/Extensions::Test(valuetype Test/S&)
+        IL_000b:  ldobj      Test/S
+        IL_0010:  ret
+      }"""
+                            ]
+            )
 #else
     // Note: Currently this is assuming NET472. That may change which might break these tests. Consider using custom C# code.
     [<Test>]

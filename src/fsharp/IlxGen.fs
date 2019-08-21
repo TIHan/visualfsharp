@@ -2570,6 +2570,15 @@ and GenLinearExpr cenv cgbuf eenv sp expr sequel canProcessSequencePoint (contf:
             GenSequel cenv eenv.cloc cgbuf sequel
             contf Fake
 
+    // Optimizes the case where we are dereferencing a byref on return.
+    | Expr.Let (bind, Expr.Op (TOp.LValueOp (LByrefGet, v), _, [], m), _, _)
+         when (cenv.opts.localOptimizationsAreOn || v.IsCompilerGenerated) && valEq bind.Var v.Deref ->
+        GenLinearExpr cenv cgbuf eenv sp bind.Expr Continue (* canProcessSequencePoint *) true (contf << (fun Fake ->
+            let ilty = GenType cenv.amap m eenv.tyenv (destByrefTy cenv.g v.Type)
+            CG.EmitInstrs cgbuf (pop 0) (Push [ilty]) [ mkNormalLdobj ilty ]
+            GenSequel cenv eenv.cloc cgbuf sequel
+            Fake))
+
     | Expr.Let (bind, body, _, _) ->
         if canProcessSequencePoint then
             ProcessSequencePointForExpr cenv cgbuf sp expr
