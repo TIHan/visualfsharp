@@ -85,7 +85,7 @@ module TestModule%i =
 
     let createScriptAux (text: string) =
         let src = FSharpSource.FromText (text, "c:\\test1.fsx")
-        FSharpCompilation.CreateScript ("test", src, getMetadataReferences(), defaultArgs), src
+        FSharpCompilation.CreateScript (src, getMetadataReferences(), defaultArgs), src
 
     let semanticModelScript text =
         let c, src = createScriptAux text
@@ -383,9 +383,12 @@ type C () = class end
             runScriptAndContinue
                 """
 let y = 1 + 1
+type Doot () =
+    member __.Test(x: int) = x + 10
                 """
                 """
-y + 5
+let d = Doot ()
+d.Test(y) + 10
                 """
         match res with
         | Ok (_, value) -> Assert.AreEqual (7, value)

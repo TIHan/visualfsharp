@@ -104,6 +104,8 @@ module TcInitial =
 
             tcConfigB.includewin32manifest <- false
 
+            tcConfigB.outputFile <- Some (options.assemblyPath)
+
             // Apply command-line arguments and collect more source files if they are in the arguments
             let sourceFilesNew = ApplyCommandLineArgs(tcConfigB, sourceFiles, commandLineArgs)
 

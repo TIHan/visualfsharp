@@ -406,16 +406,21 @@ and [<NoEquality; NoComparison>] CompilationState =
             { this with cConfig = options; lazyGetChecker = lazyGetChecker; asyncLazyPreEmit = asyncLazyPreEmit }
 
     member this.SubmitSource (binary: ImportedBinary, src: FSharpSource) =
-        let options = { this.cConfig with sources = ImmutableArray.Create src }
+        let assemblyName = src.FilePath |> Path.GetFileNameWithoutExtension
+        let options = 
+            { this.cConfig with 
+                sources = ImmutableArray.Create src
+                assemblyName = assemblyName
+                assemblyPath = Path.Combine (Environment.CurrentDirectory, Path.ChangeExtension (Path.GetFileNameWithoutExtension assemblyName, ".dll")) }
 
         let lazyGetChecker =
             CancellableLazy (fun ct ->
                 let prevChecker = this.lazyGetChecker.GetValue ct
-                let tcInitial = { prevChecker.TcInitial with importsInvalidated = Event<_>() }
-                let tcImports =
+                let tcInitial, tcImports =
                     let work =
                         CompilationWorker.EnqueueAndAwaitAsync (fun ctok ->
-                            prevChecker.TcImports.AddBinary (ctok, binary)
+                            let tcInitial = options.CreateTcInitial ctok
+                            tcInitial, prevChecker.TcImports.AddBinary (ctok, binary)
                         )
                     Async.RunSynchronously (work, cancellationToken = ct)            
                 let tcGlobals, tcImports, tcAcc = TcAccumulator.createInitialWithGlobalsAndImports tcInitial prevChecker.TcGlobals tcImports |> Cancellable.runWithoutCancellation
@@ -593,7 +598,7 @@ and [<Sealed>] FSharpCompilation (id: CompilationId, state: CompilationState, ve
                       ImportedBinary.IsProviderGenerated = false
                       ImportedBinary.ProviderGeneratedStaticLinkMap = None
                       ImportedBinary.ILAssemblyRefs = []
-                      ImportedBinary.ILScopeRef = ILScopeRef.Local
+                      ImportedBinary.ILScopeRef = ILScopeRef.Assembly (mkSimpleAssemblyRef outfile)
                     }
                 return Result.Ok { binary = binary; compilation = this }
         }, cancellationToken = ct)
@@ -638,8 +643,8 @@ type FSharpCompilation with
     static member Create (assemblyName, srcs, metadataReferences, ?args) =
         FSharpCompilation.CreateAux (assemblyName, srcs, metadataReferences, args = defaultArg args [])
 
-    static member CreateScript (assemblyName, script, metadataReferences, ?args) =
-        FSharpCompilation.CreateAux (assemblyName, ImmutableArray.Empty, metadataReferences, script = script, args = defaultArg args [])
+    static member CreateScript (script: FSharpSource, metadataReferences, ?args) =
+        FSharpCompilation.CreateAux (Path.GetFileNameWithoutExtension script.FilePath, ImmutableArray.Empty, metadataReferences, script = script, args = defaultArg args [])
 
     static member CreateScript (emitResult: FSharpEmitResult, script, ?additionalMetadataReferences: ImmutableArray<FSharpMetadataReference>) =
         let _additionalMetadataReferences = defaultArg additionalMetadataReferences ImmutableArray.Empty
