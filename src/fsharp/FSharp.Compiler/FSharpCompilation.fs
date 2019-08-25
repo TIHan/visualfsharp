@@ -598,7 +598,7 @@ and [<Sealed>] FSharpCompilation (id: CompilationId, state: CompilationState, ve
                       ImportedBinary.IsProviderGenerated = false
                       ImportedBinary.ProviderGeneratedStaticLinkMap = None
                       ImportedBinary.ILAssemblyRefs = []
-                      ImportedBinary.ILScopeRef = ILScopeRef.Assembly (mkSimpleAssemblyRef outfile)
+                      ImportedBinary.ILScopeRef = ILScopeRef.Assembly (mkSimpleAssemblyRef (Path.GetFileNameWithoutExtension outfile))
                     }
                 return Result.Ok { binary = binary; compilation = this }
         }, cancellationToken = ct)

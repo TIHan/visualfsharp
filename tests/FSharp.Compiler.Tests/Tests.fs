@@ -91,6 +91,15 @@ module TestModule%i =
         let c, src = createScriptAux text
         c.GetSemanticModel src
 
+    let deps = Dictionary<string, System.Reflection.Assembly> ()
+
+    let doot = 
+        AppDomain.CurrentDomain.add_AssemblyResolve(ResolveEventHandler(fun _ x ->
+            match deps.TryGetValue x.Name with
+            | true, asm -> asm
+            | _ -> null
+        ))
+
     let runScriptAux (sm: FSharpSemanticModel) =
         let c = sm.Compilation
 
@@ -100,6 +109,7 @@ module TestModule%i =
             
             let bytes = peStream.ToArray()
             let asm = System.Reflection.Assembly.Load(bytes)
+            deps.[asm.FullName] <- asm
             asm.EntryPoint.Invoke(null, [||]) |> ignore
             let itPropOpt = 
                 asm.DefinedTypes 
@@ -391,7 +401,7 @@ let d = Doot ()
 d.Test(y) + 10
                 """
         match res with
-        | Ok (_, value) -> Assert.AreEqual (7, value)
+        | Ok (_, value) -> Assert.AreEqual (22, value)
         | Error diags -> Assert.Fail (sprintf "%A" diags)
 
 //[<TestFixture>]
