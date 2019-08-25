@@ -701,7 +701,10 @@ and FSharpSyntaxNodeVisitor (findm: range, syntaxTree) =
 and FSharpSyntaxNodeAllDescendantVisitor (syntaxTree, f) =
     inherit FSharpSyntaxVisitor (syntaxTree)
 
-    override __.CanVisit _ = true
+    let isZeroRange (r: range) =
+        posEq r.Start r.End
+
+    override __.CanVisit m = isZeroRange m
 
     override this.OnVisit (visitedNode, _) =
         if this.VisitStackCount > 1 then
@@ -718,8 +721,7 @@ and FSharpSyntaxNodeDescendantVisitor (findm, syntaxTree, f) =
     override __.CanVisit m = rangeContainsRange findm m && not (isZeroRange m)
 
     override this.OnVisit (visitedNode, _) =
-        if this.VisitStackCount > 1 then
-            f visitedNode
+        f visitedNode
         None
 
 and FSharpSyntaxNodeChildVisitor (findm, syntaxTree, f) =
@@ -727,7 +729,7 @@ and FSharpSyntaxNodeChildVisitor (findm, syntaxTree, f) =
 
     override this.CanVisit m =
         // We want to visit direct children only.
-        if this.VisitStackCount > 2 then
+        if this.VisitStackCount > 1 then
             false
         else
             base.CanVisit m

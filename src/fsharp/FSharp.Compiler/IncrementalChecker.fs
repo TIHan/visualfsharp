@@ -316,11 +316,13 @@ let getPreEmitState state =
         let results = tcAccs |> List.ofArray |> List.map (fun acc-> acc.tcEnvAtEndOfFile, defaultArg acc.topAttribs EmptyTopAttrs, acc.latestImplFile, acc.latestCcuSigForFile)
         TypeCheckMultipleInputsFinish (results, finalAcc.tcState)
 
+    let tcState, tcAssemblyExpr = TypeCheckClosedInputSetFinish (mimpls, tcState)
+
     {
         finalAcc = finalAcc
         tcEnvAtEndOfLastFile = tcEnvAtEndOfLastFile
         topAttrs = topAttrs
-        implFiles = mimpls
+        implFiles = tcAssemblyExpr
         tcState = tcState
     }
 

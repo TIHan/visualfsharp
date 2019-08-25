@@ -10,6 +10,8 @@ open Microsoft.CodeAnalysis
 open Microsoft.CodeAnalysis.Text
 open NUnit.Framework
 
+
+
 [<AutoOpen>]
 module Helpers =
 
@@ -99,21 +101,13 @@ module TestModule%i =
             asm.EntryPoint.Invoke(null, [||]) |> ignore
 
             let itNodeOpt =
-                sm.SyntaxTree.GetRootNode().GetDescendants()
+                sm.SyntaxTree.GetRootNode().GetChildren()
                 |> Seq.filter (fun node ->
                     match node.Kind with
-                    | FSharpSyntaxNodeKind.Ident (0, ident) when ident.idText = "$it" ->
-                        node.GetAncestors()
-                        |> Seq.exists (fun ancest ->
-                            match ancest.Kind with
-                            | FSharpSyntaxNodeKind.ModuleDecl (FSharp.Compiler.Ast.SynModuleDecl.Let _) ->
-                                true
-                            | _ ->
-                                false
-                        )
+                    | FSharpSyntaxNodeKind.ModuleOrNamespace _ -> true
                     | _ -> false
                 )
-                |> Seq.tryLast
+                |> Seq.tryExactlyOne
 
             match itNodeOpt with
             | Some itNode ->

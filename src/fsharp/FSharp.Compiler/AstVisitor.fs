@@ -351,8 +351,7 @@ type AstVisitor<'T> () as this =
         match parsedInput with
         | ParsedInput.ImplFile (ParsedImplFileInput (_, _, _, _, _, modules, _)) -> 
             modules
-            |> mapVisitList (fun x -> x.AdjustedRange) this.VisitModuleOrNamespace
-            |> tryVisitList
+            |> this.TryVisitList (fun x -> x.AdjustedRange) this.VisitModuleOrNamespace
         | ParsedInput.SigFile (ParsedSigFileInput (_, _, _, _, modules)) -> 
             None
 
