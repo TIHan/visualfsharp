@@ -3798,45 +3798,54 @@ and TcImportsWeakHack (tcImports: WeakReference<TcImports>) =
         match tcImports.TryGetTarget () with
         | true, strong -> strong.SystemRuntimeContainsType typeName
         | _ -> false
-#endif          
+#endif
+
+and TcImportsState =
+    {
+        tcConfigP: TcConfigProvider
+        compilationThread: ICompilationThread
+        mutable resolutions: TcAssemblyResolutions
+        mutable importsBase: TcImports option
+        mutable dllInfos: ImportedBinary list
+        mutable dllTable: NameMap<ImportedBinary>
+        mutable ccuInfos: ImportedAssembly list
+        mutable ccuTable: NameMap<ImportedAssembly>
+        mutable disposeActions: (unit -> unit) list
+        mutable disposed: bool
+        mutable ilGlobalsOpt: ILGlobals option
+        mutable tcGlobals: TcGlobals option
+#if !NO_EXTENSIONTYPING
+        mutable disposeTypeProviderActions: (unit -> unit) list
+        mutable generatedTypeRoots: System.Collections.Generic.Dictionary<ILTypeRef, int * ProviderGeneratedType>
+#endif
+    }
+
 /// Represents a table of imported assemblies with their resolutions.
 /// Is a disposable object, but it is recommended not to explicitly call Dispose unless you absolutely know nothing will be using its contents after the disposal.
 /// Otherwise, simply allow the GC to collect this and it will properly call Dispose from the finalizer.
-and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAssemblyResolutions, importsBase: TcImports option, ilGlobalsOpt, compilationThread: ICompilationThread) as this = 
+and [<Sealed>] TcImports(state: TcImportsState) as this = 
 
-    let mutable resolutions = initialResolutions
-    let mutable importsBase: TcImports option = importsBase
-    let mutable dllInfos: ImportedBinary list = []
-    let mutable dllTable: NameMap<ImportedBinary> = NameMap.empty
-    let mutable ccuInfos: ImportedAssembly list = []
-    let mutable ccuTable: NameMap<ImportedAssembly> = NameMap.empty
-    let mutable disposeActions = []
-    let mutable disposed = false
-    let mutable ilGlobalsOpt = ilGlobalsOpt
-    let mutable tcGlobals = None
 #if !NO_EXTENSIONTYPING
-    let mutable disposeTypeProviderActions = []
-    let mutable generatedTypeRoots = new System.Collections.Generic.Dictionary<ILTypeRef, int * ProviderGeneratedType>()
     let mutable tcImportsWeak = TcImportsWeakHack (WeakReference<_> this)
 #endif
     
     let CheckDisposed() =
-        if disposed then assert false
+        if state.disposed then assert false
 
     let dispose () =
         CheckDisposed()
         // disposing deliberately only closes this tcImports, not the ones up the chain 
-        disposed <- true        
+        state.disposed <- true        
         if verbose then 
-            dprintf "disposing of TcImports, %d binaries\n" disposeActions.Length
+            dprintf "disposing of TcImports, %d binaries\n" state.disposeActions.Length
 #if !NO_EXTENSIONTYPING
-        let actions = disposeTypeProviderActions
-        disposeTypeProviderActions <- []
+        let actions = state.disposeTypeProviderActions
+        state.disposeTypeProviderActions <- []
         if actions.Length > 0 then
-            compilationThread.EnqueueWork (fun _ -> for action in actions do action())
+            state.compilationThread.EnqueueWork (fun _ -> for action in actions do action())
 #endif
-        let actions = disposeActions
-        disposeActions <- []
+        let actions = state.disposeActions
+        state.disposeActions <- []
         for action in actions do action()
 
     static let ccuHasType (ccu: CcuThunk) (nsname: string list) (tname: string) =
@@ -3855,15 +3864,15 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
 
     member internal tcImports.Base = 
             CheckDisposed()
-            importsBase
+            state.importsBase
 
     member tcImports.CcuTable =
             CheckDisposed()
-            ccuTable
+            state.ccuTable
         
     member tcImports.DllTable =
             CheckDisposed()
-            dllTable
+            state.dllTable
             
 #if !NO_EXTENSIONTYPING
     member tcImports.Weak = 
@@ -3873,28 +3882,28 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         
     member tcImports.RegisterCcu ccuInfo =
         CheckDisposed()
-        ccuInfos <- ccuInfos ++ ccuInfo
+        state.ccuInfos <- state.ccuInfos ++ ccuInfo
         // Assembly Ref Resolution: remove this use of ccu.AssemblyName
-        ccuTable <- NameMap.add (ccuInfo.FSharpViewOfMetadata.AssemblyName) ccuInfo ccuTable
+        state.ccuTable <- NameMap.add (ccuInfo.FSharpViewOfMetadata.AssemblyName) ccuInfo state.ccuTable
     
     member tcImports.RegisterDll dllInfo =
         CheckDisposed()
-        dllInfos <- dllInfos ++ dllInfo
+        state.dllInfos <- state.dllInfos ++ dllInfo
 #if !NO_EXTENSIONTYPING
-        tcImportsWeak.SetDllInfos dllInfos
+        tcImportsWeak.SetDllInfos state.dllInfos
 #endif
-        dllTable <- NameMap.add (getNameOfScopeRef dllInfo.ILScopeRef) dllInfo dllTable
+        state.dllTable <- NameMap.add (getNameOfScopeRef dllInfo.ILScopeRef) dllInfo state.dllTable
 
     member tcImports.GetDllInfos() : ImportedBinary list = 
         CheckDisposed()
-        match importsBase with 
-        | Some importsBase-> importsBase.GetDllInfos() @ dllInfos
-        | None -> dllInfos
+        match state.importsBase with 
+        | Some importsBase-> importsBase.GetDllInfos() @ state.dllInfos
+        | None -> state.dllInfos
         
     member tcImports.AllAssemblyResolutions() = 
         CheckDisposed()
-        let ars = resolutions.GetAssemblyResolutions()
-        match importsBase with 
+        let ars = state.resolutions.GetAssemblyResolutions()
+        match state.importsBase with 
         | Some importsBase-> importsBase.AllAssemblyResolutions() @ ars
         | None -> ars
         
@@ -3921,13 +3930,13 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
 
     member tcImports.GetImportedAssemblies() = 
         CheckDisposed()
-        match importsBase with 
-        | Some importsBase-> List.append (importsBase.GetImportedAssemblies()) ccuInfos
-        | None -> ccuInfos        
+        match state.importsBase with 
+        | Some importsBase-> List.append (importsBase.GetImportedAssemblies()) state.ccuInfos
+        | None -> state.ccuInfos        
         
     member tcImports.GetCcusExcludingBase() = 
         CheckDisposed()
-        ccuInfos |> List.map (fun x -> x.FSharpViewOfMetadata)        
+        state.ccuInfos |> List.map (fun x -> x.FSharpViewOfMetadata)        
 
     member tcImports.GetCcusInDeclOrder() =         
         CheckDisposed()
@@ -3986,7 +3995,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
             let ilScopeRef = ILScopeRef.Assembly (ILAssemblyRef.FromAssemblyName aname)
             let fileName = aname.Name + ".dll"
             let bytes = assembly.PApplyWithProvider((fun (assembly, provider) -> assembly.GetManifestModuleContents provider), m).PUntaint(id, m)
-            let tcConfig = tcConfigP.Get ctok
+            let tcConfig = state.tcConfigP.Get ctok
             let ilModule, ilAssemblyRefs = 
                 let opts: ILReaderOptions = 
                     { ilGlobals = g.ilg 
@@ -4040,13 +4049,13 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         // checking if given ProviderGeneratedType was already recorded before (probably for another set of static parameters) 
         let (ProviderGeneratedType(_, ilTyRef, _)) = root
         let index = 
-            match generatedTypeRoots.TryGetValue ilTyRef with
+            match state.generatedTypeRoots.TryGetValue ilTyRef with
             | true, (index, _) -> index
-            | false, _ -> generatedTypeRoots.Count
-        generatedTypeRoots.[ilTyRef] <- (index, root)
+            | false, _ -> state.generatedTypeRoots.Count
+        state.generatedTypeRoots.[ilTyRef] <- (index, root)
 
     member tcImports.ProviderGeneratedTypeRoots = 
-        generatedTypeRoots.Values
+        state.generatedTypeRoots.Values
         |> Seq.sortBy fst
         |> Seq.map snd
         |> Seq.toList
@@ -4054,12 +4063,12 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
 
     member private tcImports.AttachDisposeAction action =
         CheckDisposed()
-        disposeActions <- action :: disposeActions
+        state.disposeActions <- action :: state.disposeActions
 
 #if !NO_EXTENSIONTYPING
     member private tcImports.AttachDisposeTypeProviderAction action =
         CheckDisposed()
-        disposeTypeProviderActions <- action :: disposeTypeProviderActions
+        state.disposeTypeProviderActions <- action :: state.disposeTypeProviderActions
 #endif
   
     // Note: the returned binary reader is associated with the tcImports, i.e. when the tcImports are closed 
@@ -4067,7 +4076,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
     member tcImports.OpenILBinaryModule(ctok, filename, m) = 
       try
         CheckDisposed()
-        let tcConfig = tcConfigP.Get ctok
+        let tcConfig = state.tcConfigP.Get ctok
         let pdbDirPath =
             // We open the pdb file if one exists parallel to the binary we 
             // are reading, so that --standalone will preserve debug information. 
@@ -4086,7 +4095,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         let ilGlobals =
             // ILScopeRef.Local can be used only for primary assembly (mscorlib or System.Runtime) itself
             // Remaining assemblies should be opened using existing ilGlobals (so they can properly locate fundamental types)
-            match ilGlobalsOpt with
+            match state.ilGlobalsOpt with
             | None -> mkILGlobals ILScopeRef.Local
             | Some g -> g
 
@@ -4104,7 +4113,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         let auxModTable = HashMultiMap(10, HashIdentity.Structural)
         fun viewedScopeRef ->
         
-            let tcConfig = tcConfigP.Get ctok
+            let tcConfig = state.tcConfigP.Get ctok
             match viewedScopeRef with
             | ILScopeRef.Module modref -> 
                 let key = modref.Name
@@ -4147,20 +4156,20 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
     // ImportILAssembly had a tcGlobals available when it really needs it.
     member tcImports.GetTcGlobals() : TcGlobals =
         CheckDisposed()
-        match tcGlobals with 
+        match state.tcGlobals with 
         | Some g -> g 
         | None -> 
-            match importsBase with 
+            match state.importsBase with 
             | Some b -> b.GetTcGlobals() 
             | None -> failwith "unreachable: GetGlobals - are the references to mscorlib.dll and FSharp.Core.dll valid?"
 
     member private tcImports.SetILGlobals ilg =
         CheckDisposed()
-        ilGlobalsOpt <- Some ilg
+        state.ilGlobalsOpt <- Some ilg
 
     member private tcImports.SetTcGlobals g =
         CheckDisposed()
-        tcGlobals <- Some g
+        state.tcGlobals <- Some g
 
 #if !NO_EXTENSIONTYPING
     member private tcImports.InjectProvidedNamespaceOrTypeIntoEntity 
@@ -4223,7 +4232,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         // have class which implement ITypeProvider and which have TypeProviderAttribute on them.
         let designTimeAssemblyNames = 
             runtimeAssemblyAttributes 
-            |> List.choose (TryDecodeTypeProviderAssemblyAttr (defaultArg ilGlobalsOpt EcmaMscorlibILGlobals))
+            |> List.choose (TryDecodeTypeProviderAssemblyAttr (defaultArg state.ilGlobalsOpt EcmaMscorlibILGlobals))
             // If no design-time assembly is specified, use the runtime assembly
             |> List.map (function null -> fileNameOfRuntimeAssembly | s -> s)
             // For each simple name of a design-time assembly, we take the first matching one in the order they are 
@@ -4359,7 +4368,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
     
     member tcImports.PrepareToImportReferencedILAssembly (ctok, m, filename, dllinfo: ImportedBinary) =
         CheckDisposed()
-        let tcConfig = tcConfigP.Get ctok
+        let tcConfig = state.tcConfigP.Get ctok
         assert dllinfo.RawMetadata.TryGetILModuleDef().IsSome
         let ilModule = dllinfo.RawMetadata.TryGetILModuleDef().Value
         let ilScopeRef = dllinfo.ILScopeRef
@@ -4374,7 +4383,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         let invalidateCcu = new Event<_>()
         let ccu = Import.ImportILAssembly(tcImports.GetImportMap, m, auxModuleLoader, ilScopeRef, tcConfig.implicitIncludeDir, Some filename, ilModule, invalidateCcu.Publish)
         
-        let ilg = defaultArg ilGlobalsOpt EcmaMscorlibILGlobals
+        let ilg = defaultArg state.ilGlobalsOpt EcmaMscorlibILGlobals
 
         let ccuinfo = 
             { FSharpViewOfMetadata=ccu 
@@ -4397,7 +4406,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
     member tcImports.PrepareToImportReferencedFSharpAssembly (ctok, m, filename, dllinfo: ImportedBinary) =
         CheckDisposed()
 #if !NO_EXTENSIONTYPING
-        let tcConfig = tcConfigP.Get ctok
+        let tcConfig = state.tcConfigP.Get ctok
 #endif
         let ilModule = dllinfo.RawMetadata 
         let ilScopeRef = dllinfo.ILScopeRef 
@@ -4452,7 +4461,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
                             let res = data.OptionalFixup(fun nm -> availableToOptionalCcu(tcImports.FindCcu(ctok, m, nm, lookupOnly=false))) 
                             if verbose then dprintf "found optimization data for CCU %s\n" ccuName 
                             Some res)
-                let ilg = defaultArg ilGlobalsOpt EcmaMscorlibILGlobals
+                let ilg = defaultArg state.ilGlobalsOpt EcmaMscorlibILGlobals
                 let ccuinfo = 
                     { FSharpViewOfMetadata=ccu 
                       AssemblyAutoOpenAttributes = ilModule.GetAutoOpenAttributes ilg
@@ -4526,7 +4535,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
                   ILScopeRef = ilScopeRef
                   ILAssemblyRefs = assemblyData.ILAssemblyRefs }
             tcImports.RegisterDll dllinfo
-            let ilg = defaultArg ilGlobalsOpt EcmaMscorlibILGlobals
+            let ilg = defaultArg state.ilGlobalsOpt EcmaMscorlibILGlobals
             let phase2 = 
                 if assemblyData.HasAnyFSharpSignatureDataAttribute then 
                     if not (assemblyData.HasMatchingFSharpSignatureDataAttribute ilg) then 
@@ -4569,7 +4578,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         CheckDisposed()
         // If the user is asking for the default framework then also try to resolve other implicit assemblies as they are discovered.
         // Using this flag to mean 'allow implicit discover of assemblies'.
-        let tcConfig = tcConfigP.Get ctok
+        let tcConfig = state.tcConfigP.Get ctok
         if not lookupOnly && tcConfig.implicitlyResolveAssemblies then 
             let tryFile speculativeFileName = 
                 let foundFile = tcImports.TryResolveAssemblyReference (ctok, AssemblyReference (m, speculativeFileName, None), ResolveAssemblyReferenceMode.Speculative)
@@ -4597,16 +4606,16 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
 
     /// This doesn't need to be cancellable, it is only used by F# Interactive
     member tcImports.TryFindExistingFullyQualifiedPathBySimpleAssemblyName (ctok, simpleAssemName) : string option = 
-        resolutions.TryFindBySimpleAssemblyName (ctok, simpleAssemName) |> Option.map (fun r -> r.resolvedPath)
+        state.resolutions.TryFindBySimpleAssemblyName (ctok, simpleAssemName) |> Option.map (fun r -> r.resolvedPath)
 
     /// This doesn't need to be cancellable, it is only used by F# Interactive
     member tcImports.TryFindExistingFullyQualifiedPathByExactAssemblyRef(ctok, assemblyRef: ILAssemblyRef) : string option = 
-        resolutions.TryFindByExactILAssemblyRef (ctok, assemblyRef) |> Option.map (fun r -> r.resolvedPath)
+        state.resolutions.TryFindByExactILAssemblyRef (ctok, assemblyRef) |> Option.map (fun r -> r.resolvedPath)
 
     member tcImports.TryResolveAssemblyReference(ctok, assemblyReference: AssemblyReference, mode: ResolveAssemblyReferenceMode) : OperationResult<AssemblyResolution list> = 
-        let tcConfig = tcConfigP.Get ctok
+        let tcConfig = state.tcConfigP.Get ctok
         // First try to lookup via the original reference text.
-        match resolutions.TryFindByOriginalReference assemblyReference with
+        match state.resolutions.TryFindByOriginalReference assemblyReference with
         | Some assemblyResolution -> 
             ResultD [assemblyResolution]
         | None ->
@@ -4617,18 +4626,18 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
                ErrorD e
 #else                      
             // Next try to lookup up by the exact full resolved path.
-            match resolutions.TryFindByResolvedPath assemblyReference.Text with 
+            match state.resolutions.TryFindByResolvedPath assemblyReference.Text with 
             | Some assemblyResolution -> 
                 ResultD [assemblyResolution]
             | None ->      
-                if tcConfigP.Get(ctok).useSimpleResolution then
+                if state.tcConfigP.Get(ctok).useSimpleResolution then
                     let action = 
                         match mode with 
                         | ResolveAssemblyReferenceMode.ReportErrors -> CcuLoadFailureAction.RaiseError
                         | ResolveAssemblyReferenceMode.Speculative -> CcuLoadFailureAction.ReturnNone
                     match tcConfig.ResolveLibWithDirectories (action, assemblyReference) with 
                     | Some resolved -> 
-                        resolutions <- resolutions.AddResolutionResults [resolved]
+                        state.resolutions <- state.resolutions.AddResolutionResults [resolved]
                         ResultD [resolved]
                     | None ->
                         ErrorD(AssemblyNotResolved(assemblyReference.Text, assemblyReference.Range))
@@ -4638,10 +4647,10 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
                     let resolved, unresolved = TcConfig.TryResolveLibsUsingMSBuildRules(tcConfig, [ assemblyReference ], assemblyReference.Range, mode)
                     match resolved, unresolved with
                     | (assemblyResolution :: _, _) -> 
-                        resolutions <- resolutions.AddResolutionResults resolved
+                        state.resolutions <- state.resolutions.AddResolutionResults resolved
                         ResultD [assemblyResolution]
                     | (_, _ :: _) -> 
-                        resolutions <- resolutions.AddUnresolvedReferences unresolved
+                        state.resolutions <- state.resolutions.AddUnresolvedReferences unresolved
                         ErrorD(AssemblyNotResolved(assemblyReference.Text, assemblyReference.Range))
                     | [], [] -> 
                         // Note, if mode=ResolveAssemblyReferenceMode.Speculative and the resolution failed then TryResolveLibsUsingMSBuildRules returns
@@ -4664,7 +4673,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         let tcResolutions = TcAssemblyResolutions.BuildFromPriorResolutions(ctok, tcConfig, frameworkDLLs, [])
         let tcAltResolutions = TcAssemblyResolutions.BuildFromPriorResolutions(ctok, tcConfig, nonFrameworkDLLs, [])
 
-        let frameworkTcImports = new TcImports(tcConfigP, tcResolutions, None, None, tcConfig.compilationThread) 
+        let frameworkTcImports = new TcImports(TcImports.CreateState(tcConfigP, tcResolutions, None, None, tcConfig.compilationThread)) 
 
         // Fetch the primaryAssembly from the referenced assemblies otherwise 
         let primaryAssemblyReference =
@@ -4764,7 +4773,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         let tcConfig = tcConfigP.Get ctok
         let tcResolutions = TcAssemblyResolutions.BuildFromPriorResolutions(ctok, tcConfig, nonFrameworkReferences, knownUnresolved)
         let references = tcResolutions.GetAssemblyResolutions()
-        let tcImports = new TcImports(tcConfigP, tcResolutions, Some baseTcImports, Some tcGlobals.ilg, tcConfig.compilationThread)
+        let tcImports = new TcImports(TcImports.CreateState(tcConfigP, tcResolutions, Some baseTcImports, Some tcGlobals.ilg, tcConfig.compilationThread))
         let! _assemblies = tcImports.RegisterAndImportReferencedAssemblies(ctok, references)
         tcImports.ReportUnresolvedAssemblyReferences knownUnresolved
         return tcImports
@@ -4779,6 +4788,26 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
         let! tcImports = TcImports.BuildNonFrameworkTcImports(ctok, tcConfigP, tcGlobals, frameworkTcImports, nonFrameworkReferences, knownUnresolved)
         return tcGlobals, tcImports
       }
+
+    static member CreateState(tcConfigP: TcConfigProvider, initialResolutions: TcAssemblyResolutions, importsBase: TcImports option, ilGlobalsOpt, compilationThread: ICompilationThread) =
+        {
+            tcConfigP = tcConfigP
+            compilationThread = compilationThread
+            resolutions = initialResolutions
+            importsBase = importsBase
+            dllInfos = []
+            dllTable = NameMap.empty
+            ccuInfos = []
+            ccuTable = NameMap.empty
+            disposeActions = []
+            disposed = false
+            ilGlobalsOpt = ilGlobalsOpt
+            tcGlobals = None
+#if !NO_EXTENSIONTYPING
+            disposeTypeProviderActions = []
+            generatedTypeRoots = new System.Collections.Generic.Dictionary<ILTypeRef, int * ProviderGeneratedType>()
+#endif
+        }
         
     interface System.IDisposable with 
         member tcImports.Dispose() = 
