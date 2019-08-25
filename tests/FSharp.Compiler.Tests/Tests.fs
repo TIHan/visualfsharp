@@ -93,7 +93,7 @@ module TestModule%i =
 
         use peStream = new MemoryStream()
         match c.Emit (peStream) with
-        | Result.Ok _ ->
+        | Result.Ok emitResult ->
             
             let asm = System.Reflection.Assembly.Load(peStream.ToArray())
             asm.EntryPoint.Invoke(null, [||]) |> ignore
@@ -127,9 +127,9 @@ module TestModule%i =
                 let itRuntimeProperty = parentRuntimeType.GetProperty(itCompiledName)
                 let value = itRuntimeProperty.GetMethod.Invoke(null, [||])
 
-                Result.Ok value
+                Result.Ok (emitResult, value)
             | _ ->
-                Result.Ok null
+                Result.Ok (emitResult, null)
         | Result.Error diags ->
             Result.Error diags
 
@@ -139,12 +139,18 @@ module TestModule%i =
 
     let runScriptAndContinue (text1: string) (text2: string) =
         let c, src = createScriptAux text1
-        //c.GetSemanticModel "C:\\test1.fsx"
-        //|> runScriptAux
-        //|> ignore
+
+        let res =
+            c.GetSemanticModel src
+            |> runScriptAux
+
+        let emitResult =
+            match res with
+            | Ok (er, _) -> er
+            | _ -> failwith "no emit result"
 
         let src2 = FSharpSource.FromText (text2, "c:\\test2.fsx")
-        let c2 = FSharpCompilation.CreateScript (c, src2)
+        let c2 = FSharpCompilation.CreateScript (emitResult, src2)
         c2.GetSemanticModel src2
         |> runScriptAux
 
@@ -337,7 +343,7 @@ let x = 1 + 1
     [<Test>]
     member __.``Script Test - Simple Evaluation`` () =
         match runScript "1 + 1" with
-        | Ok (value) -> Assert.AreEqual (2, value)
+        | Ok (_, value) -> Assert.AreEqual (2, value)
         | Error diags -> Assert.Fail (sprintf "%A" diags)
 
 
@@ -350,7 +356,7 @@ let x = 1 + 1
 5 + 5
                 """
         match res with
-        | Ok (value) -> Assert.AreEqual (10, value)
+        | Ok (_, value) -> Assert.AreEqual (10, value)
         | Error diags -> Assert.Fail (sprintf "%A" diags)
 
     [<Test>]
@@ -362,7 +368,7 @@ let it = 1 + 1
 5 + 5
                 """
         match res with
-        | Ok (value) -> Assert.AreEqual (10, value)
+        | Ok (_, value) -> Assert.AreEqual (10, value)
         | Error diags -> Assert.Fail (sprintf "%A" diags)
 
     [<Test>]
@@ -373,7 +379,7 @@ let it = 1 + 1
 let it = 1 + 1
                 """
         match res with
-        | Ok (value) -> Assert.AreEqual (null, value)
+        | Ok (_, value) -> Assert.AreEqual (null, value)
         | Error diags -> Assert.Fail (sprintf "%A" diags)
 
     [<Test>]
@@ -385,7 +391,7 @@ let it = 1 + 1
 type C () = class end
                 """
         match res with
-        | Ok (value) -> Assert.AreEqual (null, value)
+        | Ok (_, value) -> Assert.AreEqual (null, value)
         | Error diags -> Assert.Fail (sprintf "%A" diags)
 
     [<Test>]
@@ -393,13 +399,16 @@ type C () = class end
         let res =
             runScriptAndContinue
                 """
+module Doot123
+
 let y = 1 + 1
                 """
                 """
+open Doot123
 y
                 """
         match res with
-        | Ok (value) -> Assert.AreEqual (2, value)
+        | Ok (_, value) -> Assert.AreEqual (2, value)
         | Error diags -> Assert.Fail (sprintf "%A" diags)
 
 //[<TestFixture>]

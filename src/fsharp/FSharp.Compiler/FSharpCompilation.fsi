@@ -7,7 +7,9 @@ open Microsoft.CodeAnalysis
 
 type [<RequireQualifiedAccess>] FSharpMetadataReference =
     | PortableExecutable of PortableExecutableReference
-    | FSharpCompilation of FSharpCompilation 
+    | FSharpCompilation of FSharpCompilation
+    
+and [<NoEquality;NoComparison;Sealed>] FSharpEmitResult
 
 and [<Sealed>] FSharpCompilation =
 
@@ -19,13 +21,13 @@ and [<Sealed>] FSharpCompilation =
 
     member GetSyntaxAndSemanticDiagnostics: ?ct: CancellationToken -> ImmutableArray<Diagnostic>
 
-    member Emit: peStream: Stream * ?pdbStream: Stream * ?ct: CancellationToken -> Result<unit, ImmutableArray<Diagnostic>>
+    member Emit: peStream: Stream * ?pdbStream: Stream * ?ct: CancellationToken -> Result<FSharpEmitResult, ImmutableArray<Diagnostic>>
 
     static member Create: assemblyName: string * srcs: ImmutableArray<FSharpSource> * metadataReferences: ImmutableArray<FSharpMetadataReference> * ?args: string list -> FSharpCompilation
 
     static member CreateScript: assemblyName: string * scriptSnapshot: FSharpSource * metadataReferences: ImmutableArray<FSharpMetadataReference> * ?args: string list -> FSharpCompilation
 
-    static member CreateScript: previousCompilation: FSharpCompilation * scriptSnapshot: FSharpSource * ?additionalMetadataReferences: ImmutableArray<FSharpMetadataReference> -> FSharpCompilation
+    static member CreateScript: emitResult: FSharpEmitResult * scriptSnapshot: FSharpSource * ?additionalMetadataReferences: ImmutableArray<FSharpMetadataReference> -> FSharpCompilation
 
 [<AutoOpen>]
 module FSharpSemanticModelExtensions =

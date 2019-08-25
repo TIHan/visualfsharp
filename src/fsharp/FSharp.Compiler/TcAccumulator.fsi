@@ -30,4 +30,6 @@ type internal TcAccumulator =
 [<RequireQualifiedAccess>]
 module internal TcAccumulator =
 
+    val createInitialWithGlobalsAndImports: TcInitial -> TcGlobals -> TcImports -> Cancellable<TcGlobals * TcImports * TcAccumulator>
+
     val createInitial: TcInitial -> CompilationThreadToken -> Cancellable<TcGlobals * TcImports * TcAccumulator>

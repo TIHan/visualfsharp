@@ -164,6 +164,8 @@ type IRawFSharpAssemblyData =
     abstract ILAssemblyRefs: ILAssemblyRef list
     abstract ShortAssemblyName: string
 
+val MakeRawFSharpAssemblyData: ILModuleDef -> ILAssemblyRef list -> IRawFSharpAssemblyData
+
 type TimeStampCache = 
     new: defaultTimeStamp: DateTime -> TimeStampCache
     member GetFileTimeStamp: string -> DateTime
@@ -617,6 +619,7 @@ type TcImports =
     member DllTable: NameMap<ImportedBinary> with get
     member GetImportedAssemblies: unit -> ImportedAssembly list
     member GetCcusInDeclOrder: unit -> CcuThunk list
+    member AddBinary: CompilationThreadToken * ImportedBinary -> TcImports
     /// This excludes any framework imports (which may be shared between multiple builds)
     member GetCcusExcludingBase: unit -> CcuThunk list 
     member FindDllInfo: CompilationThreadToken * range * string -> ImportedBinary

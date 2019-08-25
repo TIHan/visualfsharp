@@ -51,6 +51,8 @@ type IncrementalChecker =
 
     member TcImports: TcImports
 
+    member Options: CheckerOptions
+
     /// Finishes checking everything.
     /// Once finished, the results will be cached.
     /// Returns the state used prior to emitting an assembly.

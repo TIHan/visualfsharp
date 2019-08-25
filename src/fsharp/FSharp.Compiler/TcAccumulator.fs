@@ -46,12 +46,62 @@ module TcAccumulator =
 
     let rangeStartup = FSharp.Compiler.Range.rangeN "startup" 1
 
+    let createInitialWithGlobalsAndImports tcInitial (tcGlobals: TcGlobals) (tcImports: TcImports) =
+        let tcConfig = tcInitial.tcConfig
+        let importsInvalidated = tcInitial.importsInvalidated
+        let assemblyName = tcInitial.assemblyName
+        let niceNameGen = tcInitial.niceNameGen
+        let loadClosureOpt = tcInitial.loadClosureOpt
+
+        cancellable {
+            let errorLogger = CompilationErrorLogger("CombineImportedAssembliesTask", tcConfig.errorSeverityOptions)
+#if !NO_EXTENSIONTYPING
+            tcImports.GetCcusExcludingBase() |> Seq.iter (fun ccu -> 
+                // When a CCU reports an invalidation, merge them together and just report a 
+                // general "imports invalidated". This triggers a rebuild.
+                //
+                // We are explicit about what the handler closure captures to help reason about the
+                // lifetime of captured objects, especially in case the type provider instance gets leaked
+                // or keeps itself alive mistakenly, e.g. via some global state in the type provider instance.
+                //
+                // The handler only captures
+                //    1. a weak reference to the importsInvalidated event.
+                //
+                // In the invalidation handler we use a weak reference to allow the owner to 
+                // be collected if, for some reason, a TP instance is not disposed or not GC'd.
+                let capturedImportsInvalidated = WeakReference<_>(importsInvalidated)
+                ccu.Deref.InvalidateEvent.Add(fun msg -> 
+                    match capturedImportsInvalidated.TryGetTarget() with 
+                    | true, tg -> tg.Trigger msg
+                    | _ -> ()))
+#endif
+
+            let tcInitial = GetInitialTcEnv (assemblyName, rangeStartup, tcConfig, tcImports, tcGlobals)
+            let tcState = GetInitialTcState (rangeStartup, assemblyName, tcConfig, tcGlobals, tcImports, niceNameGen, tcInitial)
+            let loadClosureErrors = 
+               [| match loadClosureOpt with 
+                  | None -> ()
+                  | Some loadClosure -> 
+                    for inp in loadClosure.Inputs do
+                        for (err, isError) in inp.MetaCommandDiagnostics do 
+                            yield err, (if isError then FSharpErrorSeverity.Error else FSharpErrorSeverity.Warning) |]
+
+            let initialErrors = Array.append (loadClosureErrors.ToErrorInfos ()) (errorLogger.GetErrorInfos ())
+
+            let tcAcc = 
+                { tcState=tcState
+                  tcEnvAtEndOfFile=tcInitial
+                  topAttribs=None
+                  latestImplFile=None
+                  latestCcuSigForFile=None
+                  tcErrorsRev = [ initialErrors ] 
+                  tcModuleNamesDict = Map.empty }
+
+            return (tcGlobals, tcImports, tcAcc)
+        }
+
     let createInitial tcInitial ctok =
       let tcConfig = tcInitial.tcConfig
-      let importsInvalidated = tcInitial.importsInvalidated
-      let assemblyName = tcInitial.assemblyName
-      let niceNameGen = tcInitial.niceNameGen
-      let loadClosureOpt = tcInitial.loadClosureOpt
 
       cancellable {
         let errorLogger = CompilationErrorLogger("CombineImportedAssembliesTask", tcConfig.errorSeverityOptions)
@@ -74,47 +124,5 @@ module TcAccumulator =
 
         let! (tcGlobals, tcImports) = TcImports.BuildFrameworkTcImports (ctok, tcConfigP, assemblyResolutions, [])
 
-#if !NO_EXTENSIONTYPING
-        tcImports.GetCcusExcludingBase() |> Seq.iter (fun ccu -> 
-            // When a CCU reports an invalidation, merge them together and just report a 
-            // general "imports invalidated". This triggers a rebuild.
-            //
-            // We are explicit about what the handler closure captures to help reason about the
-            // lifetime of captured objects, especially in case the type provider instance gets leaked
-            // or keeps itself alive mistakenly, e.g. via some global state in the type provider instance.
-            //
-            // The handler only captures
-            //    1. a weak reference to the importsInvalidated event.
-            //
-            // In the invalidation handler we use a weak reference to allow the owner to 
-            // be collected if, for some reason, a TP instance is not disposed or not GC'd.
-            let capturedImportsInvalidated = WeakReference<_>(importsInvalidated)
-            ccu.Deref.InvalidateEvent.Add(fun msg -> 
-                match capturedImportsInvalidated.TryGetTarget() with 
-                | true, tg -> tg.Trigger msg
-                | _ -> ()))
-#endif
-
-        let tcInitial = GetInitialTcEnv (assemblyName, rangeStartup, tcConfig, tcImports, tcGlobals)
-        let tcState = GetInitialTcState (rangeStartup, assemblyName, tcConfig, tcGlobals, tcImports, niceNameGen, tcInitial)
-        let loadClosureErrors = 
-           [| match loadClosureOpt with 
-              | None -> ()
-              | Some loadClosure -> 
-                for inp in loadClosure.Inputs do
-                    for (err, isError) in inp.MetaCommandDiagnostics do 
-                        yield err, (if isError then FSharpErrorSeverity.Error else FSharpErrorSeverity.Warning) |]
-
-        let initialErrors = Array.append (loadClosureErrors.ToErrorInfos ()) (errorLogger.GetErrorInfos ())
-
-        let tcAcc = 
-            { tcState=tcState
-              tcEnvAtEndOfFile=tcInitial
-              topAttribs=None
-              latestImplFile=None
-              latestCcuSigForFile=None
-              tcErrorsRev = [ initialErrors ] 
-              tcModuleNamesDict = Map.empty }
-
-        return (tcGlobals, tcImports, tcAcc)
+        return! createInitialWithGlobalsAndImports tcInitial tcGlobals tcImports
         }

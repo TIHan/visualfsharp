@@ -326,7 +326,13 @@ type CompilationConfig =
 
 and [<RequireQualifiedAccess>] FSharpMetadataReference =
     | PortableExecutable of PortableExecutableReference
-    | FSharpCompilation of FSharpCompilation 
+    | FSharpCompilation of FSharpCompilation
+    
+and [<NoEquality;NoComparison>] FSharpEmitResult =
+    {
+        compilation: FSharpCompilation
+        binary: ImportedBinary
+    }
 
 and [<NoEquality; NoComparison>] CompilationState =
     {
@@ -399,13 +405,23 @@ and [<NoEquality; NoComparison>] CompilationState =
 
             { this with cConfig = options; lazyGetChecker = lazyGetChecker; asyncLazyPreEmit = asyncLazyPreEmit }
 
-    member this.SubmitSource (src: FSharpSource) =
+    member this.SubmitSource (binary: ImportedBinary, src: FSharpSource) =
         let options = { this.cConfig with sources = ImmutableArray.Create src }
 
         let lazyGetChecker =
             CancellableLazy (fun ct ->
-                let checker = this.lazyGetChecker.GetValue ct
-                checker.SubmitSource (src, ct)
+                let prevChecker = this.lazyGetChecker.GetValue ct
+                let tcInitial = { prevChecker.TcInitial with importsInvalidated = Event<_>() }
+                let tcImports =
+                    let work =
+                        CompilationWorker.EnqueueAndAwaitAsync (fun ctok ->
+                            prevChecker.TcImports.AddBinary (ctok, binary)
+                        )
+                    Async.RunSynchronously (work, cancellationToken = ct)            
+                let tcGlobals, tcImports, tcAcc = TcAccumulator.createInitialWithGlobalsAndImports tcInitial prevChecker.TcGlobals tcImports |> Cancellable.runWithoutCancellation
+                let checker = IncrementalChecker.Create (tcInitial, tcGlobals, tcImports, tcAcc, prevChecker.Options, ImmutableArray.Create src) |> Cancellable.runWithoutCancellation
+                //checker.SubmitSource (src, ct)
+                checker
             )
 
         let asyncLazyPreEmit =
@@ -524,6 +540,7 @@ and [<Sealed>] FSharpCompilation (id: CompilationId, state: CompilationState, ve
 
             let signingInfo = Driver.ValidateKeySigningAttributes (tcConfig, tcGlobals, topAttribs)
 
+            let mutable ilModuleDef = None
             let dynamicAssemblyCreator asmStream pdbStream =
                 Some (fun (_, _, ilModDef: ILModuleDef) ->
                     let options: ILBinaryWriter.options =
@@ -541,6 +558,7 @@ and [<Sealed>] FSharpCompilation (id: CompilationId, state: CompilationState, ve
                           signer = GetStrongNameSigner signingInfo
                           dumpDebugInfo = tcConfig.dumpDebugInfo
                           pathMap = tcConfig.pathMap }
+                    ilModuleDef <- Some ilModDef
                     ILBinaryWriter.WriteILBinaryToStreams (outfile, options, ilModDef, (fun x -> x), asmStream, pdbStream)
                 )
 
@@ -568,7 +586,16 @@ and [<Sealed>] FSharpCompilation (id: CompilationId, state: CompilationState, ve
             if not diags.IsEmpty then
                 return Result.Error diags
             else
-                return Result.Ok ()
+                let binary =
+                    { ImportedBinary.FileName = outfile
+                      ImportedBinary.RawMetadata = MakeRawFSharpAssemblyData ilModuleDef.Value []
+                      ImportedBinary.ProviderGeneratedAssembly = None
+                      ImportedBinary.IsProviderGenerated = false
+                      ImportedBinary.ProviderGeneratedStaticLinkMap = None
+                      ImportedBinary.ILAssemblyRefs = []
+                      ImportedBinary.ILScopeRef = ILScopeRef.Local
+                    }
+                return Result.Ok { binary = binary; compilation = this }
         }, cancellationToken = ct)
 
 type FSharpCompilation with
@@ -614,10 +641,10 @@ type FSharpCompilation with
     static member CreateScript (assemblyName, script, metadataReferences, ?args) =
         FSharpCompilation.CreateAux (assemblyName, ImmutableArray.Empty, metadataReferences, script = script, args = defaultArg args [])
 
-    static member CreateScript (previousCompilation: FSharpCompilation, script, ?additionalMetadataReferences: ImmutableArray<FSharpMetadataReference>) =
+    static member CreateScript (emitResult: FSharpEmitResult, script, ?additionalMetadataReferences: ImmutableArray<FSharpMetadataReference>) =
         let _additionalMetadataReferences = defaultArg additionalMetadataReferences ImmutableArray.Empty
 
-        FSharpCompilation (CompilationId.Create (), previousCompilation.State.SubmitSource script, VersionStamp.Create ())
+        FSharpCompilation (CompilationId.Create (), emitResult.compilation.State.SubmitSource (emitResult.binary, script), VersionStamp.Create ())
 
 [<AutoOpen>]
 module FSharpSemanticModelExtensions =

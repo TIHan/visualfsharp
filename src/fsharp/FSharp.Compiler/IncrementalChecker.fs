@@ -359,6 +359,8 @@ type IncrementalChecker (tcInitial: TcInitial, state: IncrementalCheckerState) =
         let preEmitState = Async.RunSynchronously(this.FinishAsync (), cancellationToken = ct)
         IncrementalChecker (tcInitial, state.SubmitSource (src, preEmitState))
 
+    member __.Options = state.options
+
     static member Create(tcInitial: TcInitial, tcGlobals, tcImports, tcAcc, checkerOptions: CheckerOptions, srcs) =
         cancellable {
             let! state = IncrementalCheckerState.Create (tcInitial.tcConfig, tcGlobals, tcImports, tcAcc, checkerOptions, srcs)

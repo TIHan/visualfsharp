@@ -3734,6 +3734,8 @@ type RawFSharpAssemblyDataBackedByFileOnDisk (ilModule: ILModuleDef, ilAssemblyR
             let attrs = GetCustomAttributesOfILModule ilModule
             List.exists (IsMatchingSignatureDataVersionAttr ilg (IL.parseILVersion Internal.Utilities.FSharpEnvironment.FSharpBinaryMetadataFormatRevision)) attrs
 
+let MakeRawFSharpAssemblyData ilModuleDef ilAssemblyRefs =
+    RawFSharpAssemblyDataBackedByFileOnDisk (ilModuleDef, ilAssemblyRefs) :> IRawFSharpAssemblyData
 
 //----------------------------------------------------------------------------
 // Relink blobs of saved data by fixing up ccus.
@@ -3940,7 +3942,15 @@ and [<Sealed>] TcImports(state: TcImportsState) as this =
 
     member tcImports.GetCcusInDeclOrder() =         
         CheckDisposed()
-        List.map (fun x -> x.FSharpViewOfMetadata) (tcImports.GetImportedAssemblies())  
+        List.map (fun x -> x.FSharpViewOfMetadata) (tcImports.GetImportedAssemblies())
+        
+    member tcImports.AddBinary (ctok, binary: ImportedBinary) =
+        CheckDisposed()
+        let newState =
+            { state with compilationThread = state.compilationThread }
+        let newTcImports = new TcImports (newState)
+        newTcImports.PrepareToImportReferencedFSharpAssembly (ctok, range0, binary.FileName, binary) () |> ignore
+        newTcImports
         
     // This is the main "assembly reference --> assembly" resolution routine. 
     member tcImports.FindCcuInfo (ctok, m, assemblyName, lookupOnly) = 
