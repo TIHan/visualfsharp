@@ -5,6 +5,7 @@ open System.IO
 open System.Collections.Immutable
 open System.Collections.Generic
 open System.Threading
+open FSharp.Compiler
 open FSharp.Compiler.Compilation
 open Microsoft.CodeAnalysis
 open Microsoft.CodeAnalysis.Text
@@ -97,33 +98,21 @@ module TestModule%i =
         match c.Emit (peStream) with
         | Result.Ok emitResult ->
             
-            let asm = System.Reflection.Assembly.Load(peStream.ToArray())
+            let bytes = peStream.ToArray()
+            let asm = System.Reflection.Assembly.Load(bytes)
             asm.EntryPoint.Invoke(null, [||]) |> ignore
-
-            let itNodeOpt =
-                sm.SyntaxTree.GetRootNode().GetChildren()
-                |> Seq.filter (fun node ->
-                    match node.Kind with
-                    | FSharpSyntaxNodeKind.ModuleOrNamespace _ -> true
-                    | _ -> false
+            let itPropOpt = 
+                asm.DefinedTypes 
+                |> Seq.tryPick (fun x -> 
+                    x.DeclaredProperties
+                    |> Seq.tryFind (fun prop -> prop.Name = "$it")
                 )
-                |> Seq.tryExactlyOne
+            let value = 
+                match itPropOpt with
+                | Some itProp -> itProp.GetMethod.Invoke(null, [||])
+                | _ -> null
 
-            match itNodeOpt with
-            | Some itNode ->
-                let it = sm.GetSymbolInfo(itNode).Symbol.Value
-                let itCompiledName = it.TryGetCompiledName().Value
-                let parentTypeInfo = it.TryGetParentTypeInfo().Value
-
-                let asm = System.Reflection.Assembly.Load(peStream.ToArray())
-                asm.EntryPoint.Invoke(null, [||]) |> ignore
-                let parentRuntimeType = asm.GetType(parentTypeInfo.CompiledName)
-                let itRuntimeProperty = parentRuntimeType.GetProperty(itCompiledName)
-                let value = itRuntimeProperty.GetMethod.Invoke(null, [||])
-
-                Result.Ok (emitResult, value)
-            | _ ->
-                Result.Ok (emitResult, null)
+            Result.Ok (emitResult, value)
         | Result.Error diags ->
             Result.Error diags
 
@@ -393,16 +382,13 @@ type C () = class end
         let res =
             runScriptAndContinue
                 """
-module Doot123
-
 let y = 1 + 1
                 """
                 """
-open Doot123
-y
+y + 5
                 """
         match res with
-        | Ok (_, value) -> Assert.AreEqual (2, value)
+        | Ok (_, value) -> Assert.AreEqual (7, value)
         | Error diags -> Assert.Fail (sprintf "%A" diags)
 
 //[<TestFixture>]
