@@ -2049,7 +2049,7 @@ let main2a(Args (ctok, tcConfig, tcImports, frameworkTcImports: TcImports, tcGlo
 
 /// Phase 2b: IL code generation
 let main2b 
-      (tcImportsCapture,dynamicAssemblyCreator) 
+      (tcImportsCapture,dynamicAssemblyCreator,externalCcus) 
       (Args (ctok, tcConfig: TcConfig, tcImports, tcGlobals: TcGlobals, errorLogger, 
              generatedCcu: CcuThunk, outfile, optimizedImpls, topAttrs, pdbfile, assemblyName, 
              idata, optDataResources, assemVerFromAttrib, signingInfo, metadataVersion, exiter: Exiter)) = 
@@ -2068,6 +2068,10 @@ let main2b
     ReportTime tcConfig "TAST -> IL"
     use unwindBuildPhase = PushThreadBuildPhaseUntilUnwind BuildPhase.IlxGen
     let ilxGenerator = CreateIlxAssemblyGenerator (tcConfig, tcImports, tcGlobals, (LightweightTcValForUsingInBuildMethodCall tcGlobals), generatedCcu)
+
+    match externalCcus with
+    | [] -> ()
+    | _ -> ilxGenerator.AddExternalCcus externalCcus
 
     let codegenBackend = (if Option.isSome dynamicAssemblyCreator then IlReflectBackend else IlWriteBackend)
     let codegenResults = GenerateIlxCode (codegenBackend, Option.isSome dynamicAssemblyCreator, false, tcConfig, topAttrs, optimizedImpls, generatedCcu.AssemblyName, ilxGenerator)
@@ -2181,7 +2185,7 @@ let typecheckAndCompile
     main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, defaultCopyFSharpCore, exiter, errorLoggerProvider, d)
     |> main1
     |> main2a
-    |> main2b (tcImportsCapture,dynamicAssemblyCreator)
+    |> main2b (tcImportsCapture,dynamicAssemblyCreator,[])
     |> main3 
     |> main4 dynamicAssemblyCreator
 
@@ -2193,20 +2197,20 @@ let compileOfAst
     main1OfAst (ctok, legacyReferenceResolver, reduceMemoryUsage, assemblyName, target, outFile, pdbFile, 
                 dllReferences, noframework, exiter, errorLoggerProvider, inputs)
     |> main2a
-    |> main2b (tcImportsCapture, dynamicAssemblyCreator)
+    |> main2b (tcImportsCapture, dynamicAssemblyCreator,[])
     |> main3
     |> main4 dynamicAssemblyCreator
 
 let encodeAndOptimizeAndCompileAux (    ctok, tcConfig, tcImports, tcGlobals, errorLogger, generatedCcu, outfile, 
-                                        typedImplFiles, topAttrs, pdbfile, assemblyName, assemVerFromAttrib, signingInfo, exiter, dynamicAssemblyCreator) =
+                                        typedImplFiles, topAttrs, pdbfile, assemblyName, assemVerFromAttrib, signingInfo, exiter, dynamicAssemblyCreator, externalCcus) =
     Args (ctok, tcConfig, tcImports, tcImports, tcGlobals, errorLogger, generatedCcu, outfile, typedImplFiles, topAttrs, pdbfile, assemblyName, assemVerFromAttrib, signingInfo, exiter)
     |> main2a
-    |> main2b (None, dynamicAssemblyCreator)
+    |> main2b (None, dynamicAssemblyCreator,externalCcus)
     |> main3
     |> main4 dynamicAssemblyCreator
 
 let encodeAndOptimizeAndCompile (   ctok, tcConfig: TcConfig, tcImports, tcGlobals, errorLogger, generatedCcu, outfile, 
-                                    typedImplFiles, topAttrs, pdbfile, assemblyName, signingInfo, exiter, dynamicAssemblyCreator) =
+                                    typedImplFiles, topAttrs, pdbfile, assemblyName, signingInfo, exiter, dynamicAssemblyCreator, externalCcus) =
     // Try to find an AssemblyVersion attribute 
     let assemVerFromAttrib = 
         match AttributeHelpers.TryFindVersionAttribute tcGlobals "System.Reflection.AssemblyVersionAttribute" "AssemblyVersionAttribute" topAttrs.assemblyAttrs tcConfig.deterministic with
@@ -2216,7 +2220,7 @@ let encodeAndOptimizeAndCompile (   ctok, tcConfig: TcConfig, tcImports, tcGloba
            | _ -> warning(Error(FSComp.SR.fscAssemblyVersionAttributeIgnored(), Range.rangeStartup)); None
         | _ -> None
     encodeAndOptimizeAndCompileAux (ctok, tcConfig, tcImports, tcGlobals, errorLogger, generatedCcu, outfile,
-                                    typedImplFiles, topAttrs, pdbfile, assemblyName, assemVerFromAttrib, signingInfo, exiter, dynamicAssemblyCreator)
+                                    typedImplFiles, topAttrs, pdbfile, assemblyName, assemVerFromAttrib, signingInfo, exiter, dynamicAssemblyCreator, externalCcus)
 
 let mainCompile 
         (ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, 

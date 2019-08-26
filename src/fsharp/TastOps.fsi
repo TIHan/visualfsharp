@@ -531,7 +531,8 @@ type Remap =
     { tpinst : TyparInst
       valRemap: ValRemap
       tyconRefRemap : TyconRefRemap
-      removeTraitSolutions: bool }
+      removeTraitSolutions: bool
+      localRescope: ILScopeRef option }
 
     static member Empty : Remap
 

@@ -333,6 +333,7 @@ and [<NoEquality; NoComparison>] CompilationState =
         cConfig: CompilationConfig
         lazyGetChecker: CancellableLazy<IncrementalChecker>
         asyncLazyPreEmit: AsyncLazy<PreEmitState>
+        externalCcus: Tast.CcuThunk list
     }
 
     static member Create cConfig =
@@ -367,6 +368,7 @@ and [<NoEquality; NoComparison>] CompilationState =
             cConfig = cConfig
             lazyGetChecker = lazyGetChecker
             asyncLazyPreEmit= asyncLazyPreEmit
+            externalCcus = []
         }
 
     member this.SetOptions cConfig =
@@ -404,10 +406,28 @@ and [<NoEquality; NoComparison>] CompilationState =
                 sources = ImmutableArray.Create src
                 assemblyName = Path.GetFileNameWithoutExtension src.FilePath }
 
+        let preEmitState = 
+            match this.asyncLazyPreEmit.TryGetValue() with
+            | ValueSome preEmitState -> preEmitState
+            | _ -> failwith "Compilation cannot accept submissions before being emitted at least one time."
+        
+        let ccu = preEmitState.tcState.Ccu
+
+        let scoref = ILScopeRef.Assembly (mkSimpleAssemblyRef (this.cConfig.assemblyName))
+        let remap = { MakeExportRemapping ccu ccu.target.Contents with localRescope = Some scoref }
+        let remappedCcu =
+            { ccu with
+                target =
+                    { ccu.target with
+                        Contents = ApplyExportRemappingToEntity preEmitState.tcGlobals remap ccu.target.Contents
+                        ILScopeRef = scoref
+                    }
+            }
+
         let lazyGetChecker =
             CancellableLazy (fun ct ->
                 let checker = this.lazyGetChecker.GetValue ct
-                checker.SubmitSource (src, ct)
+                checker.SubmitSource (src, remappedCcu, ct)
             )
 
         let asyncLazyPreEmit =
@@ -421,7 +441,8 @@ and [<NoEquality; NoComparison>] CompilationState =
             cConfig = cConfig
             lazyGetChecker = lazyGetChecker
             filePathIndexMap = ImmutableDictionary.CreateRange [|KeyValuePair(src, 0)|]
-            asyncLazyPreEmit = asyncLazyPreEmit }              
+            asyncLazyPreEmit = asyncLazyPreEmit
+            externalCcus = remappedCcu :: this.externalCcus }              
 
 and [<Sealed>] FSharpCompilation (id: CompilationId, state: CompilationState, version: VersionStamp) as this =
 
@@ -558,7 +579,7 @@ and [<Sealed>] FSharpCompilation (id: CompilationId, state: CompilationState, ve
                 try
                     Driver.encodeAndOptimizeAndCompile (
                         ctok, tcConfig, tcImports, tcGlobals, errorLogger, generatedCcu, outfile, typedImplFiles, 
-                        topAttribs, pdbfile, assemblyName, signingInfo, exiter, dynamicAssemblyCreator peStream pdbStream2)
+                        topAttribs, pdbfile, assemblyName, signingInfo, exiter, dynamicAssemblyCreator peStream pdbStream2, [])
                 finally
                     if pdbStream.IsNone then
                         pdbStream2.Dispose()

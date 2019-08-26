@@ -85,7 +85,8 @@ val encodeAndOptimizeAndCompile :
     assemblyName: string *
     signingInfo: StrongNameSigningInfo *
     exiter: Exiter * 
-    dynamicAssemblyCreator: (TcGlobals * string * ILModuleDef -> unit) option
+    dynamicAssemblyCreator: (TcGlobals * string * ILModuleDef -> unit) option *
+    externalCcus: Tast.CcuThunk list
         -> unit
 
 /// Part of LegacyHostedCompilerForTesting

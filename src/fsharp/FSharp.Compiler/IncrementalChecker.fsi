@@ -33,6 +33,7 @@ type PreEmitState =
         topAttribs: TopAttribs
         implFiles: TypedImplFile list
         tcState: TcState
+        tcGlobals: TcGlobals
     }
 
 /// This is immutable.
@@ -59,6 +60,6 @@ type IncrementalChecker =
     /// Returns the state used prior to emitting an assembly.
     member FinishAsync: unit -> Async<PreEmitState>
 
-    member SubmitSource: FSharpSource * CancellationToken -> IncrementalChecker
+    member SubmitSource: FSharpSource * Tast.CcuThunk * CancellationToken -> IncrementalChecker
 
     static member Create: TcInitial * TcGlobals * TcImports * TcAccumulator * CheckerOptions * ImmutableArray<FSharpSource> -> Cancellable<IncrementalChecker>

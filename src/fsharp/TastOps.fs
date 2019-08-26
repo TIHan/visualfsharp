@@ -97,13 +97,15 @@ type Remap =
     { tpinst: TyparInst
       valRemap: ValRemap
       tyconRefRemap: TyconRefRemap
-      removeTraitSolutions: bool }
+      removeTraitSolutions: bool
+      localRescope: ILScopeRef option }
 
 let emptyRemap = 
     { tpinst = emptyTyparInst
       tyconRefRemap = emptyTyconRefRemap
       valRemap = ValMap.Empty
-      removeTraitSolutions = false }
+      removeTraitSolutions = false
+      localRescope = None }
 
 type Remap with 
     static member Empty = emptyRemap
@@ -378,7 +380,8 @@ let mkInstRemap tpinst =
     { tyconRefRemap = emptyTyconRefRemap
       tpinst = tpinst
       valRemap = ValMap.Empty
-      removeTraitSolutions = false }
+      removeTraitSolutions = false
+      localRescope = None }
 
 // entry points for "typar -> TType" instantiation 
 let instType tpinst x = if isNil tpinst then x else remapTypeAux (mkInstRemap tpinst) x
@@ -4003,7 +4006,8 @@ let mkRepackageRemapping mrpi =
     { valRemap = ValMap.OfList (mrpi.RepackagedVals |> List.map (fun (vref, x) -> vref.Deref, x))
       tpinst = emptyTyparInst
       tyconRefRemap = TyconRefMap.OfList mrpi.RepackagedEntities
-      removeTraitSolutions = false }
+      removeTraitSolutions = false
+      localRescope = None }
 
 //--------------------------------------------------------------------------
 // Compute instances of the above for mty -> mty
@@ -8489,7 +8493,18 @@ let rec remapEntityDataToNonLocal g tmenv (d: Entity) =
         MaybeLazy.Strict (d.entity_modul_contents.Value
                           |> mapImmediateValsAndTycons (remapTyconToNonLocal g tmenv) (remapValToNonLocal g tmenv))
     let exnInfoR = d.ExceptionInfo |> remapTyconExnInfo g tmenvinner
+    let ilReprCacheR = if tmenv.localRescope.IsSome then newCache() else d.entity_il_repr_cache
+    let cpathR = 
+        if tmenv.localRescope.IsSome then 
+            match d.entity_cpath with 
+            | Some (CompilationPath.CompPath (ILScopeRef.Local, path)) -> 
+                Some (CompilationPath.CompPath(tmenv.localRescope.Value, path))
+            | x -> x
+        else
+            d.entity_cpath
     { d with 
+          entity_il_repr_cache = ilReprCacheR
+          entity_cpath = cpathR
           entity_typars = typarsR
           entity_attribs = attribsR
           entity_tycon_repr = tyconReprR

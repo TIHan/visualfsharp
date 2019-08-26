@@ -388,6 +388,7 @@ type Doot () =
     member __.Test(x: int) = x + 10
                 """
                 """
+open Test1
 let d = Doot ()
 d.Test(y) + 10
                 """

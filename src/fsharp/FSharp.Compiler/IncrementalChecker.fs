@@ -47,6 +47,7 @@ type PreEmitState =
         topAttribs: TopAttribs
         implFiles: TypedImplFile list
         tcState: TcState
+        tcGlobals: TcGlobals
     }
 
 type PartialCheckResult =
@@ -164,11 +165,19 @@ type IncrementalCheckerState =
             )
         { this with orderedResults = orderedResults }
 
-    member this.SubmitSource (src: FSharpSource, preEmitState) =
+    member this.SubmitSource (src: FSharpSource, ccu: Tast.CcuThunk, preEmitState) =
+        let autoOpens = ["Test1"]
+
+        let tcImports = this.tcImports
+        let tcGlobals = this.tcGlobals
+
+        let tcEnv =
+            AddCcuToTcEnv (tcGlobals, tcImports.GetImportMap(), Range.range0, this.initialTcAcc.tcEnvAtEndOfFile, ccu.AssemblyName, ccu, autoOpens, [])
         let initialTcAcc =
             { this.initialTcAcc with
-                tcState = preEmitState.tcState }
-        IncrementalCheckerState.Create (this.tcConfig, this.tcGlobals, this.tcImports, initialTcAcc, this.options, ImmutableArray.Create src)
+                tcEnvAtEndOfFile = tcEnv
+                tcState = this.initialTcAcc.tcState.NextStateAfterIncrementalFragment tcEnv }
+        IncrementalCheckerState.Create (this.tcConfig, tcGlobals, tcImports, initialTcAcc, this.options, ImmutableArray.Create src)
         |> Cancellable.runWithoutCancellation
 
     member this.GetSyntaxTree filePath =
@@ -318,6 +327,7 @@ let getPreEmitState state =
         topAttribs = topAttrs
         implFiles = mimpls
         tcState = tcState
+        tcGlobals = state.tcGlobals
     }
 
 [<Sealed>]
@@ -351,9 +361,9 @@ type IncrementalChecker (tcInitial: TcInitial, state: IncrementalCheckerState) =
                 return getPreEmitState state
             }
 
-    member this.SubmitSource (src: FSharpSource, ct) =
+    member this.SubmitSource (src: FSharpSource, ccu, ct) =
         let preEmitState = Async.RunSynchronously(this.FinishAsync (), cancellationToken = ct)
-        IncrementalChecker (tcInitial, state.SubmitSource (src, preEmitState))
+        IncrementalChecker (tcInitial, state.SubmitSource (src, ccu, preEmitState))
 
     static member Create(tcInitial: TcInitial, tcGlobals, tcImports, tcAcc, checkerOptions: CheckerOptions, srcs) =
         cancellable {
