@@ -1945,6 +1945,8 @@ and IProjectReference =
     /// are fatal errors in the options for the project.
     abstract TryGetLogicalTimeStamp: TimeStampCache * CompilationThreadToken -> System.DateTime option
 
+    abstract TryGetILModuleReader: CompilationThreadToken * Threading.CancellationToken -> ILModuleReader option
+
 type AssemblyReference = 
     | AssemblyReference of range * string * IProjectReference option
 

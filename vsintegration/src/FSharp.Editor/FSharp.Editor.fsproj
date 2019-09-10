@@ -122,6 +122,7 @@
   <ItemGroup>
     <ProjectReference Include="$(FSharpSourcesRoot)\fsharp\FSharp.Core\FSharp.Core.fsproj" />
     <ProjectReference Include="$(FSharpSourcesRoot)\fsharp\FSharp.Compiler.Private\FSharp.Compiler.Private.fsproj" />
+    <ProjectReference Include="..\..\..\src\fsharp\FSharp.Compiler\FSharp.Compiler.fsproj" />
     <ProjectReference Include="..\FSharp.Editor.Helpers\FSharp.Editor.Helpers.csproj" />
     <ProjectReference Include="..\FSharp.PatternMatcher\FSharp.PatternMatcher.csproj" />
     <ProjectReference Include="..\FSharp.UIResources\FSharp.UIResources.csproj" />

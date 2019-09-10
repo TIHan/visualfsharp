@@ -18,7 +18,11 @@ type FSharpMetadataReference =
 
     static member FromFSharpCompilation: FSharpCompilation -> FSharpMetadataReference
 
+    static member FromRoslynCompilation: Compilation -> FSharpMetadataReference
+
 and [<Sealed>] FSharpCompilation =
+
+    member Sources: ImmutableArray<FSharpSource>
 
     member ReplaceSource: oldSrc: FSharpSource * newSrc: FSharpSource -> FSharpCompilation
 

@@ -299,7 +299,8 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                           }
                         member x.TryGetLogicalTimeStamp(cache, ctok) = 
                             self.TryGetLogicalTimeStampForProject(cache, ctok, opts, userOpName + ".TimeStampReferencedProject("+nm+")")
-                        member x.FileName = nm } ]
+                        member x.FileName = nm
+                        member x.TryGetILModuleReader (_, _) = None } ]
 
         let loadClosure = scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.TryGet (ltok, options))
         let! builderOpt, diagnostics = 

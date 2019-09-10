@@ -231,11 +231,47 @@ type CompilationConfig =
                             member __.EvaluateRawContents _ = 
                                 Cancellable.ret (Some assemblyData)
 
-                            member __.TryGetLogicalTimeStamp(_, _) = None }
+                            member __.TryGetLogicalTimeStamp(_, _) = None 
+                            
+                            member __.TryGetILModuleReader(_, _) = None }
 
                     {
                         originalReference = AssemblyReference (Range.range0, c.AssemblyName, Some projRef)
-                        resolvedPath = c.AssemblyName // ugly be ok
+                        resolvedPath = c.AssemblyName // ugly but ok
+                        prepareToolTip = fun () -> c.AssemblyName
+                        sysdir = false
+                        ilAssemblyRef = ref None
+                    }
+
+                | FSharpMetadataReference.RoslynCompilation c ->
+                    let projRef =
+                        { new IProjectReference with
+
+                            member __.FileName = c.AssemblyName
+
+                            member __.EvaluateRawContents _ = Cancellable.ret None
+
+                            member __.TryGetLogicalTimeStamp(_, _) = None 
+                            
+                            member __.TryGetILModuleReader(_, ct) = 
+                                let peStream = new MemoryStream ()
+                                let result = c.Emit (peStream, cancellationToken = ct)
+                                if not result.Success then
+                                    failwithf "%A" result.Diagnostics
+
+                                let opts =
+                                    { pdbDirPath = None
+                                      ilGlobals = mkILGlobals ILScopeRef.Local // TODO: We need to change this to get the ilGlobals from building tcimports.
+                                      reduceMemoryUsage = ReduceMemoryFlag.Yes
+                                      metadataOnly = MetadataOnlyFlag.Yes
+                                      tryGetMetadataSnapshot = fun _ -> None }
+
+                                Some (OpenILModuleReaderFromStream c.AssemblyName peStream opts)
+                            }
+
+                    {
+                        originalReference = AssemblyReference (Range.range0, c.AssemblyName, Some projRef)
+                        resolvedPath = c.AssemblyName // ugly but ok
                         prepareToolTip = fun () -> c.AssemblyName
                         sysdir = false
                         ilAssemblyRef = ref None
@@ -278,19 +314,23 @@ type CompilationConfig =
 
 and [<NoEquality;NoComparison;RequireQualifiedAccess>] FSharpMetadataReference =
     | PortableExecutable of PortableExecutableReference
-    | FSharpCompilation of FSharpCompilation 
-    // TODO: Add CSharp and VB compilations.
+    | FSharpCompilation of FSharpCompilation
+    | RoslynCompilation of Compilation
 
     member this.Id =
         match this with
         | FSharpMetadataReference.PortableExecutable peRef -> peRef.FilePath
         | FSharpMetadataReference.FSharpCompilation c -> c.AssemblyName
+        | FSharpMetadataReference.RoslynCompilation c -> c.AssemblyName
 
     static member FromPortableExecutableReference peRef =
         FSharpMetadataReference.PortableExecutable peRef
 
     static member FromFSharpCompilation c =
         FSharpMetadataReference.FSharpCompilation c
+
+    static member FromRoslynCompilation c =
+        FSharpMetadataReference.RoslynCompilation c
 
 and [<NoEquality; NoComparison>] CompilationState =
     {
@@ -417,6 +457,8 @@ and [<Sealed>] FSharpCompilation (state: CompilationState) as this =
 
     member __.SetConfig cConfig =
         FSharpCompilation (state.SetOptions cConfig)
+
+    member __.Sources = state.cConfig.sources
 
     member __.ReplaceSource (oldSrc, newSrc) =
         check oldSrc
