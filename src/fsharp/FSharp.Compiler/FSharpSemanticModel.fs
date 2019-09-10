@@ -198,12 +198,17 @@ type FSharpSymbol () =
 type TypeSymbol () =
     inherit FSharpSymbol ()
 
+    abstract IsValueType: bool
+
 [<Sealed>]
 type NamedTypeSymbol (senv: SymbolEnv, tcref: TyconRef) =
     inherit TypeSymbol ()
 
     override __.Name = 
         tcref.CompiledName
+
+    override __.IsValueType =
+        tcref.IsStructOrEnumTycon
 
     member __.FullName =
         tcref.CompiledRepresentationForNamedType.FullName
@@ -217,6 +222,7 @@ type TypeSymbol with
         | _ ->
             { new TypeSymbol () with
                 member __.Name = String.Empty
+                member __.IsValueType = false
             }
 
 [<AbstractClass>]

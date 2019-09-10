@@ -17,6 +17,8 @@ type FSharpSymbol =
 type TypeSymbol =
     inherit FSharpSymbol
 
+    abstract IsValueType: bool
+
 [<Sealed;Class>]
 type NamedTypeSymbol =
     inherit TypeSymbol

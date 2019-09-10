@@ -170,10 +170,22 @@ type internal NewFSharpClassificationService
                 ()
             } |> RoslynHelpers.StartAsyncUnitAsTask cancellationToken
 
-        member __.AddSemanticClassificationsAsync(document: Document, _textSpan: TextSpan, _result: List<ClassifiedSpan>, cancellationToken: CancellationToken) =
+        member __.AddSemanticClassificationsAsync(document: Document, textSpan: TextSpan, result: List<ClassifiedSpan>, cancellationToken: CancellationToken) =
             asyncMaybe {
-                let! _c = CompilationCache.TryGetSemanticModelAsync { manager = projectInfoManager } document
-                ()
+                let! sm = CompilationCache.TryGetSemanticModelAsync { manager = projectInfoManager } document
+                sm.SyntaxTree.GetTokens (textSpan, cancellationToken)
+                |> Seq.iter (fun t ->
+                    match sm.TryGetEnclosingSymbol (t.Span.Start, cancellationToken) with
+                    | None -> ()
+                    | Some symbol ->
+                        match symbol with
+                        | :? TypeSymbol as symbol ->
+                            if symbol.IsValueType then
+                                result.Add(ClassifiedSpan(t.Span, FSharpClassificationTypes.ValueType))
+                            else
+                                result.Add(ClassifiedSpan(t.Span, FSharpClassificationTypes.ReferenceType))
+                        | _ -> ()
+                )
             } 
             |> Async.Ignore |> RoslynHelpers.StartAsyncUnitAsTask cancellationToken
 
