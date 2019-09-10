@@ -7,6 +7,7 @@ open System.Linq
 open System.Composition
 open System.Collections.Immutable
 open System.Collections.Generic
+open System.Collections.Concurrent
 open System.Diagnostics
 open System.Threading
 
@@ -52,7 +53,7 @@ module internal rec CompilationCache =
         | Other of Compilation
 
     let gate = obj ()
-    let lookup = Dictionary<ProjectId, Project * FSharpCompilation>()
+    let lookup = ConcurrentDictionary<ProjectId, Project * FSharpCompilation>()
 
     type cenv =
         {
@@ -98,13 +99,13 @@ module internal rec CompilationCache =
 
                 let args = projectOptions.OtherOptions |> List.ofArray
 
-                return Some (FSharpCompilation.Create(project.AssemblyName, srcs, metaRefs, outputKind = outputKind, args = args))
+                return Some (FSharpCompilation.Create(System.IO.Path.GetFileNameWithoutExtension project.AssemblyName, srcs, metaRefs, outputKind = outputKind, args = args))
         }
 
     let addProjectAsync cenv (project: Project) =
         async {
             match project.Language with
-            | "FSharp" ->
+            | "F#" ->
                 match! tryMkCompilationAsync cenv project with
                 | None -> return None
                 | Some fscomp ->
@@ -143,15 +144,11 @@ module internal rec CompilationCache =
 
     let TryGetSemanticModelAsync cenv (doc: Document) : Async<FSharpSemanticModel option> =
         async {
-            Monitor.Enter gate
-            try
-                match! TryGetCompilationAsync cenv doc.Project with
-                | None -> return None
-                | Some (_, fscomp) -> 
-                    let src = fscomp.Sources |> Seq.find (fun x -> String.Equals (x.FilePath, doc.FilePath, StringComparison.OrdinalIgnoreCase))
-                    return Some (fscomp.GetSemanticModel src)
-            finally
-                Monitor.Exit gate
+            match! TryGetCompilationAsync cenv doc.Project with
+            | None -> return None
+            | Some (_, fscomp) -> 
+                let src = fscomp.Sources |> Seq.find (fun x -> String.Equals (x.FilePath, doc.FilePath, StringComparison.OrdinalIgnoreCase))
+                return Some (fscomp.GetSemanticModel src)
         }
 
 [<Export(typeof<IFSharpClassificationService>)>]

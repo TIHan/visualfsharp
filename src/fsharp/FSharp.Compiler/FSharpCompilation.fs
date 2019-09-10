@@ -387,6 +387,15 @@ and [<NoEquality; NoComparison>] CompilationState =
             sourcesBuilder.[filePathIndex] <- newSrc
 
             let options = { this.cConfig with sources = sourcesBuilder.MoveToImmutable () }
+            let srcs = options.sources
+
+            let filePathIndexMapBuilder = ImmutableDictionary.CreateBuilder ()
+            for i = 0 to srcs.Length - 1 do
+                let src = srcs.[i]
+                if filePathIndexMapBuilder.ContainsKey src then
+                    failwith "Duplicate source when creating a compilation"
+                else
+                    filePathIndexMapBuilder.Add (src, i)
 
             let lazyGetChecker =
                 CancellableLazy (fun ct ->
@@ -401,7 +410,11 @@ and [<NoEquality; NoComparison>] CompilationState =
                     return! checker.FinishAsync ()
                 })  
 
-            { this with cConfig = options; lazyGetChecker = lazyGetChecker; asyncLazyPreEmit = asyncLazyPreEmit }
+            { this with 
+                cConfig = options
+                lazyGetChecker = lazyGetChecker
+                filePathIndexMap = filePathIndexMapBuilder.ToImmutableDictionary ()
+                asyncLazyPreEmit = asyncLazyPreEmit }
 
     member this.SubmitSource (src: FSharpSource) =
         let cConfig = 
