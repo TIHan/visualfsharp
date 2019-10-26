@@ -547,7 +547,12 @@ let mkArgsForAppliedVal isBaseCall (vref: ValRef) argsl =
             List.map mkArgsPermit argArities
         else
             []
-    | None -> []  
+    | None -> 
+        let argCount = List.length argsl
+        if argCount >= vref.NumObjArgs then
+            List.init argCount (fun _ -> PermitByRefExpr.Yes)
+        else
+            []
 
 /// Work out what byref-values are allowed at input positions to functions
 let rec mkArgsForAppliedExpr isBaseCall argsl x =
@@ -1424,27 +1429,27 @@ and CheckLambdas isTop (memInfo: ValMemberInfo option) cenv env inlined topValIn
             // any byRef arguments are considered used, as they may be 'out's
             restArgs |> List.iter (fun arg -> if isByrefTy g arg.Type then arg.SetHasBeenReferenced())
 
-        let permitByRefType =
-            if isTop then
-                PermitByRefType.NoInnerByRefLike
-            else
-                PermitByRefType.None
+        //let permitByRefType =
+        //    if isTop then
+        //        PermitByRefType.NoInnerByRefLike
+        //    else
+        //        PermitByRefType.NoInnerByRefLike
 
-        // Check argument types
-        syntacticArgs 
-        |> List.iter (fun arg ->
-            CheckValSpecAux permitByRefType cenv env arg (fun () -> 
-                if arg.IsCompilerGenerated then
-                    errorR(Error(FSComp.SR.chkErrorUseOfByref(), arg.Range))
-                else
-                    errorR(Error(FSComp.SR.chkInvalidFunctionParameterType(arg.DisplayName, NicePrint.minimalStringOfType cenv.denv arg.Type), arg.Range))
-            )
-        )
+        //// Check argument types
+        //syntacticArgs 
+        //|> List.iter (fun arg ->
+        //    CheckValSpecAux permitByRefType cenv env arg (fun () -> 
+        //        if arg.IsCompilerGenerated then
+        //            errorR(Error(FSComp.SR.chkErrorUseOfByref(), arg.Range))
+        //        else
+        //            errorR(Error(FSComp.SR.chkInvalidFunctionParameterType(arg.DisplayName, NicePrint.minimalStringOfType cenv.denv arg.Type), arg.Range))
+        //    )
+        //)
 
-        // Check return type
-        CheckTypeAux permitByRefType cenv env mOrig bodyty (fun () ->
-            errorR(Error(FSComp.SR.chkInvalidFunctionReturnType(NicePrint.minimalStringOfType cenv.denv bodyty), mOrig))
-        )
+        //// Check return type
+        //CheckTypeAux permitByRefType cenv env mOrig bodyty (fun () ->
+        //    errorR(Error(FSComp.SR.chkInvalidFunctionReturnType(NicePrint.minimalStringOfType cenv.denv bodyty), mOrig))
+        //)
 
         syntacticArgs |> List.iter (BindVal cenv env)
 
@@ -1463,11 +1468,11 @@ and CheckLambdas isTop (memInfo: ValMemberInfo option) cenv env inlined topValIn
 
         // Check byref return types
         if cenv.reportErrors then 
-            if not isTop then
-                CheckForByrefLikeType cenv env m bodyty (fun () -> 
-                        errorR(Error(FSComp.SR.chkFirstClassFuncNoByref(), m)))
+            //if not isTop then
+            //    CheckForByrefLikeType cenv env m bodyty (fun () -> 
+            //            errorR(Error(FSComp.SR.chkFirstClassFuncNoByref(), m)))
 
-            elif not g.compilingFslib && isByrefTy g bodyty then 
+            if not g.compilingFslib && isByrefTy g bodyty then 
                 // check no byrefs-in-the-byref
                 CheckForByrefType cenv env (destByrefTy g bodyty) (fun () -> 
                     errorR(Error(FSComp.SR.chkReturnTypeNoByref(), m)))
