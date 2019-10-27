@@ -759,8 +759,6 @@ type ValStorage =
     /// It is non-empty for 'local type functions', see comments on definition of NamedLocalIlxClosureInfo.
     | Local of idx: int * realloc: bool * NamedLocalIlxClosureInfo ref option
 
-    | StaticMethod of ILMethodSpec * Range.range * OptionalShadowLocal
-
 /// Indicates if there is a shadow local storage for a local, to make sure it gets a good name in debugging
 and OptionalShadowLocal =
     | NoShadowLocal
@@ -856,7 +854,6 @@ let OutputStorage (pps: TextWriter) s =
     match s with
     | StaticField _ -> pps.Write "(top)"
     | StaticProperty _ -> pps.Write "(top)"
-    | StaticMethod _ -> pps.Write "(top)"
     | Method _ -> pps.Write "(top)"
     | Local _ -> pps.Write "(local)"
     | Arg _ -> pps.Write "(arg)"
@@ -3054,7 +3051,6 @@ and GenApp cenv cgbuf eenv (f, fty, tyargs, args, m) sequel =
                           (let tps, argtys, _, _ = GetTopValTypeInFSharpForm g topValInfo vref.Type m
                            tps.Length = tyargs.Length &&
                            argtys.Length <= args.Length)
-                      | StaticMethod _ -> true
                       | _ -> false) ->
 
       let storage = StorageForValRef g m vref eenv
@@ -3166,12 +3162,6 @@ and GenApp cenv cgbuf eenv (f, fty, tyargs, args, m) sequel =
                         | Choice1Of2 (ilTy, loc) -> EmitGetLocal cgbuf ilTy loc
                         | Choice2Of2 expr -> GenExpr cenv cgbuf eenv SPSuppress expr Continue)
                     GenIndirectCall cenv cgbuf eenv (actualRetTy, [], laterArgs, m) sequel)
-
-      | StaticMethod (mspec, _, _) ->
-        for arg in args do
-            GenExpr cenv cgbuf eenv SPSuppress arg Continue
-        CG.EmitInstr cgbuf (pop 0) (Push [mspec.DeclaringType]) (I_call (Normalcall, mspec, None))
-        GenSequel cenv eenv.cloc cgbuf sequel
               
       | _ -> failwith "??"
     
@@ -3864,7 +3854,7 @@ and GenGetValAddr cenv cgbuf eenv (v: ValRef, m) sequel =
     | Env (_, _, ilField, _) ->
         CG.EmitInstrs cgbuf (pop 0) (Push [ILType.Byref ilTy]) [ mkLdarg0; mkNormalLdflda ilField ]
 
-    | Local (_, _, Some _) | StaticProperty _ | Method _ | StaticMethod _ | Env _ | Null ->
+    | Local (_, _, Some _) | StaticProperty _ | Method _ | Env _ | Null ->
         errorR(Error(FSComp.SR.ilAddressOfValueHereIsInvalid(v.DisplayName), m))
         CG.EmitInstrs cgbuf (pop 1) (Push [ILType.Byref ilTy]) [ I_ldarga (uint16 669 (* random value for post-hoc diagnostic analysis on generated tree *) ) ] 
 
@@ -5391,8 +5381,6 @@ and GenBindingAfterSequencePoint cenv cgbuf eenv sp (TBind(vspec, rhsExpr, _)) s
                 EmitSetStaticField cgbuf fspec
                 GenSetStorage m cgbuf storage
 
-    | StaticMethod _ -> ()
-
     | _ ->
         let storage = StorageForVal cenv.g m vspec eenv
         match storage, rhsExpr with
@@ -6056,8 +6044,7 @@ and GenSetStorage m cgbuf storage =
     | StaticProperty (ilGetterMethSpec, _) ->
         error(Error(FSComp.SR.ilStaticMethodIsNotLambda(ilGetterMethSpec.Name), m))
 
-    | Method (_, _, mspec, m, _, _, _) 
-    | StaticMethod (mspec, m, _) ->
+    | Method (_, _, mspec, m, _, _, _) ->
         error(Error(FSComp.SR.ilStaticMethodIsNotLambda(mspec.Name), m))
 
     | Null ->
@@ -6121,9 +6108,6 @@ and GenGetStorageAndSequel cenv cgbuf eenv m (ty, ilTy) storage storeSequel =
                 MakeApplicationAndBetaReduce g (expr, exprty, [tyargs'], args, m)
             GenExpr cenv cgbuf eenv SPSuppress specializedExpr sequel
 
-
-    | StaticMethod _ -> ()
-
     | Null ->
         CG.EmitInstr cgbuf (pop 0) (Push [ilTy]) (AI_ldnull)
         CommitGetStorageSequel cenv cgbuf eenv m ty None storeSequel
@@ -6180,17 +6164,29 @@ and AllocLocalVal cenv cgbuf v eenv repr scopeMarks =
         
                 let idx, realloc, eenv = AllocLocal cenv cgbuf eenv v.IsCompilerGenerated (v.CompiledName g.CompilerGlobalState, g.ilg.typ_Object, false) scopeMarks
                 Local (idx, realloc, Some(ref (NamedLocalIlxClosureInfoGenerator cloinfoGenerate))), eenv
-            | Some (Expr.Lambda (_, _, _, _, _body, _, _) as r) when not v.IsCompiledAsTopLevel ->
+            | Some (Expr.Lambda (_, _, _, args, _, _, _) as r) when not v.IsCompiledAsTopLevel ->
                 let m = v.Range
-                let cloinfo, body, eenvinner = GetIlxClosureInfo cenv m false None eenv r
-                let ilCloBody = CodeGenMethodForExpr cenv cgbuf.mgbuf (SPAlways, [], cloinfo.cloName, eenvinner, 1, body, Return)
-                let mdef = mkILStaticMethod(cloinfo.localTypeFuncDirectILGenericParams, cloinfo.cloName, ILMemberAccess.Assembly, cloinfo.ilCloLambdas.Parameters, mkILReturn cloinfo.cloILFormalRetTy, MethodBody.IL ilCloBody)
+                let cloinfo, _, _ = GetIlxClosureInfo cenv m false None eenv r
+             //   let ilCloBody = CodeGenMethodForExpr cenv cgbuf.mgbuf (SPAlways, [], cloinfo.cloName, eenvinner, 1, body, Return)
+           //     let _mdef = mkILStaticMethod(cloinfo.localTypeFuncDirectILGenericParams, cloinfo.cloName, ILMemberAccess.Assembly, cloinfo.ilCloLambdas.Parameters, mkILReturn cloinfo.cloILFormalRetTy, MethodBody.IL ilCloBody)
                 let tref = mkILTyRef (eenv.cloc.Scope, eenv.cloc.TopImplQualifiedName)
-                cgbuf.mgbuf.AddMethodDef (tref, mdef)
+         //       cgbuf.mgbuf.AddMethodDef (tref, mdef)
+
 
                 let mref = ILMethodRef.Create(tref, ILCallingConv.Static, cloinfo.cloName, cloinfo.cloILGenericParams.Length, cloinfo.ilCloLambdas.Parameters |> List.map (fun x -> x.Type), cloinfo.cloILFormalRetTy)
                 let mspec = ILMethodSpec.Create(mkILTyForCompLoc eenv.cloc, mref, cloinfo.cloSpec.GenericArgs)
-                let storage = StaticMethod(mspec, m, OptionalShadowLocal.NoShadowLocal)
+
+                let argInfos =
+                    args
+                    |> List.map (fun x -> { Attribs = x.Attribs; Name = Some x.Id } : ArgReprInfo)
+                let argTys =
+                    args
+                    |> List.map (fun x -> x.Type)
+                let repr = ValReprInfo ([], [argInfos], ValReprInfo.unnamedRetVal)
+                let storage = Method(repr, mkLocalValRef v, mspec, m, argInfos, argTys, ValReprInfo.unnamedRetVal)
+
+
+              //  let storage = StaticMethod(mspec, m, OptionalShadowLocal.NoShadowLocal)
                 storage, eenv
             | _ -> 
                 // normal local 
@@ -7696,7 +7692,6 @@ let LookupGeneratedValue (amap: ImportMap) (ctxt: ExecutionContext) eenv (v: Val
           Some (null, objTyp())
       | Local _ -> None 
       | Method _ -> None
-      | StaticMethod _ -> None
       | Arg _ -> None
       | Env _ -> None
   with
