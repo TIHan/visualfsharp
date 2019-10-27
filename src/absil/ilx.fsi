@@ -64,6 +64,8 @@ type IlxClosureLambdas =
     | Lambdas_lambda of ILParameter * IlxClosureLambdas
     | Lambdas_return of ILType
 
+    member Parameters : ILParameter list
+
 type IlxClosureFreeVar = 
     { fvName: string  
       fvCompilerGenerated:bool 

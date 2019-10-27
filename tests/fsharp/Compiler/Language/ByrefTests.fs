@@ -9,6 +9,21 @@ open FSharp.Compiler.SourceCodeServices
 module ByrefTests =
 
     [<Test>]
+    let ``Doot`` () =
+        CompilerAssert.CompileExe("""
+[<EntryPoint>]
+let main argv =
+    let f (x: byref<int>) = 1
+
+
+    let mutable y = 1
+   // let w = &y
+    let z = f &y
+    printfn "%A" z
+    0
+        """)
+
+    [<Test>]
     let ``No defensive copy on .NET struct`` () =
         CompilerAssert.Pass
             """
