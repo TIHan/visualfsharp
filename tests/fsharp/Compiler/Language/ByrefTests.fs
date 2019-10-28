@@ -9,16 +9,17 @@ open FSharp.Compiler.SourceCodeServices
 module ByrefTests =
 
     [<Test>]
-    let ``Doot`` () =
+    let ``Doot2`` () =
         CompilerAssert.CompileExe("""
 [<EntryPoint>]
 let main argv =
-    let f (x: byref<int>) = 1
+    let woot = 500
+    let f (x: byref<int>) (y: int) = woot
 
 
     let mutable y = 1
    // let w = &y
-    let z = f &y
+    let z = f &y y
     printfn "%A" z
     0
         """)
