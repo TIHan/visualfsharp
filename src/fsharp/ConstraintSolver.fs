@@ -2713,6 +2713,10 @@ let AddCxTypeEqualsType contextInfo denv css m actual expected  =
     SolveTypeEqualsTypeWithReport (MakeConstraintSolverEnv contextInfo css m denv) 0 m NoTrace None actual expected
     |> RaiseOperationResult
 
+let AddCxTypeMeetsTyparConstraints contextInfo denv css m ty r  = 
+    solveTypMeetsTyparConstraints (MakeConstraintSolverEnv contextInfo css m denv) 0 m NoTrace ty r
+    |> RaiseOperationResult
+
 let UndoIfFailed f =
     let trace = Trace.New()
     let res = 

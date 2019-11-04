@@ -543,6 +543,9 @@ let CopyAndFixupTypars m rigid tpsorig =
 let UnifyTypes cenv (env: TcEnv) m actualTy expectedTy = 
     ConstraintSolver.AddCxTypeEqualsType env.eContextInfo env.DisplayEnv cenv.css m (tryNormalizeMeasureInType cenv.g actualTy) (tryNormalizeMeasureInType cenv.g expectedTy)
 
+let TypeMeetsTyparConstraints cenv (env: TcEnv) m ty r = 
+    ConstraintSolver.AddCxTypeMeetsTyparConstraints env.eContextInfo env.DisplayEnv cenv.css m (tryNormalizeMeasureInType cenv.g ty) r
+
 /// Make the initial type checking environment for a single file with an empty accumulator for the overall contents for the file
 let MakeInitialEnv env = 
     // Note: here we allocate a new module type accumulator 
@@ -2817,9 +2820,7 @@ let TcVal checkAttributes cenv env tpenv (vref: ValRef) optInst optAfterResoluti
                                 checkInst tinst
                                 if tpsorig.Length <> tinst.Length then error(Error(FSComp.SR.tcTypeParameterArityMismatch(tpsorig.Length, tinst.Length), m))
                                 let tau2 = instType (mkTyparInst tpsorig tinst) tau
-                                (tpsorig, tinst) ||> List.iter2 (fun tp ty -> 
-                                    try UnifyTypes cenv env m (mkTyparTy tp) ty
-                                    with _ -> error (Recursion(env.DisplayEnv, v.Id, tau2, tau, m))) 
+                                List.iter2 (TypeMeetsTyparConstraints cenv env m) tinst tpsorig
                                 tpsorig, vrefFlags, tinst, tau2, tpenv  
                             | ValInRecScope true 
                             | ValNotInRecScope ->
