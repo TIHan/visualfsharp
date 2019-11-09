@@ -74,7 +74,6 @@ module Driver =
         0 
 
 let run argv =
-    System.Runtime.GCSettings.LatencyMode <- System.Runtime.GCLatencyMode.Batch
     use unwindBuildPhase = PushThreadBuildPhaseUntilUnwind BuildPhase.Parameter
 
     if not runningOnMono then Lib.UnmanagedProcessExecutionOptions.EnableHeapTerminationOnCorruption() (* SDL recommendation *)
@@ -101,7 +100,8 @@ type FSCompilerServer () =
             try
                 pipeServer.WaitForConnection()
 
-                while pipeServer.IsConnected do
+                let mutable didDisconnect = false
+                while not didDisconnect && pipeServer.IsConnected do
                     if pipeServer.IsMessageComplete then
                         use sr = new StreamReader(pipeServer, Encoding.UTF8, false, 1024 * 10, true)
                         use sw = new StreamWriter(pipeServer, Encoding.UTF8, 1024 * 10, true)
@@ -111,7 +111,7 @@ type FSCompilerServer () =
                         sw.WriteLine("***success***" + string exitCode)
                         sw.Flush()
                         pipeServer.WaitForPipeDrain()
-                        pipeServer.Disconnect()
+                        didDisconnect <- true
             with
             | :? IOException as ex ->
                 printfn "FSCompiler Server IO Error: %s" ex.Message
