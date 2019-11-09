@@ -110,6 +110,7 @@ type FSCompilerServer () =
                         let exitCode: int = run argv
                         sw.WriteLine("***success***" + string exitCode)
                         sw.Flush()
+                        pipeServer.WaitForPipeDrain()
                         pipeServer.Disconnect()
             with
             | :? IOException as ex ->
