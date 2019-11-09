@@ -176,16 +176,34 @@ let processStartServer(argv) =
 
     Process.Start(startInfo) |> ignore
 
+let fixPath (x: string) =
+    if not (String.IsNullOrWhiteSpace(x)) && not (x.StartsWith("-")) && not (Path.IsPathRooted(x)) then
+        Path.Combine(Environment.CurrentDirectory, x)
+    elif x.StartsWith("-o:") then
+        let path = x.Replace("-o:", "")
+        if Path.IsPathRooted(path) then
+            x
+        else
+            "-o:" + Path.Combine(Environment.CurrentDirectory, path)
+    else
+        x
+
 [<EntryPoint>]
 let main(argv) =
     let isServer, argv =
         if argv.Length > 0 && argv.[0] = "server" then true, argv |> Array.skip 1
         else false, (argv 
                      |> Array.map (fun x -> 
-                        if not (x.StartsWith("-")) && not (x.StartsWith("@")) && not (Path.IsPathRooted(x)) then
-                            Path.Combine(Environment.CurrentDirectory, x)
+                        if x.StartsWith("@") then
+                            let filePath = x.Replace("@", "")
+                            let text =
+                                File.ReadAllText(filePath).Replace("\r", "").Split('\n')
+                                |> Array.map fixPath
+                                |> Array.reduce (fun s1 s2 -> s1 + "\n" + s2)
+                            File.WriteAllText(filePath, text)
+                            x
                         else
-                            x)
+                            fixPath x)
                      )
 
     if isServer then
