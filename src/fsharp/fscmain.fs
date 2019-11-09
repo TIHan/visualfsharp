@@ -51,11 +51,12 @@ module Driver =
         let quitProcessExiter = 
             { new Exiter with 
                 member x.Exit(n) =                    
-                    try 
-                      exit n
+                    try ()
+                      //exit n
                     with _ -> 
-                      ()            
-                    failwithf "%s" <| FSComp.SR.elSysEnvExitDidntExit() 
+                      ()
+                    Unchecked.defaultof<_>
+                    //failwithf "%s" <| FSComp.SR.elSysEnvExitDidntExit() 
             }
 
         let legacyReferenceResolver = 
@@ -72,8 +73,7 @@ module Driver =
         mainCompile (ctok, argv, legacyReferenceResolver, (*bannerAlreadyPrinted*)false, ReduceMemoryFlag.No, CopyFSharpCoreFlag.Yes, quitProcessExiter, ConsoleLoggerProvider(), None, None)
         0 
 
-[<EntryPoint>]
-let main(argv) =
+let run argv =
     System.Runtime.GCSettings.LatencyMode <- System.Runtime.GCLatencyMode.Batch
     use unwindBuildPhase = PushThreadBuildPhaseUntilUnwind BuildPhase.Parameter
 
@@ -85,3 +85,119 @@ let main(argv) =
     with e -> 
         errorRecovery e FSharp.Compiler.Range.range0
         1
+
+open System.IO
+open System.IO.Pipes
+open System.Text
+open System.Threading
+open System.Diagnostics
+
+type FSCompilerServer () =
+
+    member this.StartLoop(run) =
+        while true do
+            printfn "Waiting for connection..."
+            use pipeServer = new NamedPipeServerStream("FSCompiler", PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Message, PipeOptions.None)
+            try
+                pipeServer.WaitForConnection()
+
+                while pipeServer.IsConnected do
+                    if pipeServer.IsMessageComplete then
+                        use sr = new StreamReader(pipeServer, Encoding.UTF8, false, 1024 * 10, true)
+                        use sw = new StreamWriter(pipeServer, Encoding.UTF8, 1024 * 10, true)
+                        let msg = sr.ReadLine()
+                        let argv = msg.Split(';')
+                        let exitCode: int = run argv
+                        sw.WriteLine("***success***" + string exitCode)
+                        sw.Flush()
+                        pipeServer.Disconnect()
+            with
+            | :? IOException as ex ->
+                printfn "FSCompiler Server IO Error: %s" ex.Message
+            | ex ->
+                printfn "%A" ex
+
+    interface IDisposable with
+
+        member _.Dispose() = ()
+
+type FSCompilerClient () =
+    
+    let pipeClient = new NamedPipeClientStream(".", "FSCompiler", PipeDirection.InOut, PipeOptions.None, Security.Principal.TokenImpersonationLevel.Impersonation)
+
+    member _.Start(argv: string [], connectTimeoutInSeconds) =
+        try
+            pipeClient.Connect(TimeSpan.FromSeconds(float connectTimeoutInSeconds).TotalMilliseconds |> int)
+            use sr = new StreamReader(pipeClient, Encoding.UTF8, false, 256, true)          
+            use sw = new StreamWriter(pipeClient, Encoding.UTF8, 256, true)
+            sw.AutoFlush <- true
+
+            let msg =
+                if argv.Length > 0 then
+                    argv |> Array.reduce (fun s1 s2 -> s1 + ";" + s2)
+                else
+                    String.Empty
+            sw.WriteLine(msg)
+            let read = sr.ReadLine()
+            if read.StartsWith("***success***") then
+                Int32.Parse(read.Replace("***success***", String.Empty))
+            else
+                stderr.Write read
+                0
+        with
+        | :? IOException as ex ->
+            printfn "FSCompiler Client IO Error: %s" ex.Message
+            0
+
+    interface IDisposable with
+
+        member _.Dispose() = pipeClient.Dispose()
+
+module RuntimeHostInfo =
+
+#if NETCOREAPP
+    let tryGetDotNetPath() = Some "dotnet"
+#else
+    let tryGetDotNetPath() = None
+#endif
+
+    let entryName = System.Reflection.Assembly.GetEntryAssembly().Location
+
+
+let processStartServer(argv) =
+    let startInfo = 
+        match RuntimeHostInfo.tryGetDotNetPath() with
+        | Some dotNetPath ->
+            ProcessStartInfo(dotNetPath, Array.append [|RuntimeHostInfo.entryName;"server"|] argv |> Array.reduce(fun s1 s2 -> s1 + " " + s2))
+        | _ ->
+            ProcessStartInfo(RuntimeHostInfo.entryName, Array.append [|"server"|] argv |> Array.reduce(fun s1 s2 -> s1 + " " + s2))
+
+    startInfo.UseShellExecute <- true
+
+    Process.Start(startInfo) |> ignore
+
+[<EntryPoint>]
+let main(argv) =
+    let isServer, argv =
+        if argv.Length > 0 && argv.[0] = "server" then true, argv |> Array.skip 1
+        else false, (argv 
+                     |> Array.map (fun x -> 
+                        if not (x.StartsWith("-")) && not (x.StartsWith("@")) && not (Path.IsPathRooted(x)) then
+                            Path.Combine(Environment.CurrentDirectory, x)
+                        else
+                            x)
+                     )
+
+    if isServer then
+        use server = new FSCompilerServer()
+        server.StartLoop(run)
+        1
+    else
+        try
+            use client = new FSCompilerClient()
+            client.Start(argv, 1)
+        with
+        | :? TimeoutException ->
+            processStartServer(argv)
+            use client = new FSCompilerClient()
+            client.Start(argv, 10)

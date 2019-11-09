@@ -33,7 +33,7 @@ let logging = false
 let _ = if checking then dprintn "warning: ILBinaryReader.checking is on"
 let noStableFileHeuristic = try (System.Environment.GetEnvironmentVariable("FSharp_NoStableFileHeuristic") <> null) with _ -> false
 let alwaysMemoryMapFSC = try (System.Environment.GetEnvironmentVariable("FSharp_AlwaysMemoryMapCommandLineCompiler") <> null) with _ -> false
-let stronglyHeldReaderCacheSizeDefault = 30
+let stronglyHeldReaderCacheSizeDefault = 1024
 let stronglyHeldReaderCacheSize = try (match System.Environment.GetEnvironmentVariable("FSharp_StronglyHeldBinaryReaderCacheSize") with null -> stronglyHeldReaderCacheSizeDefault | s -> int32 s) with _ -> stronglyHeldReaderCacheSizeDefault
 
 let singleOfBits (x: int32) = System.BitConverter.ToSingle(System.BitConverter.GetBytes x, 0)
