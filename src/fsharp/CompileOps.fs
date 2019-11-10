@@ -2850,7 +2850,6 @@ type TcConfig private (data: TcConfigBuilder, validate: bool) =
     /// 'framework' reference set that is potentially shared across multiple compilations.
     member tcConfig.IsSystemAssembly (filename: string) =
         try
-            FileSystem.SafeExists filename &&
             ((tcConfig.GetTargetFrameworkDirectories() |> List.exists (fun clrRoot -> clrRoot = Path.GetDirectoryName filename)) ||
              (systemAssemblies.Contains (fileNameWithoutExtension filename)) ||
              isInReferenceAssemblyPackDirectory filename)
