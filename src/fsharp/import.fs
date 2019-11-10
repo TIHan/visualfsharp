@@ -539,7 +539,7 @@ let ImportILAssemblyTypeDefs (amap, m, auxModLoader, aref, mainmod: ILModuleDef)
 let ImportILAssemblyTypeForwarders (amap, m, exportedTypes: ILExportedTypesAndForwarders) = 
     // Note 'td' may be in another module or another assembly!
     // Note: it is very important that we call auxModLoader lazily
-    [ //printfn "reading forwarders..." 
+    seq { //printfn "reading forwarders..." 
         for exportedType in exportedTypes.AsList do 
             let ns, n = splitILTypeName exportedType.Name
             //printfn "found forwarder for %s..." n
@@ -553,7 +553,7 @@ let ImportILAssemblyTypeForwarders (amap, m, exportedTypes: ILExportedTypesAndFo
                     yield (Array.ofList enc, exportedType.Name), tcref 
                     yield! nested net.Nested (enc @ [ net.Name ]) ]
             yield! nested exportedType.Nested (ns@[n]) 
-    ] |> Map.ofList
+    } |> Map.ofSeq
   
 
 /// Import an IL assembly as a new TAST CCU

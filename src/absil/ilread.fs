@@ -349,9 +349,6 @@ type WeakByteFile(fileName: string, chunk: (int * int) option) =
 
     do stats.weakByteFileCount <- stats.weakByteFileCount + 1
 
-    /// Used to check that the file hasn't changed
-    let fileStamp = FileSystem.GetLastWriteTimeShim fileName
-
     /// The weak handle to the bytes for the file
     let weakBytes = new WeakReference<byte[]> (null)
 
@@ -364,9 +361,6 @@ type WeakByteFile(fileName: string, chunk: (int * int) option) =
             let strongBytes = 
                 let mutable tg = null
                 if not (weakBytes.TryGetTarget(&tg)) then 
-                    if FileSystem.GetLastWriteTimeShim fileName <> fileStamp then 
-                        error (Error (FSComp.SR.ilreadFileChanged fileName, range0))
-
                     let bytes = 
                         match chunk with 
                         | None -> FileSystem.ReadAllBytesShim fileName

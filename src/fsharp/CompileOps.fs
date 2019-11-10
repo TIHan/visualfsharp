@@ -1800,13 +1800,12 @@ let TryResolveFileUsingPaths(paths, m, name) =
     let () = 
         try FileSystem.IsPathRootedShim name |> ignore 
         with :? System.ArgumentException as e -> error(Error(FSComp.SR.buildProblemWithFilename(name, e.Message), m))
-    if FileSystem.IsPathRootedShim name && FileSystem.SafeExists name 
+    if FileSystem.IsPathRootedShim name 
     then Some name 
     else
         let res = paths |> List.tryPick (fun path ->  
                     let n = Path.Combine (path, name)
-                    if FileSystem.SafeExists n then Some n 
-                    else None)
+                    Some n)
         res
 
 /// Will raise FileNameNotResolved if the filename was not found
@@ -1874,11 +1873,10 @@ type VersionFlag =
          | VersionString s -> s
          | VersionFile s ->
              let s = if FileSystem.IsPathRootedShim s then s else Path.Combine(implicitIncludeDir, s)
-             if not(FileSystem.SafeExists s) then 
-                 errorR(Error(FSComp.SR.buildInvalidVersionFile s, rangeStartup)); "0.0.0.0"
-             else
+             try
                  use is = System.IO.File.OpenText s
                  is.ReadLine()
+             with _ -> errorR(Error(FSComp.SR.buildInvalidVersionFile s, rangeStartup)); "0.0.0.0"
          | VersionNone -> "0.0.0.0"
 
 
@@ -2568,11 +2566,7 @@ type TcConfig private (data: TcConfigBuilder, validate: bool) =
         let defaultCoreLibraryReference = AssemblyReference(range0, libraryName+".dll", None)
         let nameOfDll(r: AssemblyReference) = 
             let filename = ComputeMakePathAbsolute data.implicitIncludeDir r.Text
-            if FileSystem.SafeExists filename then 
-                r, Some filename
-            else
-                // If the file doesn't exist, let reference resolution logic report the error later...
-                defaultCoreLibraryReference, if Range.equals r.Range rangeStartup then Some(filename) else None
+            r, Some filename
         match data.referencedDLLs |> List.filter (fun assemblyReference -> assemblyReference.SimpleAssemblyNameIs libraryName) with
         | [] -> defaultCoreLibraryReference, None
         | [r]
@@ -2828,13 +2822,7 @@ type TcConfig private (data: TcConfigBuilder, validate: bool) =
 
     member tcConfig.GetAvailableLoadedSources() =
         use unwindBuildPhase = PushThreadBuildPhaseUntilUnwind BuildPhase.Parameter
-        let resolveLoadedSource (m, path) =
-            try
-                if not(FileSystem.SafeExists path) then 
-                    error(LoadedSourceNotFoundIgnoring(path, m))                         
-                    None
-                else Some(m, path)
-            with e -> errorRecovery e m; None
+        let resolveLoadedSource (m, path) = Some(m, path)
         tcConfig.loadedSources 
         |> List.choose resolveLoadedSource 
         |> List.distinct     
@@ -3437,10 +3425,12 @@ let ParseOneInputFile (tcConfig: TcConfig, lexResourceManager, conditionalCompil
     try 
        let lower = String.lowercase filename
        if List.exists (Filename.checkSuffix lower) (FSharpSigFileSuffixes@FSharpImplFileSuffixes) then  
-            if not(FileSystem.SafeExists filename) then
-                error(Error(FSComp.SR.buildCouldNotFindSourceFile filename, rangeStartup))
             let isFeatureSupported featureId = tcConfig.langVersion.SupportsFeature featureId
-            let lexbuf = UnicodeLexing.UnicodeFileAsLexbuf(isFeatureSupported, filename, tcConfig.inputCodePage, retryLocked) 
+            let lexbuf =
+                try
+                    UnicodeLexing.UnicodeFileAsLexbuf(isFeatureSupported, filename, tcConfig.inputCodePage, retryLocked) 
+                with
+                | :? IOException -> error(Error(FSComp.SR.buildCouldNotFindSourceFile filename, rangeStartup))
             ParseOneInputLexbuf(tcConfig, lexResourceManager, conditionalCompilationDefines, lexbuf, filename, isLastCompiland, errorLogger)
        else error(Error(FSComp.SR.buildInvalidSourceFileExtension(SanitizeFileName filename tcConfig.implicitIncludeDir), rangeStartup))
     with e -> (* errorR(Failure("parse failed")); *) errorRecovery e rangeStartup; None 
@@ -4023,13 +4013,8 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
             // are reading, so that --standalone will preserve debug information. 
             if tcConfig.openDebugInformationForLaterStaticLinking then 
                 let pdbDir = try Filename.directoryName filename with _ -> "."
-                let pdbFile = (try Filename.chopExtension filename with _ -> filename) + ".pdb" 
 
-                if FileSystem.SafeExists pdbFile then 
-                    if verbose then dprintf "reading PDB file %s from directory %s\n" pdbFile pdbDir
-                    Some pdbDir
-                else
-                    None
+                Some pdbDir
             else
                 None
 
