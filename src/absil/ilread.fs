@@ -886,49 +886,44 @@ type GenericParamsIdx = GenericParamsIdx of int * TypeOrMethodDefTag * int
 // Polymorphic caches for row and heap readers
 //---------------------------------------------------------------------
 
-let mkCacheInt32 lowMem _inbase _nm _sz =
-    if lowMem then (fun f x -> f x) else
-    let cache = ref null 
-    let count = ref 0
-#if STATISTICS
-    addReport (fun oc -> if !count <> 0 then oc.WriteLine ((_inbase + string !count + " "+ _nm + " cache hits"): string))
-#endif
-    fun f (idx: int32) ->
-        let cache = 
-            match !cache with
-            | null -> cache := new Dictionary<int32, _>(11)
-            | _ -> ()
-            !cache
-        match cache.TryGetValue idx with
-        | true, res ->
-            incr count 
-            res
-        | _ ->
-            let res = f idx 
-            cache.[idx] <- res 
-            res 
-
 let mkCacheGeneric lowMem _inbase _nm _sz =
     if lowMem then (fun f x -> f x) else
     let cache = ref null 
     let count = ref 0
+    let gate = obj ()
 #if STATISTICS
     addReport (fun oc -> if !count <> 0 then oc.WriteLine ((_inbase + string !count + " " + _nm + " cache hits"): string))
 #endif
     fun f (idx :'T) ->
         let cache = 
             match !cache with
-            | null -> cache := new Dictionary<_, _>(11 (* sz: int *) ) 
-            | _ -> ()
-            !cache
+            | null ->
+                lock gate (fun () ->
+                    match !cache with
+                    | null -> cache := new ConcurrentDictionary<_, _>()
+                    | _ -> ()
+                    !cache
+                )
+            | _ -> 
+                !cache
         match cache.TryGetValue idx with
-        | true, v ->
-            incr count
-            v
-        | _ ->
-            let res = f idx
-            cache.[idx] <- res
+        | true, res ->
+            incr count 
             res
+        | _ ->
+            lock gate (fun () ->
+                match cache.TryGetValue idx with
+                | true, res ->
+                    incr count 
+                    res
+                | _ ->
+                    let res = f idx 
+                    cache.[idx] <- res 
+                    res
+            )
+
+let mkCacheInt32 lowMem inbase nm sz : ((int -> _) -> int -> _) =
+    mkCacheGeneric lowMem inbase nm sz
 
 //-----------------------------------------------------------------------
 // Polymorphic general helpers for searching for particular rows.

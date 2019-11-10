@@ -855,6 +855,12 @@ let languageFlags tcConfigB =
 // OptionBlock: Advanced user options
 //-----------------------------------
 
+let buildFromFlag (tcConfigB: TcConfigBuilder) = 
+    CompilerOption
+        ("build-from", tagString,
+         OptionString (fun s -> tcConfigB.implicitIncludeDir <- s), None,
+         None)
+
 let libFlag (tcConfigB: TcConfigBuilder) = 
     CompilerOption
         ("lib", tagDirList,
@@ -914,6 +920,7 @@ let advancedFlagsBoth tcConfigB =
         yield utf8OutputFlag tcConfigB
         yield preferredUiLang tcConfigB
         yield fullPathsFlag tcConfigB
+        yield buildFromFlag tcConfigB
         yield libFlag tcConfigB
         yield CompilerOption
                  ("simpleresolution",

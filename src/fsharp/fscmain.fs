@@ -91,38 +91,47 @@ open System.Text
 open System.Threading
 open System.Diagnostics
 
-type FSCompilerServer () =
+type FSCompilerServer (run) =
 
-    member this.StartLoop(run) =
-        while true do
-            printfn "Waiting for connection..."
-            use pipeServer = new NamedPipeServerStream("FSCompiler", PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Message, PipeOptions.None)
-            try
-                pipeServer.WaitForConnection()
+    let rec server () =
+        use pipeServer = new NamedPipeServerStream("FSCompiler", PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Message, PipeOptions.None)
+        try
+            pipeServer.WaitForConnection()
 
-                let mutable didDisconnect = false
-                while not didDisconnect && pipeServer.IsConnected do
-                    if pipeServer.IsMessageComplete then
-                        use sr = new StreamReader(pipeServer, Encoding.UTF8, false, 1024 * 10, true)
-                        use sw = new StreamWriter(pipeServer, Encoding.UTF8, 1024 * 10, true)
-                        let msg = sr.ReadLine()
-                        let argv = msg.Split(';')
-                        let exitCode: int = run argv
-                        sw.WriteLine("***success***" + string exitCode)
-                        sw.Flush()
-                        pipeServer.WaitForPipeDrain()
-                        didDisconnect <- true
-            with
-            | :? IOException as ex ->
-                printfn "FSCompiler Server IO Error: %s" ex.Message
-            | ex ->
-                printfn "%A" ex
+            let mutable didDisconnect = false
+            while not didDisconnect && pipeServer.IsConnected do
+                if pipeServer.IsMessageComplete then
+                    use sr = new StreamReader(pipeServer, Encoding.UTF8, false, 1024 * 10, true)
+                    use sw = new StreamWriter(pipeServer, Encoding.UTF8, 1024 * 10, true)
+                    let msg = sr.ReadLine()
+                    let argv = msg.Split(';')
+                    let exitCode: int = run argv
+                    sw.WriteLine("***success***" + string exitCode)
+                    sw.Flush()
+                    pipeServer.WaitForPipeDrain()
+                    didDisconnect <- true
+        with
+        | :? IOException as ex ->
+            printfn "FSCompiler Server IO Error: %s" ex.Message
+        | ex ->
+            printfn "%A" ex
+        server ()
+
+    member this.Start() =
+        let waitHandle = new EventWaitHandle(false, EventResetMode.AutoReset)
+        let threadCount = Environment.ProcessorCount
+
+        for _ in 1..threadCount do
+            let thread = Thread(server)
+            thread.Start()
+
+        waitHandle.WaitOne() |> ignore
 
     interface IDisposable with
 
         member _.Dispose() = ()
 
-type FSCompilerClient () =
+type FSCompilerClient (run) =
     
     let pipeClient = new NamedPipeClientStream(".", "FSCompiler", PipeDirection.InOut, PipeOptions.None, Security.Principal.TokenImpersonationLevel.Impersonation)
 
@@ -148,7 +157,7 @@ type FSCompilerClient () =
         with
         | :? IOException as ex ->
             printfn "FSCompiler Client IO Error: %s" ex.Message
-            0
+            run argv // fallback
 
     interface IDisposable with
 
@@ -193,30 +202,18 @@ let fixPath (x: string) =
 let main(argv) =
     let isServer, argv =
         if argv.Length > 0 && argv.[0] = "server" then true, argv |> Array.skip 1
-        else false, (argv 
-                     |> Array.map (fun x -> 
-                        if x.StartsWith("@") then
-                            let filePath = x.Replace("@", "")
-                            let text =
-                                File.ReadAllText(filePath).Replace("\r", "").Split('\n')
-                                |> Array.map fixPath
-                                |> Array.reduce (fun s1 s2 -> s1 + "\n" + s2)
-                            File.WriteAllText(filePath, text)
-                            x
-                        else
-                            fixPath x)
-                     )
+        else false, (Array.append [|"--build-from:" + Directory.GetCurrentDirectory()|] argv)
 
     if isServer then
-        use server = new FSCompilerServer()
-        server.StartLoop(run)
+        use server = new FSCompilerServer(run)
+        server.Start()
         1
     else
         try
-            use client = new FSCompilerClient()
+            use client = new FSCompilerClient(run)
             client.Start(argv, 1)
         with
         | :? TimeoutException ->
             processStartServer(argv)
-            use client = new FSCompilerClient()
+            use client = new FSCompilerClient(run)
             client.Start(argv, 10)
