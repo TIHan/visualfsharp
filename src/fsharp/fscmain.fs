@@ -90,6 +90,39 @@ open System.IO.Pipes
 open System.Text
 open System.Threading
 open System.Diagnostics
+open System.Security.AccessControl
+
+type FSCompilerClient (run) =
+    
+    let pipeClient = new NamedPipeClientStream(".", "FSCompiler", PipeDirection.InOut, PipeOptions.None, Security.Principal.TokenImpersonationLevel.Impersonation)
+
+    member _.Start(argv: string [], timeout) =
+        try
+            pipeClient.Connect(timeout)
+            use sr = new StreamReader(pipeClient, Encoding.UTF8, false, 256, true)          
+            use sw = new StreamWriter(pipeClient, Encoding.UTF8, 256, true)
+            sw.AutoFlush <- true
+
+            let msg =
+                if argv.Length > 0 then
+                    argv |> Array.reduce (fun s1 s2 -> s1 + ";" + s2)
+                else
+                    String.Empty
+            sw.WriteLine(msg)
+            let read = sr.ReadLine()
+            if read.StartsWith("***success***") then
+                Int32.Parse(read.Replace("***success***", String.Empty))
+            else
+                stderr.Write read
+                0
+        with
+        | :? IOException as ex ->
+            printfn "FSCompiler Client IO Error: %s" ex.Message
+            run argv // fallback
+
+    interface IDisposable with
+
+        member _.Dispose() = pipeClient.Dispose()
 
 type FSCompilerServer (run) =
 
@@ -131,38 +164,6 @@ type FSCompilerServer (run) =
 
         member _.Dispose() = ()
 
-type FSCompilerClient (run) =
-    
-    let pipeClient = new NamedPipeClientStream(".", "FSCompiler", PipeDirection.InOut, PipeOptions.None, Security.Principal.TokenImpersonationLevel.Impersonation)
-
-    member _.Start(argv: string [], connectTimeoutInSeconds) =
-        try
-            pipeClient.Connect(TimeSpan.FromSeconds(float connectTimeoutInSeconds).TotalMilliseconds |> int)
-            use sr = new StreamReader(pipeClient, Encoding.UTF8, false, 256, true)          
-            use sw = new StreamWriter(pipeClient, Encoding.UTF8, 256, true)
-            sw.AutoFlush <- true
-
-            let msg =
-                if argv.Length > 0 then
-                    argv |> Array.reduce (fun s1 s2 -> s1 + ";" + s2)
-                else
-                    String.Empty
-            sw.WriteLine(msg)
-            let read = sr.ReadLine()
-            if read.StartsWith("***success***") then
-                Int32.Parse(read.Replace("***success***", String.Empty))
-            else
-                stderr.Write read
-                0
-        with
-        | :? IOException as ex ->
-            printfn "FSCompiler Client IO Error: %s" ex.Message
-            run argv // fallback
-
-    interface IDisposable with
-
-        member _.Dispose() = pipeClient.Dispose()
-
 module RuntimeHostInfo =
 
 #if NETCOREAPP
@@ -174,13 +175,13 @@ module RuntimeHostInfo =
     let entryName = System.Reflection.Assembly.GetEntryAssembly().Location
 
 
-let processStartServer(argv) =
+let processStartServer() =
     let startInfo = 
         match RuntimeHostInfo.tryGetDotNetPath() with
         | Some dotNetPath ->
-            ProcessStartInfo(dotNetPath, Array.append [|RuntimeHostInfo.entryName;"server"|] argv |> Array.reduce(fun s1 s2 -> s1 + " " + s2))
+            ProcessStartInfo(dotNetPath, [|RuntimeHostInfo.entryName;"server"|] |> Array.reduce(fun s1 s2 -> s1 + " " + s2))
         | _ ->
-            ProcessStartInfo(RuntimeHostInfo.entryName, Array.append [|"server"|] argv |> Array.reduce(fun s1 s2 -> s1 + " " + s2))
+            ProcessStartInfo(RuntimeHostInfo.entryName, [|"server"|] |> Array.reduce(fun s1 s2 -> s1 + " " + s2))
 
     startInfo.UseShellExecute <- true
 
@@ -198,22 +199,66 @@ let fixPath (x: string) =
     else
         x
 
+///// <returns>
+///// Null if not enough information was found to create a valid pipe name.
+///// </returns>
+//internal static string GetPipeNameForPathOpt(string compilerExeDirectory)
+//{
+//    // Prefix with username and elevation
+//    bool isAdmin = false;
+//    if (PlatformInformation.IsWindows)
+//    {
+//        var currentIdentity = WindowsIdentity.GetCurrent();
+//        var principal = new WindowsPrincipal(currentIdentity);
+//        isAdmin = principal.IsInRole(WindowsBuiltInRole.Administrator);
+//    }
+
+//    var userName = Environment.UserName;
+//    if (userName == null)
+//    {
+//        return null;
+//    }
+
+//    return GetPipeName(userName, isAdmin, compilerExeDirectory);
+//}
+
+//internal static string GetPipeName(
+//    string userName,
+//    bool isAdmin,
+//    string compilerExeDirectory)
+//{
+//    // Normalize away trailing slashes.  File APIs include / exclude this with no 
+//    // discernable pattern.  Easiest to normalize it here vs. auditing every caller
+//    // of this method.
+//    compilerExeDirectory = compilerExeDirectory.TrimEnd(Path.DirectorySeparatorChar);
+
+//    var pipeNameInput = $"{userName}.{isAdmin}.{compilerExeDirectory}";
+//    using (var sha = SHA256.Create())
+//    {
+//        var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(pipeNameInput));
+//        return Convert.ToBase64String(bytes)
+//            .Replace("/", "_")
+//            .Replace("=", string.Empty);
+//    }
+//}
+
 [<EntryPoint>]
 let main(argv) =
     let isServer, argv =
-        if argv.Length > 0 && argv.[0] = "server" then true, argv |> Array.skip 1
+        if argv.Length > 0 && argv.[0] = "server" then true, [||]
         else false, (Array.append [|"--build-from:" + Directory.GetCurrentDirectory()|] argv)
+
+    let mutable createdNew = false
+    use serverMutex = new Mutex(true, "FSCompiler", &createdNew)
 
     if isServer then
         use server = new FSCompilerServer(run)
         server.Start()
         1
     else
-        try
-            use client = new FSCompilerClient(run)
-            client.Start(argv, 1)
-        with
-        | :? TimeoutException ->
-            processStartServer(argv)
-            use client = new FSCompilerClient(run)
-            client.Start(argv, 10)
+        if createdNew then
+            serverMutex.ReleaseMutex()
+            processStartServer()
+
+        use client = new FSCompilerClient(run)
+        client.Start(argv, 60000)
