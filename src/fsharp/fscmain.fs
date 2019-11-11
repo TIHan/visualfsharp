@@ -114,7 +114,7 @@ type FSCompilerClient (run) =
                 Int32.Parse(read.Replace("***success***", String.Empty))
             else
                 stderr.Write read
-                0
+                1
         with
         | :? IOException as ex ->
             printfn "FSCompiler Client IO Error: %s" ex.Message
@@ -254,7 +254,7 @@ let main(argv) =
     if isServer then
         use server = new FSCompilerServer(run)
         server.Start()
-        1
+        0
     else
         if createdNew then
             serverMutex.ReleaseMutex()
