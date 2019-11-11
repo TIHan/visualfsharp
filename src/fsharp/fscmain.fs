@@ -126,10 +126,15 @@ type FSCompilerClient (run) =
 
 type FSCompilerServer (run) =
 
+    let s = Stopwatch()
+    let runningThreads = Collections.Concurrent.ConcurrentDictionary()
+
     let rec server () =
         use pipeServer = new NamedPipeServerStream("FSCompiler", PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Message, PipeOptions.None)
         try
             pipeServer.WaitForConnection()
+            runningThreads.[Thread.CurrentThread.ManagedThreadId] <- ()
+            s.Restart()
 
             let mutable didDisconnect = false
             while not didDisconnect && pipeServer.IsConnected do
@@ -148,17 +153,25 @@ type FSCompilerServer (run) =
             printfn "FSCompiler Server IO Error: %s" ex.Message
         | ex ->
             printfn "%A" ex
+
+        let _, _ = runningThreads.TryRemove(Thread.CurrentThread.ManagedThreadId)
         server ()
 
     member this.Start() =
-        let waitHandle = new EventWaitHandle(false, EventResetMode.AutoReset)
         let threadCount = Environment.ProcessorCount
 
         for _ in 1..threadCount do
             let thread = Thread(server)
             thread.Start()
 
-        waitHandle.WaitOne() |> ignore
+        while true do
+            Thread.Sleep(250)
+            if runningThreads.Count = 0 && s.Elapsed.TotalSeconds > 5. then
+                printfn "Clear module reader cache"
+                FSharp.Compiler.AbstractIL.ILBinaryReader.ClearAllILModuleReaderCache()
+                printfn "GC invoking"
+                GC.Collect(2, GCCollectionMode.Forced, false, true)
+                s.Reset()
 
     interface IDisposable with
 
