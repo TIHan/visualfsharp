@@ -187,18 +187,6 @@ let processStartServer() =
 
     Process.Start(startInfo) |> ignore
 
-let fixPath (x: string) =
-    if not (String.IsNullOrWhiteSpace(x)) && not (x.StartsWith("-")) && not (Path.IsPathRooted(x)) then
-        Path.Combine(Environment.CurrentDirectory, x)
-    elif x.StartsWith("-o:") then
-        let path = x.Replace("-o:", "")
-        if Path.IsPathRooted(path) then
-            x
-        else
-            "-o:" + Path.Combine(Environment.CurrentDirectory, path)
-    else
-        x
-
 ///// <returns>
 ///// Null if not enough information was found to create a valid pipe name.
 ///// </returns>
