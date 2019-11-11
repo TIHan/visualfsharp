@@ -90,6 +90,7 @@ open System.IO.Pipes
 open System.Text
 open System.Threading
 open System.Diagnostics
+open System.Runtime
 open System.Security.AccessControl
 
 type FSCompilerClient (run) =
@@ -167,11 +168,13 @@ type FSCompilerServer (run) =
         while true do
             Thread.Sleep(250)
             if runningThreads.Count = 0 && s.Elapsed.TotalSeconds > 5. then
-                printfn "Clear module reader cache"
-                FSharp.Compiler.AbstractIL.ILBinaryReader.ClearAllILModuleReaderCache()
-                printfn "GC invoking"
-                GC.Collect(2, GCCollectionMode.Forced, false, true)
                 s.Reset()
+
+                for _ in 1..10 do
+                    GC.Collect()
+                    GC.WaitForPendingFinalizers()
+                GCSettings.LargeObjectHeapCompactionMode <- GCLargeObjectHeapCompactionMode.CompactOnce
+                GC.Collect()
 
     interface IDisposable with
 
