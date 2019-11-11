@@ -135,7 +135,6 @@ type FSCompilerServer (run) =
         try
             pipeServer.WaitForConnection()
             runningThreads.[Thread.CurrentThread.ManagedThreadId] <- ()
-            s.Restart()
 
             let mutable didDisconnect = false
             while not didDisconnect && pipeServer.IsConnected do
@@ -156,6 +155,7 @@ type FSCompilerServer (run) =
             printfn "%A" ex
 
         let _, _ = runningThreads.TryRemove(Thread.CurrentThread.ManagedThreadId)
+        s.Restart()
         server ()
 
     member this.Start() =
