@@ -888,39 +888,22 @@ type GenericParamsIdx = GenericParamsIdx of int * TypeOrMethodDefTag * int
 
 let mkCacheGeneric lowMem _inbase _nm _sz =
     if lowMem then (fun f x -> f x) else
-    let cache = ref null 
-    let count = ref 0
-    let gate = obj ()
+    let cache = new ConcurrentDictionary<_, _>()
 #if STATISTICS
+    let count = ref 0
     addReport (fun oc -> if !count <> 0 then oc.WriteLine ((_inbase + string !count + " " + _nm + " cache hits"): string))
 #endif
     fun f (idx :'T) ->
-        let cache = 
-            match !cache with
-            | null ->
-                lock gate (fun () ->
-                    match !cache with
-                    | null -> cache := new ConcurrentDictionary<_, _>()
-                    | _ -> ()
-                    !cache
-                )
-            | _ -> 
-                !cache
         match cache.TryGetValue idx with
         | true, res ->
+#if STATISTICS
             incr count 
+#endif
             res
         | _ ->
-            lock gate (fun () ->
-                match cache.TryGetValue idx with
-                | true, res ->
-                    incr count 
-                    res
-                | _ ->
-                    let res = f idx 
-                    cache.[idx] <- res 
-                    res
-            )
+            let res = f idx 
+            cache.[idx] <- res 
+            res
 
 let mkCacheInt32 lowMem inbase nm sz : ((int -> _) -> int -> _) =
     mkCacheGeneric lowMem inbase nm sz

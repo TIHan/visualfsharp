@@ -2169,12 +2169,12 @@ let typecheckAndCompile
         defaultCopyFSharpCore, exiter: Exiter, errorLoggerProvider, tcImportsCapture, dynamicAssemblyCreator) =
 
     use d = new DisposablesTracker()
-    let savedOut = System.Console.Out
+   // let savedOut = System.Console.Out
     use __ =
         { new IDisposable with
             member __.Dispose() = 
-                try 
-                    System.Console.SetOut(savedOut)
+                try ()
+               //     System.Console.SetOut(savedOut)
                 with _ -> ()}
 
     main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, defaultCopyFSharpCore, exiter, errorLoggerProvider, d)

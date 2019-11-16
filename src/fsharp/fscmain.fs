@@ -128,9 +128,10 @@ type FSCompilerClient (run) =
 type FSCompilerServer (run) =
 
     let s = Stopwatch()
+    let mutable total = 0.
     let runningThreads = Collections.Concurrent.ConcurrentDictionary()
 
-    let rec server () =
+    let rec server (total: float ref) =
         use pipeServer = new NamedPipeServerStream("FSCompiler", PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Message, PipeOptions.None)
         try
             pipeServer.WaitForConnection()
@@ -143,10 +144,14 @@ type FSCompilerServer (run) =
                     use sw = new StreamWriter(pipeServer, Encoding.UTF8, 1024 * 10, true)
                     let msg = sr.ReadLine()
                     let argv = msg.Split(';')
+                    let s = Stopwatch.StartNew()
                     let exitCode: int = run argv
+                    s.Stop()
+                    total := !total + s.Elapsed.TotalMilliseconds
                     sw.WriteLine("***success***" + string exitCode)
                     sw.Flush()
                     pipeServer.WaitForPipeDrain()
+
                     didDisconnect <- true
         with
         | :? IOException as ex ->
@@ -154,20 +159,25 @@ type FSCompilerServer (run) =
         | ex ->
             printfn "%A" ex
 
-        let _, _ = runningThreads.TryRemove(Thread.CurrentThread.ManagedThreadId)
+     //   printfn "Thread: %A - Total Time: %A" Thread.CurrentThread.ManagedThreadId !total
         s.Restart()
-        server ()
+        let _, _ = runningThreads.TryRemove(Thread.CurrentThread.ManagedThreadId)
+        server total
 
     member this.Start() =
-        let threadCount = Environment.ProcessorCount
+        let threadCount = 16
 
         for _ in 1..threadCount do
-            let thread = Thread(server)
+            let thread = Thread(fun () -> server (ref 0.))
             thread.Start()
 
         while true do
             Thread.Sleep(250)
-            if runningThreads.Count = 0 && s.Elapsed.TotalSeconds > 5. then
+            let runningThreadCount = runningThreads.Count
+            printfn "count: %A" runningThreadCount
+            if runningThreadCount = 0 && s.Elapsed.TotalSeconds > 60. then
+                printfn "invoking GC %A" total
+                total <- 0.
                 s.Reset()
 
                 for _ in 1..10 do

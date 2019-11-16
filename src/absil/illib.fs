@@ -1061,18 +1061,13 @@ type LazyWithContext<'T, 'ctxt> =
 module Tables = 
     let memoize f = 
         let t = new Collections.Concurrent.ConcurrentDictionary<_, _>(Environment.ProcessorCount, 1000, HashIdentity.Structural)
-        let gate = obj()
         fun x -> 
             match t.TryGetValue x with
             | true, res -> res
             | _ ->
-                lock gate (fun () ->
-                    match t.TryGetValue x with
-                    | true, res -> res
-                    | _ ->
-                        let res = f x
-                        t.[x] <- res
-                        res)
+                let res = f x
+                t.[x] <- res
+                res
 
 /// Interface that defines methods for comparing objects using partial equality relation
 type IPartialEqualityComparer<'T> = 
