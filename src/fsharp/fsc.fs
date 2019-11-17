@@ -1068,7 +1068,9 @@ module MainModuleBuilder =
             [ for av in assemblyVersionResources findAttribute assemblyVersion do
                   yield ILNativeResource.Out av
               if not(tcConfig.win32res = "") then
-                  yield ILNativeResource.Out (FileSystem.ReadAllBytesShim tcConfig.win32res) 
+                  let win32resPath =
+                    if FileSystem.IsPathRootedShim(tcConfig.win32res) then tcConfig.win32res else Path.Combine(tcConfig.implicitIncludeDir, tcConfig.win32res)
+                  yield ILNativeResource.Out (FileSystem.ReadAllBytesShim win32resPath) 
               if tcConfig.includewin32manifest && not(win32Manifest = "") && not runningOnMono then
                   yield  ILNativeResource.Out [| yield! ResFileFormat.ResFileHeader() 
                                                  yield! (ManifestResourceFormat.VS_MANIFEST_RESOURCE((FileSystem.ReadAllBytesShim win32Manifest), tcConfig.target = CompilerTarget.Dll)) |]]
