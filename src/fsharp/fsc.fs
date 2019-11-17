@@ -1702,12 +1702,25 @@ type CompilationThreadMessage =
 
 let lazyGlobalCompilationThread =
     lazy
+        let threadLookup = Collections.Concurrent.ConcurrentDictionary()
         let rec loop (p: MailboxProcessor<_>) = async {
             match! p.Receive () with
-            | Work work -> work ()
+            | Work work ->
+                let threadId = Thread.CurrentThread.ManagedThreadId
+                threadLookup.[threadId] <- ()
+                try
+                    work ()
+                finally
+                    threadLookup.TryRemove(threadId) |> ignore
             | WorkAndWait (work, ch) -> 
                 try
-                    let res = work ()
+                    let threadId = Thread.CurrentThread.ManagedThreadId
+                    threadLookup.[threadId] <- ()
+                    let res =
+                        try
+                            work ()
+                        finally
+                            threadLookup.TryRemove(threadId) |> ignore
                     ch.Reply(Result.Ok res)
                 with
                 | ex ->
@@ -1719,12 +1732,19 @@ let lazyGlobalCompilationThread =
         p.Start()
 
         let ctok = CompilationThreadToken()
-        { new ICompilationThread with
-            member _.EnqueueWork work = p.Post(Work(fun () -> work ctok))
+        { new ICompilationThread with   
+            member _.EnqueueWork work = 
+                if threadLookup.ContainsKey(Thread.CurrentThread.ManagedThreadId) then
+                    work ctok
+                else
+                    p.Post(Work(fun () -> work ctok))
             member _.EnqueueWorkAndWait work = 
-                match p.PostAndReply(fun ch -> WorkAndWait((fun () -> work ctok :> obj), ch)) with
-                | Result.Ok res -> res :?> _
-                | Result.Error ex -> raise ex }
+                if threadLookup.ContainsKey(Thread.CurrentThread.ManagedThreadId) then
+                    work ctok
+                else
+                    match p.PostAndReply(fun ch -> WorkAndWait((fun () -> work ctok :> obj), ch)) with
+                    | Result.Ok res -> res :?> _
+                    | Result.Error ex -> raise ex }
 
 [<NoEquality; NoComparison>]
 type Args<'T> = Args  of 'T
@@ -1809,6 +1829,9 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
     if not tcConfigB.continueAfterParseFailure && delayForFlagsLogger.ErrorCount > 0 then
         delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
         exiter.Exit 1
+
+    // TODO: by default this be should be empty
+    tcConfigB.compilationThread <- lazyGlobalCompilationThread.Value
     
     // If there's a problem building TcConfig, abort    
     let tcConfig = 
@@ -1828,9 +1851,6 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
 
     if not tcConfigB.continueAfterParseFailure then 
         AbortOnError(errorLogger, exiter)
-
-    // TODO: by default this be should be empty
-    tcConfigB.compilationThread <- lazyGlobalCompilationThread.Value
 
     // Resolve assemblies
     ReportTime tcConfig "Import mscorlib and FSharp.Core.dll"
