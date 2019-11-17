@@ -1696,6 +1696,36 @@ let CopyFSharpCore(outFile: string, referencedDlls: AssemblyReference list) =
 // Main phases of compilation
 //-----------------------------------------------------------------------------
 
+type CompilationThreadMessage =
+    | Work of (unit -> unit)
+    | WorkAndWait of (unit -> obj) * AsyncReplyChannel<Result<obj, exn>>
+
+let lazyGlobalCompilationThread =
+    lazy
+        let rec loop (p: MailboxProcessor<_>) = async {
+            match! p.Receive () with
+            | Work work -> work ()
+            | WorkAndWait (work, ch) -> 
+                try
+                    let res = work ()
+                    ch.Reply(Result.Ok res)
+                with
+                | ex ->
+                    ch.Reply(Result.Error ex)
+            return! loop p
+        }
+
+        let p = new MailboxProcessor<CompilationThreadMessage>(loop)
+        p.Start()
+
+        let ctok = CompilationThreadToken()
+        { new ICompilationThread with
+            member _.EnqueueWork work = p.Post(Work(fun () -> work ctok))
+            member _.EnqueueWorkAndWait work = 
+                match p.PostAndReply(fun ch -> WorkAndWait((fun () -> work ctok :> obj), ch)) with
+                | Result.Ok res -> res :?> _
+                | Result.Error ex -> raise ex }
+
 [<NoEquality; NoComparison>]
 type Args<'T> = Args  of 'T
 
@@ -1798,6 +1828,9 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
 
     if not tcConfigB.continueAfterParseFailure then 
         AbortOnError(errorLogger, exiter)
+
+    // TODO: by default this be should be empty
+    tcConfigB.compilationThread <- lazyGlobalCompilationThread.Value
 
     // Resolve assemblies
     ReportTime tcConfig "Import mscorlib and FSharp.Core.dll"
@@ -2169,12 +2202,12 @@ let typecheckAndCompile
         defaultCopyFSharpCore, exiter: Exiter, errorLoggerProvider, tcImportsCapture, dynamicAssemblyCreator) =
 
     use d = new DisposablesTracker()
-   // let savedOut = System.Console.Out
+    let savedOut = System.Console.Out
     use __ =
         { new IDisposable with
             member __.Dispose() = 
-                try ()
-               //     System.Console.SetOut(savedOut)
+                try
+                    System.Console.SetOut(savedOut)
                 with _ -> ()}
 
     main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, defaultCopyFSharpCore, exiter, errorLoggerProvider, d)
