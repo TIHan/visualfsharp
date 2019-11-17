@@ -159,7 +159,7 @@ module internal ExtensionTyping =
         // reporting errors.
         let protect f =
             try 
-                f ()
+                resolutionEnvironment.compilationThread.EnqueueWorkAndWait(fun _ -> f ())
             with err ->
                 let e = StripException (StripException err)
                 raise (TypeProviderError(FSComp.SR.etTypeProviderConstructorException(e.Message), typeProviderImplementationType.FullName, m))
