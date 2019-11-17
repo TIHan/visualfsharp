@@ -28,7 +28,8 @@ module internal ExtensionTyping =
           outputFile                : string option
           showResolutionMessages    : bool
           referencedAssemblies      : string[]
-          temporaryFolder           : string } 
+          temporaryFolder           : string
+          compilationThread         : ICompilationThread } 
 
 
     // Specify the tooling-compatible fragments of a path such as:
@@ -225,7 +226,7 @@ module internal ExtensionTyping =
                     tpe.Iter(fun e -> errorR(NumberedError((e.Number, e.ContextualErrorMessage), m)) )                        
                     []
 
-        let providers = Tainted<_>.CreateAll providerSpecs
+        let providers = Tainted<_>.CreateAll(providerSpecs, resolutionEnvironment.compilationThread)
 
         providers
 

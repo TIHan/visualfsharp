@@ -128,14 +128,14 @@ type FSCompilerClient (run) =
 type FSCompilerServer (run) =
 
     let s = Stopwatch()
-    let mutable total = 0.
     let runningThreads = Collections.Concurrent.ConcurrentDictionary()
 
-    let rec server (total: float ref) =
+    let rec server () =
         use pipeServer = new NamedPipeServerStream("FSCompiler", PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Message, PipeOptions.None)
         try
             pipeServer.WaitForConnection()
             runningThreads.[Thread.CurrentThread.ManagedThreadId] <- ()
+            startThread ()
 
             let mutable didDisconnect = false
             while not didDisconnect && pipeServer.IsConnected do
@@ -147,7 +147,6 @@ type FSCompilerServer (run) =
                     let s = Stopwatch.StartNew()
                     let exitCode: int = run argv
                     s.Stop()
-                    total := !total + s.Elapsed.TotalMilliseconds
                     sw.WriteLine("***success***" + string exitCode)
                     sw.Flush()
                     pipeServer.WaitForPipeDrain()
@@ -159,25 +158,22 @@ type FSCompilerServer (run) =
         | ex ->
             printfn "%A" ex
 
-     //   printfn "Thread: %A - Total Time: %A" Thread.CurrentThread.ManagedThreadId !total
         s.Restart()
-        let _, _ = runningThreads.TryRemove(Thread.CurrentThread.ManagedThreadId)
-        server total
+        runningThreads.TryRemove(Thread.CurrentThread.ManagedThreadId) |> ignore
+
+    and startThread () =
+        let thread = Thread(server)
+        thread.Start()
 
     member this.Start() =
-        let threadCount = 16
-
-        for _ in 1..threadCount do
-            let thread = Thread(fun () -> server (ref 0.))
-            thread.Start()
+        startThread ()
 
         while true do
             Thread.Sleep(250)
             let runningThreadCount = runningThreads.Count
             printfn "count: %A" runningThreadCount
             if runningThreadCount = 0 && s.Elapsed.TotalSeconds > 60. then
-                printfn "invoking GC %A" total
-                total <- 0.
+                printfn "invoking GC"
                 s.Reset()
 
                 for _ in 1..10 do

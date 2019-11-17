@@ -1968,14 +1968,6 @@ type UnresolvedAssemblyReference = UnresolvedAssemblyReference of string * Assem
 type ResolvedExtensionReference = ResolvedExtensionReference of string * AssemblyReference list * Tainted<ITypeProvider> list
 #endif
 
-/// The thread in which compilation calls will be enqueued and done work on.
-/// Note: This is currently only used when disposing of type providers and will be extended to all the other type provider calls when compilations can be done in parallel.
-///       Right now all calls in FCS to type providers are single-threaded through use of the reactor thread. 
-type ICompilationThread =
-
-    /// Enqueue work to be done on a compilation thread.
-    abstract EnqueueWork: (CompilationThreadToken -> unit) -> unit
-
 type ImportedBinary =
     { FileName: string
       RawMetadata: IRawFSharpAssemblyData 
@@ -2286,7 +2278,9 @@ type TcConfigBuilder =
 #endif
           compilationThread = 
                 let ctok = CompilationThreadToken ()
-                { new ICompilationThread with member __.EnqueueWork work = work ctok }
+                { new ICompilationThread with 
+                    member _.EnqueueWork work = work ctok
+                    member _.EnqueueWorkAndWait work = work ctok }
           pause = false 
           alwaysCallVirt = true
           noDebugData = false
@@ -4196,7 +4190,8 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
                    outputFile = tcConfig.outputFile
                    showResolutionMessages = tcConfig.showExtensionTypeMessages 
                    referencedAssemblies = Array.distinct [| for r in tcImportsStrong.AllAssemblyResolutions() -> r.resolvedPath |]
-                   temporaryFolder = FileSystem.GetTempPathShim() }
+                   temporaryFolder = FileSystem.GetTempPathShim()
+                   compilationThread = tcConfig.compilationThread }
 
             // The type provider should not hold strong references to disposed
             // TcImport objects. So the callbacks provided in the type provider config

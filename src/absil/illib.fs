@@ -644,6 +644,16 @@ type Lock<'LockTokenType when 'LockTokenType :> LockToken>() =
     let lockObj = obj()
     member __.AcquireLock f = lock lockObj (fun () -> f (AssumeLockWithoutEvidence<'LockTokenType>()))
 
+/// The thread in which compilation calls will be enqueued and done work on.
+/// Note: This is currently only used when disposing of type providers and will be extended to all the other type provider calls when compilations can be done in parallel.
+///       Right now all calls in FCS to type providers are single-threaded through use of the reactor thread. 
+type internal ICompilationThread =
+
+    /// Enqueue work to be done on a compilation thread.
+    abstract EnqueueWork: (CompilationThreadToken -> unit) -> unit
+
+    abstract EnqueueWorkAndWait: (CompilationThreadToken -> 'T) -> 'T
+
 //---------------------------------------------------
 // Misc
 

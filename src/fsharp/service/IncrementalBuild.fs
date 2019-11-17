@@ -1758,6 +1758,9 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                             Reactor.Singleton.EnqueueOp ("Unknown", "ICompilationThread.EnqueueWork", "work", fun ctok ->
                                 work ctok
                             )
+                        member __.EnqueueWorkAndWait work =
+                            // The calls to EnqueueWorkAndWait are going to be called inside the reactor thread.
+                            work (AssumeCompilationThreadWithoutEvidence())
                     }
 
                 tcConfigB, sourceFilesNew
