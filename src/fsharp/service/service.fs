@@ -281,13 +281,13 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
     /// Cache of builds keyed by options.        
     let incrementalBuildersCache = 
         MruCache<CompilationThreadToken, FSharpProjectOptions, (IncrementalBuilder option * FSharpErrorInfo[])>
-                (keepStrongly=projectCacheSize, keepMax=projectCacheSize, 
+                (keepStrongly=2, keepMax=1000, 
                  areSame =  FSharpProjectOptions.AreSameForChecking, 
                  areSimilar =  FSharpProjectOptions.UseSameProject)
 
     let projectEqualityComparer = 
         { new Collections.Generic.IEqualityComparer<FSharpProjectOptions> with      
-            member _.Equals(x, y) = FSharpProjectOptions.AreSameForChecking(x, y)
+            member _.Equals(x, y) = FSharpProjectOptions.UseSameProject(x, y)
         
             member _.GetHashCode(x) = 
                 match x.ProjectId with
@@ -298,10 +298,14 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                 | _ -> 0 }
 
     // These non-concurrent dictionaries are fine for caching as FCS is single-threaded.
-    let fsharpAssemblyDataCache = 
+
+    let _activeProjects =
+        Collections.Generic.Dictionary<FSharpProjectOptions, (IncrementalBuilder option * FSharpErrorInfo[])>(projectEqualityComparer)
+
+    let projectReferenceDataCache = 
         Collections.Generic.Dictionary<FSharpProjectOptions, IRawFSharpAssemblyData>(projectEqualityComparer)
 
-    let fsharpAssemblyTimeStampCache =
+    let projectReferenceTimeStampCache =
         Collections.Generic.Dictionary<FSharpProjectOptions, (string * DateTime) [] * DateTime>(projectEqualityComparer)
 
     let checkTimeStamps (currentTimeStamps: (string * DateTime) []) (timeStamps: (string * DateTime) []) =
@@ -310,7 +314,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         ||> Array.forall2 (fun (fileName1, timeStamp1) (fileName2, timeStamp2) -> 
             fileName1.Equals(fileName2, StringComparison.OrdinalIgnoreCase) && timeStamp1 = timeStamp2)
 
-    let checkProjectTimeStamp (opts: FSharpProjectOptions) =
+    let getProjectReferenceTimeStamp (opts: FSharpProjectOptions) =
         let timeStamps =
             opts.OtherOptions
             |> Array.choose (fun s ->
@@ -321,13 +325,13 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             |> Array.append opts.SourceFiles
             |> Array.map (fun s -> s, FileSystem.GetLastWriteTimeShim(s))
 
-        match fsharpAssemblyTimeStampCache.TryGetValue opts with
+        match projectReferenceTimeStampCache.TryGetValue opts with
         | true, (currentTimeStamps, currentTimeStamp) when checkTimeStamps currentTimeStamps timeStamps ->
             currentTimeStamp
         | _ ->
             let timeStamp = DateTime.UtcNow
-            fsharpAssemblyDataCache.Remove(opts) |> ignore
-            fsharpAssemblyTimeStampCache.[opts] <- (timeStamps, timeStamp)
+            projectReferenceDataCache.Remove(opts) |> ignore
+            projectReferenceTimeStampCache.[opts] <- (timeStamps, timeStamp)
             timeStamp
 
     let rec getOrCreateBuilder (ctok, options, userOpName) =
@@ -335,9 +339,11 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
           RequireCompilationThread ctok
           match incrementalBuildersCache.TryGet (ctok, options) with
           | Some (builderOpt,creationErrors) -> 
+              Debug.WriteLine(sprintf "using cache %A" options.ProjectFileName)
               Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_GettingCache
               return builderOpt,creationErrors
           | None -> 
+              Debug.WriteLine(sprintf "rebuilding %A" options.ProjectFileName)
               Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_BuildingNewCache
               let! (builderOpt,creationErrors) as info = CreateOneIncrementalBuilder (ctok, options, userOpName)
               incrementalBuildersCache.Set (ctok, options, info)
@@ -362,17 +368,17 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                     { new IProjectReference with 
                         member x.EvaluateRawContents(ctok) = 
                           cancellable {
-                            match fsharpAssemblyDataCache.TryGetValue opts with
+                            match projectReferenceDataCache.TryGetValue opts with
                             | true, asmData -> return Some asmData
                             | _ ->
                                 Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "ParseAndCheckProjectImpl", nm)
                                 let! r = self.ParseAndCheckProjectImpl(opts, ctok, userOpName + ".CheckReferencedProject("+nm+")")
                                 match r.RawFSharpAssemblyData with
-                                | Some asmData -> fsharpAssemblyDataCache.[opts] <- asmData
+                                | Some asmData -> projectReferenceDataCache.[opts] <- asmData
                                 | _ -> ()
                                 return r.RawFSharpAssemblyData 
                           }
-                        member x.TryGetLogicalTimeStamp(_cache, _ctok) = Some(checkProjectTimeStamp opts)
+                        member x.TryGetLogicalTimeStamp(_cache, _ctok) = Some(getProjectReferenceTimeStamp opts)
                         member x.FileName = nm } ]
 
         let loadClosure = scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.TryGet (ltok, options))
