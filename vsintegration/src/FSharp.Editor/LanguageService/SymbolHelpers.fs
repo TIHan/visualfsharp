@@ -35,23 +35,21 @@ module internal SymbolHelpers =
             return symbolUses
         }
 
-    let getSymbolUsesInProjects (symbol: FSharpSymbol, projectInfoManager: FSharpProjectOptionsManager, checker: FSharpChecker, projects: Project list, userOpName) =
-        projects
-        |> Seq.map (fun project ->
-            async {
-                match! projectInfoManager.TryGetOptionsByProject(project, CancellationToken.None) with
-                | Some (_parsingOptions, projectOptions) ->
-                    let! projectCheckResults = checker.ParseAndCheckProject(projectOptions, userOpName = userOpName)
-                    let! uses = projectCheckResults.GetUsesOfSymbol(symbol) 
-                    let distinctUses = uses |> Array.distinctBy (fun symbolUse -> symbolUse.RangeAlternate)
-                    return distinctUses
-                | None -> return [||]
-            })
-        |> Async.Parallel
-        |> Async.map Array.concat
-        // FCS may return several `FSharpSymbolUse`s for same range, which have different `ItemOccurrence`s (Use, UseInAttribute, UseInType, etc.)
-        // We don't care about the occurrence type here, so we distinct by range.
-        |> Async.map (Array.distinctBy (fun x -> x.RangeAlternate))
+    let getSymbolUsesInProjects (symbol: FSharpSymbol, projectInfoManager: FSharpProjectOptionsManager, checker: FSharpChecker, projects: Project list, callback, userOpName) =
+        let computations =
+            projects
+            |> Seq.map (fun project ->
+                async {
+                    match! projectInfoManager.TryGetOptionsByProject(project, CancellationToken.None) with
+                    | Some (_parsingOptions, projectOptions) ->
+                        let! projectCheckResults = checker.ParseAndCheckProject(projectOptions, userOpName = userOpName)
+                        let! uses = projectCheckResults.GetUsesOfSymbol(symbol) 
+                        let distinctUses = uses |> Array.distinctBy (fun symbolUse -> symbolUse.RangeAlternate)
+                        do! callback distinctUses
+                    | None -> 
+                        ()
+                })
+        async { let! _ = Async.Parallel(computations) in () }
 
     let getSymbolUsesInSolution (symbol: FSharpSymbol, declLoc: SymbolDeclarationLocation, checkFileResults: FSharpCheckFileResults,
                                  projectInfoManager: FSharpProjectOptionsManager, checker: FSharpChecker, solution: Solution, userOpName) =
@@ -69,7 +67,11 @@ module internal SymbolHelpers =
                                 yield! project.GetDependentProjects() ]
                             |> List.distinctBy (fun x -> x.Id)
 
-                    getSymbolUsesInProjects (symbol, projectInfoManager, checker, projects, userOpName)
+                    let mutable result = [||]
+                    async {
+                        let callback symbolUses = async { result <- Array.append result symbolUses }
+                        do! getSymbolUsesInProjects (symbol, projectInfoManager, checker, projects, callback, userOpName)
+                        return result }
             
             return
                 (symbolUses

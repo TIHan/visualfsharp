@@ -89,41 +89,42 @@ type internal FSharpFindUsagesService
             for definitionItem in definitionItems do
                 do! context.OnDefinitionFoundAsync(definitionItem) |> Async.AwaitTask |> liftAsync
             
-            let! symbolUses =
-                match symbolUse.GetDeclarationLocation document with
-                | Some SymbolDeclarationLocation.CurrentDocument ->
-                    checkFileResults.GetUsesOfSymbolInFile(symbolUse.Symbol) |> liftAsync
-                | scope ->
-                    let projectsToCheck =
-                        match scope with
-                        | Some (SymbolDeclarationLocation.Projects (declProjects, false)) ->
-                            [ for declProject in declProjects do
-                                yield declProject
-                                yield! declProject.GetDependentProjects() ]
-                            |> List.distinct
-                        | Some (SymbolDeclarationLocation.Projects (declProjects, true)) -> declProjects
-                        // The symbol is declared in .NET framework, an external assembly or in a C# project within the solution.
-                        // In order to find all its usages we have to check all F# projects.
-                        | _ -> Seq.toList document.Project.Solution.Projects
-                
-                    SymbolHelpers.getSymbolUsesInProjects (symbolUse.Symbol, projectInfoManager, checker, projectsToCheck, userOpName) |> liftAsync
+            let callback (symbolUses: FSharpSymbolUse seq) = async {
+                for symbolUse in symbolUses do
+                    match declarationRange with
+                    | Some declRange when declRange = symbolUse.RangeAlternate -> ()
+                    | _ ->
+                        // report a reference if we're interested in all _or_ if we're looking at an implementation
+                        if allReferences || symbolUse.IsFromDispatchSlotImplementation then
+                            let! referenceDocSpans = rangeToDocumentSpans(document.Project.Solution, symbolUse.RangeAlternate)
+                            match referenceDocSpans with
+                            | [] -> ()
+                            | _ ->
+                                for referenceDocSpan in referenceDocSpans do
+                                    for definitionItem in definitionItems do
+                                        let referenceItem = FSharpSourceReferenceItem(definitionItem, referenceDocSpan)
+                                        do! context.OnReferenceFoundAsync(referenceItem) |> Async.AwaitTask }
 
-            for symbolUse in symbolUses do
-                match declarationRange with
-                | Some declRange when declRange = symbolUse.RangeAlternate -> ()
-                | _ ->
-                    // report a reference if we're interested in all _or_ if we're looking at an implementation
-                    if allReferences || symbolUse.IsFromDispatchSlotImplementation then
-                        let! referenceDocSpans = rangeToDocumentSpans(document.Project.Solution, symbolUse.RangeAlternate) |> liftAsync
-                        match referenceDocSpans with
-                        | [] -> ()
-                        | _ ->
-                            for referenceDocSpan in referenceDocSpans do
-                                for definitionItem in definitionItems do
-                                    let referenceItem = FSharpSourceReferenceItem(definitionItem, referenceDocSpan)
-                                    do! context.OnReferenceFoundAsync(referenceItem) |> Async.AwaitTask |> liftAsync
-            
-            ()
+            match symbolUse.GetDeclarationLocation document with
+            | Some SymbolDeclarationLocation.CurrentDocument ->
+                let! symbolUses = checkFileResults.GetUsesOfSymbolInFile(symbolUse.Symbol) |> liftAsync
+                do! callback symbolUses |> liftAsync
+            | scope ->
+                let projectsToCheck =
+                    match scope with
+                    | Some (SymbolDeclarationLocation.Projects (declProjects, false)) ->
+                        (* Push current project to the top so we search it first *)
+                        [ document.Project ] @ 
+                        [ for declProject in declProjects do
+                            yield declProject
+                            yield! declProject.GetDependentProjects() ]
+                        |> List.distinctBy (fun x -> x.Id)
+                    | Some (SymbolDeclarationLocation.Projects (declProjects, true)) -> declProjects
+                    // The symbol is declared in .NET framework, an external assembly or in a C# project within the solution.
+                    // In order to find all its usages we have to check all F# projects.
+                    | _ -> Seq.toList document.Project.Solution.Projects
+                
+                do! SymbolHelpers.getSymbolUsesInProjects (symbolUse.Symbol, projectInfoManager, checker, projectsToCheck, callback, userOpName) |> liftAsync
         } |> Async.Ignore
 
     interface IFSharpFindUsagesService with

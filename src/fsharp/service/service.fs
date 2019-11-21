@@ -281,13 +281,13 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
     /// Cache of builds keyed by options.        
     let incrementalBuildersCache = 
         MruCache<CompilationThreadToken, FSharpProjectOptions, (IncrementalBuilder option * FSharpErrorInfo[])>
-                (keepStrongly=projectCacheSize, keepMax=projectCacheSize, 
+                (keepStrongly=projectCacheSize, keepMax=300, 
                  areSame =  FSharpProjectOptions.AreSameForChecking, 
                  areSimilar =  FSharpProjectOptions.UseSameProject)
 
     let projectEqualityComparer = 
         { new Collections.Generic.IEqualityComparer<FSharpProjectOptions> with      
-            member _.Equals(x, y) = FSharpProjectOptions.AreSameForChecking(x, y)
+            member _.Equals(x, y) = FSharpProjectOptions.UseSameProject(x, y)
         
             member _.GetHashCode(x) = 
                 match x.ProjectId with
@@ -916,6 +916,8 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             incrementalBuildersCache.Clear ctok
             frameworkTcImportsCache.Clear ctok
             scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.Clear ltok)
+            fsharpAssemblyDataCache.Clear()
+            fsharpAssemblyTimeStampCache.Clear()
             cancellable.Return ())
 
     member __.DownsizeCaches(userOpName) =
