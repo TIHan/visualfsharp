@@ -102,6 +102,8 @@ type public FSharpChecker =
     [<Obsolete("Please pass FSharpParsingOptions to MatchBraces. If necessary generate FSharpParsingOptions from FSharpProjectOptions by calling checker.GetParsingOptionsFromProjectOptions(options)")>]
     member MatchBraces: filename: string * source: string * options: FSharpProjectOptions * ?userOpName: string -> Async<(range * range)[]>
 
+    member SetActiveProjects: multipleOptions: FSharpProjectOptions list -> unit
+
     /// <summary>
     /// Parses a source code for a file and caches the results. Returns an AST that can be traversed for various features.
     /// </summary>

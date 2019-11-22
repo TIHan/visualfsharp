@@ -232,13 +232,24 @@ type private FSharpProjectOptionsReactor (_workspace: VisualStudioWorkspace, set
                         reply.Reply None
                     else
                         try
+                            let solution = document.Project.Solution
+                            let workspace = solution.Workspace
                             // For now, disallow miscellaneous workspace since we are using the hacky F# miscellaneous files project.
-                            if document.Project.Solution.Workspace.Kind = WorkspaceKind.MiscellaneousFiles then
+                            if workspace.Kind = WorkspaceKind.MiscellaneousFiles then
                                 reply.Reply None
                             elif document.Project.Name = FSharpConstants.FSharpMiscellaneousFilesName then
                                 let! options = tryComputeOptionsByFile document ct
                                 reply.Reply options
                             else
+                                let activeProjects = ResizeArray(5)
+                                for proj in workspace.GetOpenDocumentIds() |> Seq.map (fun x -> solution.GetProject x.ProjectId) do
+                                    match! tryComputeOptions proj with
+                                    | Some (_, options) -> activeProjects.Add options
+                                    | _ -> ()
+
+                                if activeProjects.Count > 0 then
+                                    checkerProvider.Checker.SetActiveProjects(activeProjects |> List.ofSeq)
+
                                 let! options = tryComputeOptions document.Project
                                 reply.Reply options
                         with

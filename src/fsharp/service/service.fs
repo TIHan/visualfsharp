@@ -247,6 +247,8 @@ type FileVersion = int
 type ParseCacheLockToken() = interface LockToken
 type ScriptClosureCacheToken() = interface LockToken
 
+[<NoEquality;NoComparison>]
+type ProjectCacheItem = { builder: IncrementalBuilder option; errors: FSharpErrorInfo[] }
 
 // There is only one instance of this type, held in FSharpChecker
 type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyContents, keepAllBackgroundResolutions, tryGetMetadataSnapshot, suggestNamesForErrors) as self =
@@ -274,17 +276,6 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
     let scriptClosureCacheLock = Lock<ScriptClosureCacheToken>()
     let frameworkTcImportsCache = FrameworkImportsCache(frameworkTcImportsCacheStrongSize)
 
-    // STATIC ROOT: FSharpLanguageServiceTestable.FSharpChecker.backgroundCompiler.incrementalBuildersCache. This root typically holds more 
-    // live information than anything else in the F# Language Service, since it holds up to 3 (projectCacheStrongSize) background project builds
-    // strongly.
-    // 
-    /// Cache of builds keyed by options.        
-    let incrementalBuildersCache = 
-        MruCache<CompilationThreadToken, FSharpProjectOptions, (IncrementalBuilder option * FSharpErrorInfo[])>
-                (keepStrongly=2, keepMax=1000, 
-                 areSame =  FSharpProjectOptions.AreSameForChecking, 
-                 areSimilar =  FSharpProjectOptions.UseSameProject)
-
     let projectEqualityComparer = 
         { new Collections.Generic.IEqualityComparer<FSharpProjectOptions> with      
             member _.Equals(x, y) = FSharpProjectOptions.UseSameProject(x, y)
@@ -295,18 +286,42 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                     projectId.GetHashCode()
                 | Some(_)
                 | None -> x.ProjectFileName.GetHashCode()
-                | _ -> 0 }
+                | _ -> 0 }   
 
-    // These non-concurrent dictionaries are fine for caching as FCS is single-threaded.
+    /// STATIC ROOT
+    /// Cache of builds keyed by options.
+    let incrementalBuildersWeakCache = 
+        LruCache<FSharpProjectOptions, WeakReference<ProjectCacheItem>>(400, projectEqualityComparer)
 
-    let _activeProjects =
-        Collections.Generic.Dictionary<FSharpProjectOptions, (IncrementalBuilder option * FSharpErrorInfo[])>(projectEqualityComparer)
+    let incrementalBuildersCache = 
+        LruCache<FSharpProjectOptions, ProjectCacheItem>(2, projectEqualityComparer,
+            onRemove = fun k v -> incrementalBuildersWeakCache.Set(k, WeakReference<_> v))
+
+    // Note: I would rather use an immutable dictionary.
+    let activeIncrementalBuildersGate = obj ()
+    let activeIncrementalBuilders = 
+        Collections.Concurrent.ConcurrentDictionary<FSharpProjectOptions, ProjectCacheItem>(projectEqualityComparer)
 
     let projectReferenceDataCache = 
-        Collections.Generic.Dictionary<FSharpProjectOptions, IRawFSharpAssemblyData>(projectEqualityComparer)
+        Collections.Concurrent.ConcurrentDictionary<FSharpProjectOptions, IRawFSharpAssemblyData>(projectEqualityComparer)
 
     let projectReferenceTimeStampCache =
-        Collections.Generic.Dictionary<FSharpProjectOptions, (string * DateTime) [] * DateTime>(projectEqualityComparer)
+        Collections.Concurrent.ConcurrentDictionary<FSharpProjectOptions, (string * DateTime) [] * DateTime>(projectEqualityComparer)
+
+    let rec tryGetBuilder options =
+        let vOpt = incrementalBuildersCache.TryGet options
+        if vOpt.IsSome then vOpt
+        else 
+            match incrementalBuildersWeakCache.TryGet options with
+            | ValueSome (currentOptions, weakv) ->
+                match weakv.TryGetTarget () with
+                | true, v -> ValueSome (currentOptions, v)
+                | _ ->
+                    incrementalBuildersWeakCache.Remove options |> ignore
+                    Debug.WriteLine(sprintf "REMOVED CACHE %A" options.ProjectFileName)
+                    ValueNone
+            | _ ->
+                ValueNone
 
     let checkTimeStamps (currentTimeStamps: (string * DateTime) []) (timeStamps: (string * DateTime) []) =
         currentTimeStamps.Length = timeStamps.Length &&
@@ -330,29 +345,29 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             currentTimeStamp
         | _ ->
             let timeStamp = DateTime.UtcNow
-            projectReferenceDataCache.Remove(opts) |> ignore
+            projectReferenceDataCache.TryRemove(opts) |> ignore
             projectReferenceTimeStampCache.[opts] <- (timeStamps, timeStamp)
             timeStamp
 
     let rec getOrCreateBuilder (ctok, options, userOpName) =
       cancellable {
           RequireCompilationThread ctok
-          match incrementalBuildersCache.TryGet (ctok, options) with
-          | Some (builderOpt,creationErrors) -> 
-              Debug.WriteLine(sprintf "using cache %A" options.ProjectFileName)
+          match tryGetBuilder options with
+          | ValueSome (currentOptions, { builder = builderOpt; errors = creationErrors }) when (let res = FSharpProjectOptions.AreSameForChecking(options, currentOptions) in Debug.WriteLine(sprintf "SAME: %A %A %A" res options.ProjectId currentOptions.ProjectId); res) -> 
+              Debug.WriteLine(sprintf "using cache %A - strong cache: %A - weak cache: %A - active: %A" options.ProjectFileName incrementalBuildersCache.Count incrementalBuildersWeakCache.Count activeIncrementalBuilders.Count) 
               Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_GettingCache
-              return builderOpt,creationErrors
-          | None -> 
-              Debug.WriteLine(sprintf "rebuilding %A" options.ProjectFileName)
-              Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_BuildingNewCache
-              let! (builderOpt,creationErrors) as info = CreateOneIncrementalBuilder (ctok, options, userOpName)
-              incrementalBuildersCache.Set (ctok, options, info)
               return builderOpt, creationErrors
+          | _ -> 
+              Debug.WriteLine(sprintf "rebuilding %A - strong cache: %A - weak cache: %A - active: %A" options.ProjectFileName incrementalBuildersCache.Count incrementalBuildersWeakCache.Count activeIncrementalBuilders.Count)
+              Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_BuildingNewCache
+              let! info = CreateOneIncrementalBuilder (ctok, options, userOpName)
+              incrementalBuildersCache.Set(options, info)
+              return info.builder, info.errors
       }
 
     /// CreateOneIncrementalBuilder (for background type checking). Note that fsc.fs also
     /// creates an incremental builder used by the command line compiler.
-    and CreateOneIncrementalBuilder (ctok, options:FSharpProjectOptions, userOpName) = 
+    and CreateOneIncrementalBuilder (ctok, options:FSharpProjectOptions, userOpName) : Cancellable<ProjectCacheItem> = 
       cancellable {
         Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "CreateOneIncrementalBuilder", options.ProjectFileName)
         let projectReferences =  
@@ -410,7 +425,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             builder.FileChecked.Add (fun file -> fileChecked.Trigger(file, options.ExtraProjectInfo))
             builder.ProjectChecked.Add (fun () -> projectChecked.Trigger (options.ProjectFileName, options.ExtraProjectInfo))
 
-        return (builderOpt, diagnostics)
+        return { builder = builderOpt; errors = diagnostics }
       }
 
     let parseCacheLock = Lock<ParseCacheLockToken>()
@@ -465,6 +480,22 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
     member bc.ImplicitlyStartCheckProjectInBackground(options, userOpName) =        
         if implicitlyStartBackgroundWork then 
             bc.CheckProjectInBackground(options, userOpName + ".ImplicitlyStartCheckProjectInBackground")
+
+    member _.SetActiveProjects(multipleOptions) =
+        lock activeIncrementalBuildersGate <| fun () ->
+            let keys = activeIncrementalBuilders.Keys
+            keys
+            |> Seq.iter (fun k ->
+                let isActive = multipleOptions |> List.exists (fun x -> projectEqualityComparer.Equals(x, k))
+                if not isActive then
+                    activeIncrementalBuilders.TryRemove(k) |> ignore)
+
+            multipleOptions
+            |> List.iter (fun options ->
+                if not (activeIncrementalBuilders.ContainsKey options) then
+                    match tryGetBuilder options with
+                    | ValueSome (_, v) -> activeIncrementalBuilders.[options] <- v
+                    | _ -> ())
 
     member __.ParseFile(filename: string, sourceText: ISourceText, options: FSharpParsingOptions, userOpName: string) =
         async {
@@ -609,8 +640,8 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                    cancellable {
                     let! _builderOpt,_creationErrors = getOrCreateBuilder (ctok, options, userOpName)
 
-                    match incrementalBuildersCache.TryGetAny (ctok, options) with
-                    | Some (Some builder, creationErrors) ->
+                    match tryGetBuilder options with
+                    | ValueSome (_, { builder = Some builder; errors = creationErrors }) ->
                         match bc.GetCachedCheckFileResult(builder, filename, sourceText, options) with
                         | Some (_, checkResults) -> return Some (builder, creationErrors, Some (FSharpCheckFileAnswer.Succeeded checkResults))
                         | _ -> return Some (builder, creationErrors, None)
@@ -852,12 +883,12 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         reactor.EnqueueOp(userOpName, "InvalidateConfiguration: Stamp(" + (options.Stamp |> Option.defaultValue 0L).ToString() + ")", options.ProjectFileName, fun ctok -> 
             // If there was a similar entry then re-establish an empty builder .  This is a somewhat arbitrary choice - it
             // will have the effect of releasing memory associated with the previous builder, but costs some time.
-            if incrementalBuildersCache.ContainsSimilarKey (ctok, options) then
+            if incrementalBuildersCache.ContainsKey (options) then
 
                 // We do not need to decrement here - the onDiscard function is called each time an entry is pushed out of the build cache,
                 // including by incrementalBuildersCache.Set.
                 let newBuilderInfo = CreateOneIncrementalBuilder (ctok, options, userOpName) |> Cancellable.runWithoutCancellation
-                incrementalBuildersCache.Set(ctok, options, newBuilderInfo)
+                incrementalBuildersCache.Set(options, newBuilderInfo)
 
                 // Start working on the project.  Also a somewhat arbitrary choice
                 if startBackgroundCompileIfAlreadySeen then 
@@ -869,11 +900,11 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             // If there was a similar entry (as there normally will have been) then re-establish an empty builder .  This 
             // is a somewhat arbitrary choice - it will have the effect of releasing memory associated with the previous 
             // builder, but costs some time.
-            if incrementalBuildersCache.ContainsSimilarKey (ctok, options) then
+            if incrementalBuildersCache.ContainsKey(options) then
                 // We do not need to decrement here - the onDiscard function is called each time an entry is pushed out of the build cache,
                 // including by incrementalBuildersCache.Set.
                 let! newBuilderInfo = CreateOneIncrementalBuilder (ctok, options, userOpName) 
-                incrementalBuildersCache.Set(ctok, options, newBuilderInfo)
+                incrementalBuildersCache.Set(options, newBuilderInfo)
           })
 
     member __.CheckProjectInBackground (options, userOpName) =
@@ -914,12 +945,14 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
     member __.CurrentQueueLength = reactor.CurrentQueueLength
 
     member __.ClearCachesAsync (userOpName) =
+        lock activeIncrementalBuildersGate (fun () -> activeIncrementalBuilders.Clear())
         reactor.EnqueueAndAwaitOpAsync (userOpName, "ClearCachesAsync", "", fun ctok -> 
             parseCacheLock.AcquireLock (fun ltok -> 
                 checkFileInProjectCachePossiblyStale.Clear ltok
                 checkFileInProjectCache.Clear ltok
                 parseFileCache.Clear(ltok))
-            incrementalBuildersCache.Clear ctok
+            incrementalBuildersCache.Clear()
+            incrementalBuildersWeakCache.Clear() // make sure to clear the weak cache after the strong
             frameworkTcImportsCache.Clear ctok
             scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.Clear ltok)
             cancellable.Return ())
@@ -930,7 +963,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                 checkFileInProjectCachePossiblyStale.Resize(ltok, keepStrongly=1)
                 checkFileInProjectCache.Resize(ltok, keepStrongly=1)
                 parseFileCache.Resize(ltok, keepStrongly=1))
-            incrementalBuildersCache.Resize(ctok, keepStrongly=1, keepMax=1)
+            incrementalBuildersCache.Resize(1)
             frameworkTcImportsCache.Downsize(ctok)
             scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.Resize(ltok,keepStrongly=1, keepMax=1))
             cancellable.Return ())
@@ -1007,6 +1040,9 @@ type FSharpChecker(legacyReferenceResolver,
         let sourceFiles = List.ofArray options.SourceFiles
         let argv = List.ofArray options.OtherOptions
         ic.GetParsingOptionsFromCommandLineArgs(sourceFiles, argv, options.UseScriptResolutionRules)
+
+    member ic.SetActiveProjects(multipleOptions) =
+        backgroundCompiler.SetActiveProjects(multipleOptions)
 
     member ic.ParseFile(filename, sourceText, options, ?userOpName: string) =
         let userOpName = defaultArg userOpName "Unknown"

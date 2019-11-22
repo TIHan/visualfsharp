@@ -3,6 +3,7 @@
 module internal FSharp.Compiler.Lib
 
 open System.IO
+open System.Collections
 open System.Collections.Generic
 open System.Runtime.InteropServices
 open Internal.Utilities
@@ -549,3 +550,118 @@ module StackGuard =
     let EnsureSufficientExecutionStack recursionDepth =
         if recursionDepth > MaxUncheckedRecursionDepth then
             RuntimeHelpers.EnsureSufficientExecutionStack ()
+
+/// Thread safe.
+/// Least recently used cache. LRU is the eviction policy; it evicts the least recently used.
+[<Sealed>]
+type LruCache<'Key, 'Value when 'Key : equality and 'Value : not struct> (cacheSize: int, equalityComparer: IEqualityComparer<'Key>, ?onRemove) =
+    
+    let checkCacheSize cacheSize =
+        if cacheSize <= 0 then invalidArg "cacheSize" "Cache size cannot be less than or equal to zero." else cacheSize
+
+    let mutable size = checkCacheSize cacheSize
+
+    let gate = obj ()
+
+    let isKeyRef = not typeof<'Key>.IsValueType
+    let isValueRef = not typeof<'Value>.IsValueType
+
+    let data = LinkedList<KeyValuePair<'Key, 'Value>> ()
+    let dataLookup = Dictionary<'Key, LinkedListNode<KeyValuePair<'Key, 'Value>>> (equalityComparer)
+
+    let keyEquals key1 key2 =
+        equalityComparer.GetHashCode key1 = equalityComparer.GetHashCode key2 && equalityComparer.Equals (key1, key2)
+
+    member _.Set (key, value) =
+        if isKeyRef && obj.ReferenceEquals (key, null) then
+            nullArg "key"
+
+        if isValueRef && obj.ReferenceEquals (value, null) then
+            nullArg "value"
+
+        lock gate <| fun () ->
+            let pair = KeyValuePair (key, value)
+
+            match dataLookup.TryGetValue key with
+            | true, existingNode ->
+                data.Remove existingNode
+                dataLookup.[key] <- data.AddFirst pair
+            | _ ->
+                if data.Count = size then
+                    let k = data.Last.Value.Key
+                    let v = data.Last.Value.Value
+                    dataLookup.Remove k |> ignore
+                    data.RemoveLast ()
+                    onRemove
+                    |> Option.iter (fun f -> f k v)
+                dataLookup.[key] <- data.AddFirst pair
+
+    member _.TryGet key =
+        if isKeyRef && obj.ReferenceEquals (key, null) then
+            nullArg "key"
+
+        lock gate <| fun () ->
+            if data.Count > 0 then
+                if keyEquals data.First.Value.Key key then
+                    ValueSome (data.First.Value.Key, data.First.Value.Value)
+                else
+                    match dataLookup.TryGetValue key with
+                    | true, existingNode ->
+                        data.Remove existingNode
+                        dataLookup.[key] <- data.AddFirst existingNode.Value
+                        ValueSome (existingNode.Value.Key, existingNode.Value.Value)
+                    | _ ->
+                        ValueNone
+            else
+                ValueNone
+
+    member _.ContainsKey key =
+        if isKeyRef && obj.ReferenceEquals (key, null) then
+            nullArg "key"
+
+        lock gate (fun () -> dataLookup.ContainsKey key)
+
+    member _.Remove key =
+        if isKeyRef && obj.ReferenceEquals (key, null) then
+            nullArg "key"
+
+        lock gate <| fun () ->
+            match dataLookup.TryGetValue key with
+            | true, node ->
+                let k = node.Value.Key
+                let v = node.Value.Value
+                assert (dataLookup.Remove key = true)
+                data.Remove node
+                onRemove
+                |> Option.iter (fun f -> f k v)
+                true
+            | _ ->
+                false
+
+    member _.Count = dataLookup.Count
+
+    member _.Resize cacheSize =
+        let cacheSize = checkCacheSize cacheSize
+
+        lock gate <| fun () ->
+            let countToRemove = size - cacheSize
+            if countToRemove > 0 then
+                for _ = 1 to countToRemove do
+                    let k = data.Last.Value.Key
+                    let v = data.Last.Value.Value
+                    data.Remove data.Last
+                    onRemove
+                    |> Option.iter (fun f -> f k v)
+            size <- cacheSize
+
+    member _.Clear() =
+        lock gate <| fun () ->
+            data.Clear()
+            dataLookup.Clear()
+
+    interface IEnumerable<KeyValuePair<'Key, 'Value>> with
+
+        member __.GetEnumerator () : IEnumerator<KeyValuePair<'Key, 'Value>> = (data :> IEnumerable<KeyValuePair<'Key, 'Value>>).GetEnumerator ()
+
+        member __.GetEnumerator () : IEnumerator = (data :> IEnumerable).GetEnumerator ()
+
