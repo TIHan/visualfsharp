@@ -1317,13 +1317,7 @@ module StaticLinker =
                                         // We open the pdb file if one exists parallel to the binary we 
                                         // are reading, so that --standalone will preserve debug information. 
                                         if tcConfig.openDebugInformationForLaterStaticLinking then 
-                                            let pdbDir = (try Filename.directoryName fileName with _ -> ".") 
-                                            let pdbFile = (try Filename.chopExtension fileName with _ -> fileName)+".pdb" 
-                                            if FileSystem.SafeExists pdbFile then 
-                                                if verbose then dprintf "reading PDB file %s from directory %s during static linking\n" pdbFile pdbDir
-                                                Some pdbDir
-                                            else 
-                                                None 
+                                            Some(try Filename.directoryName fileName with _ -> ".")
                                         else   
                                             None
 

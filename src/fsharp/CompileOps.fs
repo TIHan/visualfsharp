@@ -4027,14 +4027,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
             // We open the pdb file if one exists parallel to the binary we 
             // are reading, so that --standalone will preserve debug information. 
             if tcConfig.openDebugInformationForLaterStaticLinking then 
-                let pdbDir = try Filename.directoryName filename with _ -> "."
-                let pdbFile = (try Filename.chopExtension filename with _ -> filename) + ".pdb" 
-
-                if FileSystem.SafeExists pdbFile then 
-                    if verbose then dprintf "reading PDB file %s from directory %s\n" pdbFile pdbDir
-                    Some pdbDir
-                else
-                    None
+                Some(try Filename.directoryName filename with _ -> ".")
             else
                 None
 
