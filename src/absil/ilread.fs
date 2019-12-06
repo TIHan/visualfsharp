@@ -135,6 +135,63 @@ type BinaryFile =
     /// desired lifetime.
     abstract GetView: unit -> BinaryView
 
+type StreamView(stream: Stream) =
+    inherit BinaryView()
+
+    let r = new BinaryReader(stream)
+
+    let seek i =
+        if int64 i <> stream.Position then
+            stream.Seek(int64 i, SeekOrigin.Begin) |> ignore
+
+    override m.ReadByte i = 
+        seek i
+        r.ReadByte()
+
+    override m.ReadBytes i n = 
+        seek i
+        r.ReadBytes n
+      
+    override m.ReadInt32 i = 
+        seek i
+        r.ReadInt32()
+
+    override m.ReadUInt16 i = 
+        seek i
+        r.ReadUInt16()
+
+    override m.CountUtf8String i = 
+        seek i
+        while r.ReadByte() <> 0uy do ()
+        int stream.Position - i
+
+    override m.ReadUTF8String i = 
+        let n = m.CountUtf8String i
+        seek i
+        match stream with
+        | :? MemoryStream as ms ->
+            let buffer = ms.GetBuffer()
+            UTF8Encoding.UTF8.GetString(buffer, i, n)
+        | _ ->
+            UTF8Encoding.UTF8.GetString(r.ReadBytes(n))
+
+    override m.Finalize() =
+        (m :> IDisposable).Dispose()
+
+    interface IDisposable with
+
+        member m.Dispose() =
+            GC.SuppressFinalize(m)
+            r.Dispose()
+
+type StreamFile(stream) =
+
+    let view = new StreamView(stream)
+    
+    interface BinaryFile with
+
+        member _.GetView() = view :> BinaryView
+
 /// A view over a raw pointer to memory
 type RawMemoryView(obj: obj, start: nativeint, len: int) =
     inherit BinaryView()
@@ -4005,6 +4062,11 @@ let tryMemoryMapWholeFile opts fileName =
 
 let OpenILModuleReaderFromBytes fileName bytes opts = 
     let pefile = ByteFile(fileName, bytes) :> BinaryFile
+    let ilModule, ilAssemblyRefs, pdb = openPE (fileName, pefile, opts.pdbDirPath, (opts.reduceMemoryUsage = ReduceMemoryFlag.Yes), opts.ilGlobals, true)
+    new ILModuleReaderImpl(ilModule, ilAssemblyRefs, (fun () -> ClosePdbReader pdb)) :> ILModuleReader
+
+let OpenILModuleReaderFromStream fileName stream opts = 
+    let pefile = StreamFile(stream) :> BinaryFile
     let ilModule, ilAssemblyRefs, pdb = openPE (fileName, pefile, opts.pdbDirPath, (opts.reduceMemoryUsage = ReduceMemoryFlag.Yes), opts.ilGlobals, true)
     new ILModuleReaderImpl(ilModule, ilAssemblyRefs, (fun () -> ClosePdbReader pdb)) :> ILModuleReader
 
