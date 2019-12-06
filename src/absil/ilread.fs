@@ -169,9 +169,9 @@ type StreamView(stream: Stream) =
         let n = m.CountUtf8String i
         seek i
         match stream with
-        | :? MemoryStream as ms ->
-            let buffer = ms.GetBuffer()
-            UTF8Encoding.UTF8.GetString(buffer, i, n)
+        //| :? MemoryStream as ms ->
+        //    let buffer = ms.GetBuffer()
+        //    UTF8Encoding.UTF8.GetString(buffer, i, n)
         | _ ->
             UTF8Encoding.UTF8.GetString(r.ReadBytes(n))
 
@@ -184,7 +184,7 @@ type StreamView(stream: Stream) =
             GC.SuppressFinalize(m)
             r.Dispose()
 
-type StreamFile(stream) =
+type StreamFile(stream: Stream) =
 
     let view = new StreamView(stream)
     
@@ -4040,11 +4040,17 @@ let createByteFileChunk opts fileName chunk =
     if opts.reduceMemoryUsage = ReduceMemoryFlag.Yes && stableFileHeuristicApplies fileName then 
         WeakByteFile(fileName, chunk) :> BinaryFile 
     else 
-        let bytes = 
-            match chunk with 
-            | None -> FileSystem.ReadAllBytesShim fileName
-            | Some (start, length) -> File.ReadBinaryChunk(fileName, start, length)
-        ByteFile(fileName, bytes) :> BinaryFile
+        use fileStream = File.OpenRead fileName
+        let mmf = MemoryMappedFiles.MemoryMappedFile.CreateNew("FSharp Temp Storage " + Guid.NewGuid().ToString("N"), fileStream.Length)
+        let writableStream = mmf.CreateViewStream()
+        fileStream.CopyTo(writableStream)
+        RawMemoryFile(fileName, writableStream, writableStream.SafeMemoryMappedViewHandle.DangerousGetHandle(), int fileStream.Length) :> BinaryFile
+
+        //let bytes = 
+        //    match chunk with 
+        //    | None -> FileSystem.ReadAllBytesShim fileName
+        //    | Some (start, length) -> File.ReadBinaryChunk(fileName, start, length)
+        //ByteFile(fileName, bytes) :> BinaryFile
 
 let tryMemoryMapWholeFile opts fileName = 
     let file = 

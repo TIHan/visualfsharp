@@ -85,9 +85,6 @@ val internal ClearAllILModuleReaderCache : unit -> unit
 /// Open a binary reader based on the given bytes. 
 val internal OpenILModuleReaderFromBytes: fileNameForDebugOutput:string -> assemblyContents: byte[] -> options: ILReaderOptions -> ILModuleReader
 
-/// Open a binary reader based on the given stream. 
-val internal OpenILModuleReaderFromStream: fileNameForDebugOutput:string -> assemblyStream: Stream -> options: ILReaderOptions -> ILModuleReader
-
 type Statistics = 
     { mutable rawMemoryFileCount : int
       mutable memoryMapFileOpenedCount : int

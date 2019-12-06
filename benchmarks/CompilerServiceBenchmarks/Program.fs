@@ -148,7 +148,7 @@ type CompilerService() =
             pdbDirPath = None
             ilGlobals = mkILGlobals ILScopeRef.Local
             reduceMemoryUsage = ReduceMemoryFlag.No
-            metadataOnly = MetadataOnlyFlag.Yes
+            metadataOnly = MetadataOnlyFlag.No
             tryGetMetadataSnapshot = fun _ -> None
         }
 
@@ -171,24 +171,24 @@ type CompilerService() =
                 |> Some
         | _ -> ()
 
-    [<Benchmark>]
-    member __.ParsingTypeCheckerFs() =
-        match checkerOpt, sourceOpt with
-        | None, _ -> failwith "no checker"
-        | _, None -> failwith "no source"
-        | Some(checker), Some(source) ->
-            let results = checker.ParseFile("TypeChecker.fs", source.ToFSharpSourceText(), parsingOptions) |> Async.RunSynchronously
-            if results.ParseHadErrors then failwithf "parse had errors: %A" results.Errors
+    //[<Benchmark>]
+    //member __.ParsingTypeCheckerFs() =
+    //    match checkerOpt, sourceOpt with
+    //    | None, _ -> failwith "no checker"
+    //    | _, None -> failwith "no source"
+    //    | Some(checker), Some(source) ->
+    //        let results = checker.ParseFile("TypeChecker.fs", source.ToFSharpSourceText(), parsingOptions) |> Async.RunSynchronously
+    //        if results.ParseHadErrors then failwithf "parse had errors: %A" results.Errors
 
-    [<IterationCleanup(Target = "ParsingTypeCheckerFs")>]
-    member __.ParsingTypeCheckerFsSetup() =
-        match checkerOpt with
-        | None -> failwith "no checker"
-        | Some(checker) ->
-            checker.InvalidateAll()
-            checker.ClearLanguageServiceRootCachesAndCollectAndFinalizeAllTransients()
-            checker.ParseFile("dummy.fs", SourceText.ofString "dummy", parsingOptions) |> Async.RunSynchronously |> ignore
-            ClearAllILModuleReaderCache()
+    //[<IterationCleanup(Target = "ParsingTypeCheckerFs")>]
+    //member __.ParsingTypeCheckerFsSetup() =
+    //    match checkerOpt with
+    //    | None -> failwith "no checker"
+    //    | Some(checker) ->
+    //        checker.InvalidateAll()
+    //        checker.ClearLanguageServiceRootCachesAndCollectAndFinalizeAllTransients()
+    //        checker.ParseFile("dummy.fs", SourceText.ofString "dummy", parsingOptions) |> Async.RunSynchronously |> ignore
+    //        ClearAllILModuleReaderCache()
 
     [<Benchmark>]
     member __.ILReading() =
@@ -270,50 +270,50 @@ type CompilerService() =
                 if checkFileResult.Errors.Length > 0 then
                     failwithf "%A" checkFileResult.Errors
 
-    [<IterationSetup(Target = "TypeCheckFileWith100ReferencedProjects")>]
-    member this.TypeCheckFileWith100ReferencedProjectsSetup() =
-        this.TypeCheckFileWith100ReferencedProjectsOptions.SourceFiles
-        |> Seq.iter (fun file ->
-            File.WriteAllText(file, generateSourceCode (Path.GetFileNameWithoutExtension(file)))
-        )
+    //[<IterationSetup(Target = "TypeCheckFileWith100ReferencedProjects")>]
+    //member this.TypeCheckFileWith100ReferencedProjectsSetup() =
+    //    this.TypeCheckFileWith100ReferencedProjectsOptions.SourceFiles
+    //    |> Seq.iter (fun file ->
+    //        File.WriteAllText(file, generateSourceCode (Path.GetFileNameWithoutExtension(file)))
+    //    )
 
-        this.TypeCheckFileWith100ReferencedProjectsOptions.ReferencedProjects
-        |> Seq.iter (fun (_, referencedProjectOptions) ->
-            referencedProjectOptions.SourceFiles
-            |> Seq.iter (fun file ->
-                File.WriteAllText(file, generateSourceCode (Path.GetFileNameWithoutExtension(file)))
-            )
-        )
+    //    this.TypeCheckFileWith100ReferencedProjectsOptions.ReferencedProjects
+    //    |> Seq.iter (fun (_, referencedProjectOptions) ->
+    //        referencedProjectOptions.SourceFiles
+    //        |> Seq.iter (fun file ->
+    //            File.WriteAllText(file, generateSourceCode (Path.GetFileNameWithoutExtension(file)))
+    //        )
+    //    )
 
-        this.TypeCheckFileWith100ReferencedProjectsRun()
+    //    this.TypeCheckFileWith100ReferencedProjectsRun()
 
-    [<Benchmark>]
-    member this.TypeCheckFileWith100ReferencedProjects() =
-        // Because the checker's projectcachesize is set to 200, this should be fast.
-        // If set to 3, it will be almost as slow as re-evaluating all project and it's projects references on setup; this could be a bug or not what we want.
-        this.TypeCheckFileWith100ReferencedProjectsRun()
+    //[<Benchmark>]
+    //member this.TypeCheckFileWith100ReferencedProjects() =
+    //    // Because the checker's projectcachesize is set to 200, this should be fast.
+    //    // If set to 3, it will be almost as slow as re-evaluating all project and it's projects references on setup; this could be a bug or not what we want.
+    //    this.TypeCheckFileWith100ReferencedProjectsRun()
 
-    [<IterationCleanup(Target = "TypeCheckFileWith100ReferencedProjects")>]
-    member this.TypeCheckFileWith100ReferencedProjectsCleanup() =
-        this.TypeCheckFileWith100ReferencedProjectsOptions.SourceFiles
-        |> Seq.iter (fun file ->
-            try File.Delete(file) with | _ -> ()
-        )
+    //[<IterationCleanup(Target = "TypeCheckFileWith100ReferencedProjects")>]
+    //member this.TypeCheckFileWith100ReferencedProjectsCleanup() =
+    //    this.TypeCheckFileWith100ReferencedProjectsOptions.SourceFiles
+    //    |> Seq.iter (fun file ->
+    //        try File.Delete(file) with | _ -> ()
+    //    )
 
-        this.TypeCheckFileWith100ReferencedProjectsOptions.ReferencedProjects
-        |> Seq.iter (fun (_, referencedProjectOptions) ->
-            referencedProjectOptions.SourceFiles
-            |> Seq.iter (fun file ->
-                try File.Delete(file) with | _ -> ()
-            )
-        )
+    //    this.TypeCheckFileWith100ReferencedProjectsOptions.ReferencedProjects
+    //    |> Seq.iter (fun (_, referencedProjectOptions) ->
+    //        referencedProjectOptions.SourceFiles
+    //        |> Seq.iter (fun file ->
+    //            try File.Delete(file) with | _ -> ()
+    //        )
+    //    )
 
-        match checkerOpt with
-        | None -> failwith "no checker"
-        | Some(checker) ->
-            checker.InvalidateAll()
-            checker.ClearLanguageServiceRootCachesAndCollectAndFinalizeAllTransients()
-            ClearAllILModuleReaderCache()
+    //    match checkerOpt with
+    //    | None -> failwith "no checker"
+    //    | Some(checker) ->
+    //        checker.InvalidateAll()
+    //        checker.ClearLanguageServiceRootCachesAndCollectAndFinalizeAllTransients()
+    //        ClearAllILModuleReaderCache()
 
 [<EntryPoint>]
 let main argv =
