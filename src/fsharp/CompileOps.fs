@@ -1795,19 +1795,22 @@ let (++) x s = x @ [s]
 // General file name resolver
 //--------------------------------------------------------------------------
 
+let CheckIsPathRooted(m, name) =
+    try FileSystem.IsPathRootedShim name
+    with 
+    | e -> error(Error(FSComp.SR.buildProblemWithFilename(name, e.Message), m))
+
 /// Will return None if the filename is not found.
 let TryResolveFileUsingPaths(paths, m, name) =
-    let () = 
-        try FileSystem.IsPathRootedShim name |> ignore 
-        with :? System.ArgumentException as e -> error(Error(FSComp.SR.buildProblemWithFilename(name, e.Message), m))
-    if FileSystem.IsPathRootedShim name && FileSystem.SafeExists name 
-    then Some name 
+    if CheckIsPathRooted(m, name) then
+        Some name
     else
-        let res = paths |> List.tryPick (fun path ->  
-                    let n = Path.Combine (path, name)
-                    if FileSystem.SafeExists n then Some n 
-                    else None)
-        res
+        paths 
+        |> List.tryPick (fun path ->  
+            let n = Path.Combine (path, name)
+            // TODO: Get rid of SafeExists.
+            if FileSystem.SafeExists n then Some n 
+            else None)
 
 /// Will raise FileNameNotResolved if the filename was not found
 let ResolveFileUsingPaths(paths, m, name) =
