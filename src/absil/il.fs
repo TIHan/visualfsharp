@@ -2604,59 +2604,32 @@ let tname_IntPtr = "System.IntPtr"
 [<Literal>]
 let tname_UIntPtr = "System.UIntPtr"
 
-[<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
-// This data structure needs an entirely delayed implementation
-type ILGlobals(primaryScopeRef) =
+[<Sealed>]
+type ILGlobals private (findILType: string -> ILType) =
 
-    let m_mkSysILTypeRef nm = mkILTyRef (primaryScopeRef, nm)
+    member val typ_Object =     findILType tname_Object
+    member val typ_String =     findILType tname_String
+    member val typ_Array =      findILType tname_Array
+    member val typ_Type =       findILType tname_Type
+    member val typ_IntPtr =     findILType tname_IntPtr
+    member val typ_UIntPtr =    findILType tname_UIntPtr
+    member val typ_Byte =       findILType tname_Byte
+    member val typ_Int16 =      findILType tname_Int16
+    member val typ_Int32 =      findILType tname_Int32
+    member val typ_Int64 =      findILType tname_Int64
+    member val typ_SByte =      findILType tname_SByte
+    member val typ_UInt16 =     findILType tname_UInt16
+    member val typ_UInt32 =     findILType tname_UInt32
+    member val typ_UInt64 =     findILType tname_UInt64
+    member val typ_Single =     findILType tname_Single
+    member val typ_Double =     findILType tname_Double
+    member val typ_Bool =       findILType tname_Bool
+    member val typ_Char =       findILType tname_Char
 
-    let m_typ_Object = mkILBoxedType (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Object))
-    let m_typ_String = mkILBoxedType (mkILNonGenericTySpec (m_mkSysILTypeRef tname_String))
-    let m_typ_Array = mkILBoxedType (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Array))
-    let m_typ_Type = mkILBoxedType (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Type))
-    let m_typ_SByte = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_SByte))
-    let m_typ_Int16 = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Int16))
-    let m_typ_Int32 = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Int32))
-    let m_typ_Int64 = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Int64))
-    let m_typ_Byte = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Byte))
-    let m_typ_UInt16 = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_UInt16))
-    let m_typ_UInt32 = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_UInt32))
-    let m_typ_UInt64 = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_UInt64))
-    let m_typ_Single = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Single))
-    let m_typ_Double = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Double))
-    let m_typ_Bool = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Bool))
-    let m_typ_Char = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_Char))
-    let m_typ_IntPtr = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_IntPtr))
-    let m_typ_UIntPtr = ILType.Value (mkILNonGenericTySpec (m_mkSysILTypeRef tname_UIntPtr))
+    member x.primaryAssemblyScopeRef = x.typ_Object.TypeRef.Scope
+    member x.primaryAssemblyName = x.typ_Object.TypeRef.Scope.AssemblyRef.Name
 
-    member x.primaryAssemblyScopeRef = m_typ_Object.TypeRef.Scope
-    member x.primaryAssemblyName = m_typ_Object.TypeRef.Scope.AssemblyRef.Name
-    member x.typ_Object = m_typ_Object
-    member x.typ_String = m_typ_String
-    member x.typ_Array = m_typ_Array
-    member x.typ_Type = m_typ_Type
-    member x.typ_IntPtr = m_typ_IntPtr
-    member x.typ_UIntPtr = m_typ_UIntPtr
-    member x.typ_Byte = m_typ_Byte
-    member x.typ_Int16 = m_typ_Int16
-    member x.typ_Int32 = m_typ_Int32
-    member x.typ_Int64 = m_typ_Int64
-    member x.typ_SByte = m_typ_SByte
-    member x.typ_UInt16 = m_typ_UInt16
-    member x.typ_UInt32 = m_typ_UInt32
-    member x.typ_UInt64 = m_typ_UInt64
-    member x.typ_Single = m_typ_Single
-    member x.typ_Double = m_typ_Double
-    member x.typ_Bool = m_typ_Bool
-    member x.typ_Char = m_typ_Char
-
-    /// For debugging
-    [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
-    member x.DebugText = x.ToString()
-
-    override x.ToString() = "<ILGlobals>"
-
-let mkILGlobals primaryScopeRef = ILGlobals primaryScopeRef
+    static member Create findILType = ILGlobals findILType
 
 let mkNormalCall mspec = I_call (Normalcall, mspec, None)
 
@@ -3715,10 +3688,6 @@ let getCustomAttrData (ilg: ILGlobals) cattr =
     | ILAttribute.Encoded (_, data, _) -> data
     | ILAttribute.Decoded (mspec, fixedArgs, namedArgs) ->
         encodeCustomAttrArgs ilg mspec fixedArgs namedArgs
-
-let MscorlibScopeRef = ILScopeRef.Assembly (ILAssemblyRef.Create ("mscorlib", None, Some ecmaPublicKey, true, None, None))
-
-let EcmaMscorlibILGlobals = mkILGlobals MscorlibScopeRef
 
 // ILSecurityDecl is a 'blob' having the following format:
 // - A byte containing a period (.).

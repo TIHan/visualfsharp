@@ -1570,13 +1570,68 @@ val isTypeNameForGlobalFunctions: string -> bool
 // e.g. by filling in all appropriate record fields.
 // ==================================================================== *)
 
+// TODO: Every other literal below is indented by one space in order to bypass a parser bug.
+//       Remove the indents once we can compile the compiler reliably using the parser fix.
+
+[<Literal>]
+val tname_Object: string = "System.Object"
+
+ [<Literal>]
+ val tname_String: string = "System.String"
+
+[<Literal>]
+val tname_Array: string = "System.Array"
+
+ [<Literal>]
+ val tname_Type: string = "System.Type"
+
+[<Literal>]
+val tname_Int64: string = "System.Int64"
+
+ [<Literal>]
+ val tname_UInt64: string = "System.UInt64"
+
+[<Literal>]
+val tname_Int32: string = "System.Int32"
+
+ [<Literal>]
+ val tname_UInt32: string = "System.UInt32"
+
+[<Literal>]
+val tname_Int16: string = "System.Int16"
+
+ [<Literal>]
+ val tname_UInt16: string = "System.UInt16"
+
+[<Literal>]
+val tname_SByte: string = "System.SByte"
+
+ [<Literal>]
+ val tname_Byte: string = "System.Byte"
+
+[<Literal>]
+val tname_Single: string = "System.Single"
+
+ [<Literal>]
+ val tname_Double: string = "System.Double"
+
+[<Literal>]
+val tname_Bool: string = "System.Boolean"
+
+ [<Literal>]
+ val tname_Char: string = "System.Char"
+
+[<Literal>]
+val tname_IntPtr: string = "System.IntPtr"
+
+ [<Literal>]
+ val tname_UIntPtr: string = "System.UIntPtr"
+
 /// A table of common references to items in primary assembly (System.Runtime or mscorlib).
 /// If a particular version of System.Runtime.dll has been loaded then you should 
 /// reference items from it via an ILGlobals for that specific version built using mkILGlobals. 
-[<NoEquality; NoComparison; Class>]
+[<Sealed>]
 type ILGlobals = 
-    member primaryAssemblyScopeRef: ILScopeRef
-    member primaryAssemblyName: string
     member typ_Object: ILType
     member typ_String: ILType
     member typ_Type: ILType
@@ -1595,12 +1650,10 @@ type ILGlobals =
     member typ_Double: ILType
     member typ_Bool: ILType
     member typ_Char: ILType
+    member primaryAssemblyScopeRef: ILScopeRef
+    member primaryAssemblyName: string
 
-
-/// Build the table of commonly used references given functions to find types in system assemblies
-val mkILGlobals: ILScopeRef -> ILGlobals
-
-val EcmaMscorlibILGlobals: ILGlobals
+    static member Create: findILType: (string -> ILType) -> ILGlobals
 
 /// When writing a binary the fake "toplevel" type definition (called <Module>)
 /// must come first. This function puts it first, and creates it in the returned 

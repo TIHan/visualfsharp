@@ -950,8 +950,7 @@ type PEReader =
 
 [<NoEquality; NoComparison; RequireQualifiedAccess>]
 type ILMetadataReader = 
-  { ilg: ILGlobals
-    sorted: int64
+  { sorted: int64
     mdfile: BinaryFile
     pectxtCaptured: PEReader option // only set when reading full PE including code etc. for static linking
     entryPointToken: TableName * int
@@ -1804,7 +1803,7 @@ and seekReadTypeDefOrRefAsTypeRef (ctxt: ILMetadataReader) (TaggedIndex(tag, idx
     | tag when tag = tdor_TypeRef -> seekReadTypeRef ctxt idx
     | tag when tag = tdor_TypeSpec -> 
         dprintn ("type spec used where a type ref or def is required")
-        ctxt.ilg.typ_Object.TypeRef
+        ILTypeRef.Create(ILScopeRef.Local, ["System"], "Object")
     | _ -> failwith "seekReadTypeDefOrRefAsTypeRef_readTypeDefOrRefOrSpec"
 
 and seekReadMethodRefParent (ctxt: ILMetadataReader) mdv numtypars (TaggedIndex(tag, idx)) =
