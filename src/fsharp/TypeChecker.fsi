@@ -39,17 +39,25 @@ val EmptyTopAttrs : TopAttribs
 val CombineTopAttrs : TopAttribs -> TopAttribs -> TopAttribs
 
 val TypeCheckOneImplFile : 
-      TcGlobals * NiceNameGenerator * ImportMap * CcuThunk * (unit -> bool) * ConditionalDefines option * NameResolution.TcResultsSink * bool
+      TcGlobals * NiceNameGenerator * ImportMap * CcuThunk * (unit -> bool) * ConditionalDefines option * NameResolution.TcResultsSink * (TcEnv -> SynExpr -> unit) * bool
       -> TcEnv 
       -> Tast.ModuleOrNamespaceType option
       -> ParsedImplFileInput
       -> Eventually<TopAttribs * Tast.TypedImplFile * ModuleOrNamespaceType * TcEnv * bool>
 
 val TypeCheckOneSigFile : 
-      TcGlobals * NiceNameGenerator * ImportMap * CcuThunk  * (unit -> bool) * ConditionalDefines option * NameResolution.TcResultsSink * bool
+      TcGlobals * NiceNameGenerator * ImportMap * CcuThunk  * (unit -> bool) * ConditionalDefines option * NameResolution.TcResultsSink * (TcEnv -> SynExpr -> unit) * bool
       -> TcEnv                             
       -> ParsedSigFileInput
       -> Eventually<TcEnv * ModuleOrNamespaceType * bool>
+
+val TypeCheckOneSynExpr :
+      TcGlobals * NiceNameGenerator * ImportMap * CcuThunk * ConditionalDefines option * NameResolution.TcResultsSink * bool
+      -> TcEnv
+      -> Tast.ModuleOrNamespaceType option
+      -> isScript: bool
+      -> SynExpr
+      -> TType
 
 //-------------------------------------------------------------------------
 // Some of the exceptions arising from type checking. These should be moved to 

@@ -480,6 +480,8 @@ type cenv =
 
       tcSink: TcResultsSink
 
+      tcExprSink: TcEnv -> SynExpr -> unit
+
       /// Holds a reference to the component being compiled. 
       /// This field is very rarely used (mainly when fixing up forward references to fslib. 
       topCcu: CcuThunk 
@@ -512,7 +514,7 @@ type cenv =
     } 
 
     /// Create a new compilation environment
-    static member Create (g, isScript, niceNameGen, amap, topCcu, isSig, haveSig, conditionalDefines, tcSink, tcVal, isInternalTestSpanStackReferring) =
+    static member Create (g, isScript, niceNameGen, amap, topCcu, isSig, haveSig, conditionalDefines, tcSink, tcExprSink, tcVal, isInternalTestSpanStackReferring) =
         let infoReader = new InfoReader(g, amap)
         let instantiationGenerator m tpsorig = ConstraintSolver.FreshenTypars m tpsorig
         let nameResolver = new NameResolver(g, amap, infoReader, instantiationGenerator)
@@ -526,6 +528,7 @@ type cenv =
           css = ConstraintSolverState.New(g, amap, infoReader, tcVal)
           infoReader = infoReader
           tcSink = tcSink
+          tcExprSink = tcExprSink
           nameResolver = nameResolver
           niceNameGen = niceNameGen
           synArgNameGenerator = SynArgNameGenerator()
@@ -5657,6 +5660,7 @@ and TcExprFlex cenv flex compat ty (env: TcEnv) tpenv (e: SynExpr) =
     
 
 and TcExpr cenv ty (env: TcEnv) tpenv (expr: SynExpr) =
+    cenv.tcExprSink env expr
     // Start an error recovery handler 
     // Note the try/catch can lead to tail-recursion problems for iterated constructs, e.g. let... in... 
     // So be careful! 
@@ -17537,13 +17541,13 @@ let CheckModuleSignature g cenv m denvAtEnd rootSigOpt implFileTypePriorToSig im
 /// Typecheck, then close the inference scope and then check the file meets its signature (if any)
 let TypeCheckOneImplFile 
        // checkForErrors: A function to help us stop reporting cascading errors 
-       (g, niceNameGen, amap, topCcu, checkForErrors, conditionalDefines, tcSink, isInternalTestSpanStackReferring) 
+       (g, niceNameGen, amap, topCcu, checkForErrors, conditionalDefines, tcSink, tcExprSink, isInternalTestSpanStackReferring) 
        env 
        (rootSigOpt: ModuleOrNamespaceType option)
        (ParsedImplFileInput (_, isScript, qualNameOfFile, scopedPragmas, _, implFileFrags, isLastCompiland)) =
 
  eventually {
-    let cenv = cenv.Create (g, isScript, niceNameGen, amap, topCcu, false, Option.isSome rootSigOpt, conditionalDefines, tcSink, (LightweightTcValForUsingInBuildMethodCall g), isInternalTestSpanStackReferring)    
+    let cenv = cenv.Create (g, isScript, niceNameGen, amap, topCcu, false, Option.isSome rootSigOpt, conditionalDefines, tcSink, tcExprSink, (LightweightTcValForUsingInBuildMethodCall g), isInternalTestSpanStackReferring)    
 
     let envinner, mtypeAcc = MakeInitialEnv env 
 
@@ -17642,9 +17646,9 @@ let TypeCheckOneImplFile
 
 
 /// Check an entire signature file
-let TypeCheckOneSigFile (g, niceNameGen, amap, topCcu, checkForErrors, conditionalDefines, tcSink, isInternalTestSpanStackReferring) tcEnv (ParsedSigFileInput (_, qualNameOfFile, _, _, sigFileFrags)) = 
+let TypeCheckOneSigFile (g, niceNameGen, amap, topCcu, checkForErrors, conditionalDefines, tcSink, tcExprSink, isInternalTestSpanStackReferring) tcEnv (ParsedSigFileInput (_, qualNameOfFile, _, _, sigFileFrags)) = 
  eventually {     
-    let cenv = cenv.Create (g, false, niceNameGen, amap, topCcu, true, false, conditionalDefines, tcSink, (LightweightTcValForUsingInBuildMethodCall g), isInternalTestSpanStackReferring)
+    let cenv = cenv.Create (g, false, niceNameGen, amap, topCcu, true, false, conditionalDefines, tcSink, tcExprSink, (LightweightTcValForUsingInBuildMethodCall g), isInternalTestSpanStackReferring)
     let envinner, mtypeAcc = MakeInitialEnv tcEnv 
 
     let specs = [ for x in sigFileFrags -> SynModuleSigDecl.NamespaceFragment x ]
@@ -17658,3 +17662,8 @@ let TypeCheckOneSigFile (g, niceNameGen, amap, topCcu, checkForErrors, condition
 
     return (tcEnv, sigFileType, cenv.createsGeneratedProvidedTypes)
  }
+
+let TypeCheckOneSynExpr (g, niceNameGen, amap, topCcu, conditionalDefines, tcSink, isInternalTestSpanStackReferring) env (rootSigOpt: ModuleOrNamespaceType option) isScript synExpr =
+    let cenv = cenv.Create (g, isScript, niceNameGen, amap, topCcu, false, Option.isSome rootSigOpt, conditionalDefines, tcSink, (fun _ _ -> ()), (LightweightTcValForUsingInBuildMethodCall g), isInternalTestSpanStackReferring)
+    let _, ty, _ = TcExprOfUnknownType cenv env emptyUnscopedTyparEnv synExpr
+    ty

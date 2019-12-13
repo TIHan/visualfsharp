@@ -1379,6 +1379,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                              tcAcc.tcGlobals, 
                              None, 
                              TcResultsSink.WithSink sink, 
+                             (fun _ _ -> ()),
                              tcAcc.tcState, input)
                         
                     /// Only keep the typed interface files when doing a "full" build for fsc.exe, otherwise just throw them away
