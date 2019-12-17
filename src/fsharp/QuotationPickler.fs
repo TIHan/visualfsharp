@@ -302,6 +302,11 @@ module SimplePickle =
         p_int32 (len) st
         st.os.EmitBytes s
 
+    let p_chunked_bytes (s:ChunkedArray<byte>) st = 
+        let len = s.Length
+        p_int32 (len) st
+        st.os.EmitChunkedBytes s
+
     let prim_pstring (s:string) st = 
         let bytes = Encoding.UTF8.GetBytes s 
         let len = bytes.Length 
@@ -365,7 +370,7 @@ module SimplePickle =
             let st2 = 
                { os = ByteBuffer.Create 100000
                  ostrings=Table<_>.Create() } 
-            p_tup2 (p_list prim_pstring) p_bytes phase2data st2
+            p_tup2 (p_list prim_pstring) p_chunked_bytes phase2data st2
             st2.os.Close() 
         phase2bytes
 

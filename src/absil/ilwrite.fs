@@ -48,7 +48,7 @@ let dw0 n = byte (n &&& 0xFFL)
 let bitsOfSingle (x: float32) = System.BitConverter.ToInt32(System.BitConverter.GetBytes x, 0)
 let bitsOfDouble (x: float) = System.BitConverter.DoubleToInt64Bits x
 
-let emitBytesViaBuffer f = let bb = ByteBuffer.Create 10 in f bb; bb.Close()
+let emitBytesViaBuffer f = let bb = ByteBuffer.Create 10 in f bb; bb.Close().ToArray()
 
 /// Alignment and padding
 let align alignment n = ((n + alignment - 1) / alignment) * alignment
@@ -1695,7 +1695,7 @@ module Codebuf =
               let (origStartOfNoBranchBlock, _, newStartOfNoBranchBlock) = arr.[i]
               addr - (origStartOfNoBranchBlock - newStartOfNoBranchBlock) 
 
-          newCode.Close(), 
+          newCode.Close().ToArray(), 
           !newReqdBrFixups, 
           adjuster
 
@@ -2196,7 +2196,7 @@ module Codebuf =
     let EmitTopCode cenv localSigs env nm code = 
         let codebuf = CodeBuffer.Create nm
         let origScopes = emitCode cenv localSigs codebuf env code
-        let origCode = codebuf.code.Close()
+        let origCode = codebuf.code.Close().ToArray()
         let origExnClauses = List.rev codebuf.seh
         let origReqdStringFixups = codebuf.reqdStringFixupsInMethod
         let origAvailBrFixups = codebuf.availBrFixups
@@ -2245,7 +2245,7 @@ let GenILMethodBody mname cenv env (il: ILMethodBody) =
         methbuf.EmitByte (byte codeSize <<< 2 ||| e_CorILMethod_TinyFormat)
         methbuf.EmitBytes code
         methbuf.EmitPadding codePadding
-        0x0, (requiredStringFixups', methbuf.Close()), seqpoints, scopes
+        0x0, (requiredStringFixups', methbuf.Close().ToArray()), seqpoints, scopes
     else
         // Use Fat format 
         let flags = 
@@ -2319,7 +2319,7 @@ let GenILMethodBody mname cenv env (il: ILMethodBody) =
         
         let requiredStringFixups' = (12, requiredStringFixups)
 
-        localToken, (requiredStringFixups', methbuf.Close()), seqpoints, scopes
+        localToken, (requiredStringFixups', methbuf.Close().ToArray()), seqpoints, scopes
 
 // -------------------------------------------------------------------- 
 // ILFieldDef --> FieldDef Row
@@ -3072,6 +3072,7 @@ let writeILMetadataAndCode (generatePdb, desiredMetadataVersion, ilg, emitTailca
     let tableSize (tab: TableName) = tables.[tab.Index].Count
 
    // Now place the code 
+    let code = code.ToArray()
     let codeSize = code.Length
     let alignedCodeSize = align 0x4 codeSize
     let codep, next = chunk codeSize next
@@ -3397,7 +3398,7 @@ let writeILMetadataAndCode (generatePdb, desiredMetadataVersion, ilg, emitTailca
       
       reportTime showTimes "Write Metadata Header"
      // Now the coded tables themselves 
-      mdbuf.EmitBytes codedTables
+      mdbuf.EmitChunkedBytes codedTables
       for i = 1 to tablesStreamPadding do 
           mdbuf.EmitIntAsByte 0x00
       reportTime showTimes "Write Metadata Tables"
@@ -3432,7 +3433,7 @@ let writeILMetadataAndCode (generatePdb, desiredMetadataVersion, ilg, emitTailca
           mdbuf.EmitIntAsByte 0x00
       reportTime showTimes "Write Blob Stream"
      // Done - close the buffer and return the result. 
-      mdbuf.Close(), guidStart
+      mdbuf.Close().ToArray(), guidStart
     
 
    // Now we know the user string tables etc. we can fixup the 
@@ -3838,7 +3839,7 @@ let writeBinaryAndReportMappings (outfile,
                   | HashAlgorithm.Sha256 -> System.Security.Cryptography.SHA256.Create() :> System.Security.Cryptography.HashAlgorithm
 
               let hCode = sha.ComputeHash code
-              let hData = sha.ComputeHash data
+              let hData = sha.ComputeHash (data.ToArray())
               let hMeta = sha.ComputeHash metadata
               let final = [| hCode; hData; hMeta |] |> Array.collect id |> sha.ComputeHash
 
@@ -4086,9 +4087,9 @@ let writeBinaryAndReportMappings (outfile,
             write (Some (textV2P strongnameChunk.addr)) os "strongname" (Array.create strongnameChunk.size 0x0uy)
 
           write (Some (textV2P resourcesChunk.addr)) os "raw resources" [| |]
-          writeBytes os resources
+          writeBytes os (resources.ToArray())
           write (Some (textV2P rawdataChunk.addr)) os "raw data" [| |]
-          writeBytes os data
+          writeBytes os (data.ToArray())
 
           writePadding os "start of import table" importTableChunkPrePadding
 

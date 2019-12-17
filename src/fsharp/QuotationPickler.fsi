@@ -109,10 +109,10 @@ val mkFieldSet : FieldData   * TypeData list * ExprData list -> ExprData
 val mkCtorCall : CtorData * TypeData list * ExprData list -> ExprData 
 val mkMethodCall : MethodData * TypeData list * ExprData list -> ExprData 
 val mkAttributedExpression : ExprData * ExprData -> ExprData 
-val pickle : (ExprData -> byte[]) 
+val pickle : (ExprData -> ChunkedArray<byte>) 
 val isAttributedExpression : ExprData -> bool
     
-val PickleDefns : ((MethodBaseData * ExprData) list -> byte[]) 
+val PickleDefns : ((MethodBaseData * ExprData) list -> ChunkedArray<byte>) 
 val SerializedReflectedDefinitionsResourceNameBase : string
 val freshVar : string * TypeData * bool -> VarData
 

@@ -95,7 +95,7 @@ let usingLexbufForParsing (lexbuf:UnicodeLexing.Lexbuf, filename) f =
 
 let defaultStringFinisher = (fun _endm _b s -> STRING (Encoding.Unicode.GetString(s, 0, s.Length))) 
 
-let callStringFinisher fin (buf: ByteBuffer) endm b = fin endm b (buf.Close())
+let callStringFinisher fin (buf: ByteBuffer) endm b = fin endm b (buf.Close().ToArray())
 
 let addUnicodeString (buf: ByteBuffer) (x:string) = buf.EmitBytes (Encoding.Unicode.GetBytes x)
 
@@ -122,12 +122,12 @@ let stringBufferAsString (buf: byte[]) =
 /// we just take every second byte we stored.  Note all bytes > 127 should have been 
 /// stored using addIntChar 
 let stringBufferAsBytes (buf: ByteBuffer) = 
-    let bytes = buf.Close()
+    let bytes = buf.Close().ToArray()
     Array.init (bytes.Length / 2) (fun i -> bytes.[i*2]) 
 
 /// Sanity check that high bytes are zeros. Further check each low byte <= 127 
 let stringBufferIsBytes (buf: ByteBuffer) = 
-    let bytes = buf.Close()
+    let bytes = buf.Close().ToArray()
     let mutable ok = true 
     for i = 0 to bytes.Length / 2-1 do
         if bytes.[i*2+1] <> 0uy then ok <- false

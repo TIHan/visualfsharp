@@ -24,11 +24,16 @@ type internal ChunkedArrayForEachDelegate<'T> = delegate of Span<'T> -> unit
 [<Struct;NoEquality;NoComparison>]
 type internal ChunkedArray<'T> =
 
+    member Item: int with get
+    member Item: int * 'T with set
+
     member Length: int
 
     member ForEachChunk: ChunkedArrayForEachDelegate<'T> -> unit
 
     member ToArray: unit -> 'T[]
+
+    member CopyTo: 'T[] * offset: int -> unit
 
     member IsEmpty: bool
 
@@ -163,13 +168,14 @@ type internal ByteMemory with
 [<Sealed>]
 type internal ByteBuffer = 
     member Reserve : int -> Span<byte>
-    member Close : unit -> byte[] 
+    member Close : unit -> ChunkedArray<byte> 
     member EmitIntAsByte : int -> unit
     member EmitIntsAsBytes : int[] -> unit
     member EmitInt32s : int32[] -> unit
     member EmitByte : byte -> unit
     member EmitBytes : byte[] -> unit
     member EmitByteMemory : ReadOnlyByteMemory -> unit
+    member EmitChunkedBytes: ChunkedArray<byte> -> unit
     member EmitInt32 : int32 -> unit
     member EmitInt64 : int64 -> unit
     member EmitInt32AsUInt16 : int32 -> unit

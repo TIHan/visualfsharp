@@ -691,7 +691,7 @@ let unlinkResource (ulLinkedResourceBaseRVA: int32) (pbLinkedResource: byte[]) =
         // Write a dummy header
         let rfh = ResFormatHeader()
         let rfhBytes = rfh.toBytes()
-        Bytes.blit rfhBytes 0 pResBuffer 0 ResFormatHeader.Width
+        rfhBytes.CopyTo(pResBuffer, ResFormatHeader.Width)
         resBufferOffset <- resBufferOffset + ResFormatHeader.Width
 
         for i = 0 to (nResNodes - 1) do

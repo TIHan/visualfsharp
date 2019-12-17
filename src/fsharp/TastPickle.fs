@@ -202,6 +202,11 @@ let p_bytes (s: byte[]) st =
     p_int32 len st
     st.os.EmitBytes s
 
+let p_chunked_bytes (s: ChunkedArray<byte>) st =
+    let len = s.Length
+    p_int32 len st
+    st.os.EmitChunkedBytes s
+
 let p_prim_string (s: string) st =
     let bytes = Encoding.UTF8.GetBytes s
     let len = bytes.Length
@@ -806,7 +811,7 @@ let pickleObjWithDanglingCcus inMem file g scope p x =
         (p_array p_encoded_pubpath)
         (p_array p_encoded_nleref)
         (p_array p_encoded_simpletyp)
-        p_bytes
+        p_chunked_bytes
         (stringTab.AsArray, pubpathTab.AsArray, nlerefTab.AsArray, simpleTyTab.AsArray, phase1bytes)
         st2
     st2.os.Close()

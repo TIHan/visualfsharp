@@ -48,7 +48,7 @@ type ChunkedArrayBuilder<'T> private (minChunkSize: int, buffer: 'T []) =
     member val private NextOrPrevious = Unchecked.defaultof<ChunkedArrayBuilder<'T>> with get, set
     member val private Position = 0 with get, set
     member val private IsFrozen = false with get, set
-    member val private ChunkCount = 1 with get, set
+    member val private TotalLength = 0 with get, set
 
     // [1:first]->[2]->[3:last]<-[4:head]
     //     ^_______________|
@@ -58,13 +58,14 @@ type ChunkedArrayBuilder<'T> private (minChunkSize: int, buffer: 'T []) =
         if x.IsFrozen then
             invalidOp "Chunked array builder is frozen and cannot add or remove items."
 
-    member x.IsEmpty = x.ChunkCount = 1 && x.ChunkLength = 0
+    member x.Length = x.TotalLength
+
+    member x.IsEmpty = x.Length = 0
 
     member x.Reserve length =
         x.CheckIsFrozen()
 
         if length + x.Position > x.Buffer.Length then
-            x.ChunkCount <- x.ChunkCount + 1
             let newChunk = 
                 ChunkedArrayBuilder<'T>(
                     minChunkSize, 
@@ -95,6 +96,7 @@ type ChunkedArrayBuilder<'T> private (minChunkSize: int, buffer: 'T []) =
         let reserved = Span(x.Buffer, x.Position, length)
         x.ChunkLength <- x.ChunkLength + length
         x.Position <- x.ChunkLength
+        x.TotalLength <- x.TotalLength + x.ChunkLength
         reserved
 
     member x.AddSpan(data: ReadOnlySpan<'T>) =
@@ -151,11 +153,10 @@ type ChunkedArrayBuilder<'T> private (minChunkSize: int, buffer: 'T []) =
                     builder.Buffer.[builder.ChunkLength - 1] <- Unchecked.defaultof<_>
 
                 builder.ChunkLength <- builder.ChunkLength - 1
+                x.TotalLength <- x.TotalLength - 1
               
             assert (builder.ChunkLength >= 0)
-
-            if builder.ChunkLength = 0 then
-                x.ChunkCount <- x.ChunkCount - 1)
+            assert (x.TotalLength >= 0))
 
     static member Create(minChunkSize, startingCapacity) =
         ChunkedArrayBuilder(
@@ -165,13 +166,43 @@ type ChunkedArrayBuilder<'T> private (minChunkSize: int, buffer: 'T []) =
 [<Struct;NoEquality;NoComparison>]
 type ChunkedArray<'T>(builder: ChunkedArrayBuilder<'T>) =
 
+    member x.Item 
+        with get i = 
+            if i >= x.Length then
+                raise (ArgumentOutOfRangeException("i"))
+
+            let mutable total = 0
+            let mutable res = ValueNone
+            builder.ForEachChunk (fun chunk -> 
+                match res with
+                | ValueSome _ -> ()
+                | ValueNone ->
+                    if i >= total && i < (total + chunk.Length) then
+                        res <- ValueSome(chunk.[(i - total + chunk.Length)])
+                total <- total + chunk.Length)
+
+            assert res.IsSome
+            res.Value
+
+        and set i v = 
+            if i >= x.Length then
+                raise (ArgumentOutOfRangeException("i"))
+
+            let mutable total = 0
+            let mutable isFinished = false
+            builder.ForEachChunk (fun chunk -> 
+                if not isFinished then
+                    if i >= total && i < (total + chunk.Length) then
+                        chunk.[(i - total + chunk.Length)] <- v
+                        isFinished <- true)
+
+            assert isFinished
+
     member _.Length =
         match box builder with
         | null -> 0
         | _ ->
-            let mutable total = 0
-            builder.ForEachChunk (fun chunk -> total <- total + chunk.Length)
-            total
+            builder.Length
 
     member _.ForEachChunk f = 
         match box builder with
@@ -189,6 +220,15 @@ type ChunkedArray<'T>(builder: ChunkedArrayBuilder<'T>) =
                 chunk.CopyTo(Span(arr, total, chunk.Length))
                 total <- total + chunk.Length)
             arr
+
+    member x.CopyTo(arr: 'T[], offset) =
+        match box builder with
+        | null -> ()
+        | _ ->
+            let mutable total = 0
+            builder.ForEachChunk (fun chunk -> 
+                chunk.CopyTo(Span(arr, offset + total, chunk.Length))
+                total <- total + chunk.Length)
 
     member x.IsEmpty =
         match box builder with
@@ -432,6 +472,72 @@ type RawByteMemory(addr: nativeptr<byte>, length: int, hold: obj) =
     override _.AsReadOnlyStream() =
         new UnmanagedMemoryStream(addr, int64 length, int64 length, FileAccess.Read) :> Stream
 
+[<Sealed>]
+type ChunkedByteMemory(bytes: ChunkedArray<_>) =
+    inherit ByteMemory ()
+
+    let mutable bytes = bytes
+
+    do
+        if bytes.Length <= 0 then
+            raise (ArgumentOutOfRangeException("length"))
+
+    override _.Item 
+        with get i = bytes.[i]
+        and set i v = bytes.[i] <- v
+
+    override _.Length = bytes.Length
+
+    override _.ReadUtf8String(pos, count) =
+        
+        check pos
+        check (pos + count - 1)
+        System.Text.Encoding.UTF8.GetString(NativePtr.add addr pos, count)
+
+    override _.ReadBytes(pos, count) = 
+        check pos
+        check (pos + count - 1)
+        let res = Bytes.zeroCreate count
+        Marshal.Copy(NativePtr.toNativeInt addr + nativeint pos, res, 0, count)
+        res
+
+    override _.ReadInt32 pos =
+        check pos
+        check (pos + 3)
+        Marshal.ReadInt32(NativePtr.toNativeInt addr + nativeint pos)
+
+    override _.ReadUInt16 pos =
+        check pos
+        check (pos + 1)
+        uint16(Marshal.ReadInt16(NativePtr.toNativeInt addr + nativeint pos))
+
+    override _.Slice(pos, count) =
+        check pos
+        check (pos + count - 1)
+        RawByteMemory(NativePtr.add addr pos, count, hold) :> ByteMemory
+
+    override x.CopyTo(stream: Stream) =
+        use stream2 = x.AsStream()
+        stream2.CopyTo stream
+
+    override x.CopyTo(span: Span<byte>) =
+        ReadOnlySpan(NativePtr.toVoidPtr addr, length).CopyTo span
+
+    override x.Copy(srcOffset, dest, destOffset, count) =
+        check srcOffset
+        Marshal.Copy(NativePtr.toNativeInt addr + nativeint srcOffset, dest, destOffset, count)
+
+    override _.ToArray() =
+        let res = Array.zeroCreate<byte> length
+        Marshal.Copy(NativePtr.toNativeInt addr, res, 0, res.Length)
+        res
+
+    override _.AsStream() =
+        new UnmanagedMemoryStream(addr, int64 length) :> Stream
+
+    override _.AsReadOnlyStream() =
+        new UnmanagedMemoryStream(addr, int64 length, int64 length, FileAccess.Read) :> Stream
+
 [<Struct;NoEquality;NoComparison>]
 type ReadOnlyByteMemory(bytes: ByteMemory) =
 
@@ -611,7 +717,7 @@ type internal ByteBuffer =
         buf.bbCurrent <- buf.bbCurrent + length
         buf.bbArray.Reserve length
 
-    member buf.Close () = buf.bbArray.ToChunkedArray().ToArray()
+    member buf.Close () = buf.bbArray.ToChunkedArray()
 
     member buf.EmitIntAsByte (i:int) = 
         buf.EmitByte (byte i)
@@ -641,6 +747,11 @@ type internal ByteBuffer =
     member buf.EmitByteMemory (bytes: ReadOnlyByteMemory) =
         bytes.CopyTo(buf.bbArray.Reserve bytes.Length)
         buf.bbCurrent <- buf.bbCurrent + bytes.Length
+
+    member buf.EmitChunkedBytes (bytes: ChunkedArray<byte>) =
+        bytes.ForEachChunk(fun chunk ->
+            chunk.CopyTo(buf.bbArray.Reserve chunk.Length)
+            buf.bbCurrent <- buf.bbCurrent + chunk.Length)
 
     member buf.EmitInt32AsUInt16 n = 
         (buf.bbArray.Reserve 2).WriteInt32AsUInt16 (0, n)

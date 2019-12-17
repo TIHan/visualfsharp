@@ -1845,7 +1845,7 @@ let GenConstArray cenv (cgbuf: CodeGenBuffer) eenv ilElementType (data:'a[]) (wr
     let g = cenv.g
     let buf = ByteBuffer.Create data.Length
     data |> Array.iter (write buf)
-    let bytes = buf.Close()
+    let bytes = buf.Close().ToArray()
     let ilArrayType = mkILArr1DTy ilElementType
     if data.Length = 0 then
         CG.EmitInstrs cgbuf (pop 0) (Push [ilArrayType]) [ mkLdcInt32 0; I_newarr (ILArrayShape.SingleDimensional, ilElementType); ]
@@ -3799,7 +3799,7 @@ and GenQuotation cenv cgbuf eenv (ast, conv, m, ety) sequel =
             with
                 QuotationTranslator.InvalidQuotedTerm e -> error e
 
-    let astSerializedBytes = QuotationPickler.pickle astSpec
+    let astSerializedBytes = (QuotationPickler.pickle astSpec).ToArray()
 
     let someTypeInModuleExpr = mkTypeOfExpr cenv m eenv.someTypeInThisAssembly
     let rawTy = mkRawQuotedExprTy g                      
@@ -7618,7 +7618,7 @@ let GenerateCode (cenv, anonTypeTable, eenv, TypedAssemblyAfterOptimization file
 
             let defnsResourceBytes = defns |> QuotationPickler.PickleDefns
 
-            [ (referencedTypeDefs, defnsResourceBytes) ]
+            [ (referencedTypeDefs, defnsResourceBytes.ToArray()) ]
 
     let ilNetModuleAttrs = GenAttrs cenv eenv moduleAttribs
 
