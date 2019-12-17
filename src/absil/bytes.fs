@@ -42,7 +42,7 @@ type ChunkedArrayForEachDelegate<'T> = delegate of Span<'T> -> bool
 /// Loosely based on StringBuilder/BlobBuilder
 [<Sealed>]
 type ChunkedArrayBuilder<'T> private (minChunkSize: int, buffer: 'T []) =
-
+ 
     member val private Buffer = buffer with get, set
     member val private ChunkLength = 0 with get, set
     member val private NextOrPrevious = Unchecked.defaultof<ChunkedArrayBuilder<'T>> with get, set
@@ -66,37 +66,38 @@ type ChunkedArrayBuilder<'T> private (minChunkSize: int, buffer: 'T []) =
         x.CheckIsFrozen()
 
         if length + x.Position > x.Buffer.Length then
-            let newChunk = 
-                ChunkedArrayBuilder<'T>(
-                    minChunkSize, 
-                    Array.zeroCreate<'T> (Math.Max(length, minChunkSize)), 
-                    IsFrozen = true)
-            let newBuffer = newChunk.Buffer
+            let newBuffer = Array.zeroCreate<'T> (Math.Max(length, minChunkSize))
+            // If the chunk length is zero, just replace its buffer.
+            if x.ChunkLength = 0 then
+                x.Buffer <- newBuffer
+            else
+                let newChunk = 
+                    ChunkedArrayBuilder<'T>(minChunkSize, newBuffer, IsFrozen = true)
 
-            match box x.NextOrPrevious with
-            | null -> ()
-            | _ ->
-                match box x.FirstChunk with
-                | null ->
-                    let firstChunk = x.NextOrPrevious
-                    firstChunk.NextOrPrevious <- newChunk
-                    newChunk.NextOrPrevious <- firstChunk
+                match box x.NextOrPrevious with
+                | null -> ()
                 | _ ->
-                    let firstChunk = x.FirstChunk
-                    let lastChunk = x.NextOrPrevious
-                    lastChunk.NextOrPrevious <- newChunk
-                    newChunk.NextOrPrevious <- firstChunk
+                    match box x.FirstChunk with
+                    | null ->
+                        let firstChunk = x.NextOrPrevious
+                        firstChunk.NextOrPrevious <- newChunk
+                        newChunk.NextOrPrevious <- firstChunk
+                    | _ ->
+                        let firstChunk = x.FirstChunk
+                        let lastChunk = x.NextOrPrevious
+                        lastChunk.NextOrPrevious <- newChunk
+                        newChunk.NextOrPrevious <- firstChunk
 
-            newChunk.ChunkLength <- x.ChunkLength
-            newChunk.Buffer <- x.Buffer
-            x.Buffer <- newBuffer
-            x.NextOrPrevious <- newChunk
-            x.ChunkLength <- 0
-            x.Position <- 0
+                newChunk.ChunkLength <- x.ChunkLength
+                newChunk.Buffer <- x.Buffer
+                x.Buffer <- newBuffer
+                x.NextOrPrevious <- newChunk
+                x.ChunkLength <- 0
+                x.Position <- 0
         let reserved = Span(x.Buffer, x.Position, length)
         x.ChunkLength <- x.ChunkLength + length
         x.Position <- x.ChunkLength
-        x.TotalLength <- x.TotalLength + x.ChunkLength
+        x.TotalLength <- x.TotalLength + length
         reserved
 
     member x.AddSpan(data: ReadOnlySpan<'T>) =
@@ -186,7 +187,7 @@ type ChunkedArray<'T>(builder: ChunkedArrayBuilder<'T>) =
                 | ValueSome _ -> false
                 | ValueNone ->
                     if i >= total && i < (total + chunk.Length) then
-                        res <- ValueSome(chunk.[(i - total + chunk.Length)])
+                        res <- ValueSome(chunk.[i - total])
                         false
                     else
                         total <- total + chunk.Length
@@ -202,9 +203,10 @@ type ChunkedArray<'T>(builder: ChunkedArrayBuilder<'T>) =
             let mutable total = 0
             builder.ForEachChunk (fun chunk -> 
                 if i >= total && i < (total + chunk.Length) then
-                    chunk.[(i - total + chunk.Length)] <- v
+                    chunk.[i - total] <- v
                     false
                 else
+                    total <- total + chunk.Length
                     true)
 
     member _.Length =
