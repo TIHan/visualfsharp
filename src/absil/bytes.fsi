@@ -19,16 +19,18 @@ module internal Bytes =
     val stringAsUnicodeNullTerminated: string -> byte[]
     val stringAsUtf8NullTerminated: string -> byte[]
 
-type internal ChunkedArrayForEachDelegate<'T> = delegate of Span<'T> -> unit
+type internal ChunkedArrayForEachDelegate<'T> = delegate of Span<'T> -> bool
 
 [<Struct;NoEquality;NoComparison>]
 type internal ChunkedArray<'T> =
 
-    member Item: int with get
-    member Item: int * 'T with set
+    member Item: int -> 'T with get, set
 
     member Length: int
 
+    /// The delegate returns a bool which means if the iteration can continue.
+    /// True - Will keep iterating.
+    /// False - Will stop iterating.
     member ForEachChunk: ChunkedArrayForEachDelegate<'T> -> unit
 
     member ToArray: unit -> 'T[]

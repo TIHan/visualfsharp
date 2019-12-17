@@ -1682,13 +1682,9 @@ type TcSymbolUseData =
 type TcSymbolUses(g, allUsesOfSymbols: ChunkedArray<TcSymbolUseData>, formatSpecifierLocations: (range * int)[]) =
 
     member this.GetUsesOfSymbol item =
-        let usesBuilder = ChunkedArrayBuilder<_>.Create(64, 128)
-        allUsesOfSymbols.ForEachChunk(fun chunk ->
-            for symbolUse in chunk do
-                if protectAssemblyExploration false (fun () -> ItemsAreEffectivelyEqual g item symbolUse.Item) then
-                    usesBuilder.Add(symbolUse) 
-        )
-        usesBuilder.ToChunkedArray()
+        allUsesOfSymbols
+        |> ChunkedArray.filter (fun symbolUse ->
+            protectAssemblyExploration false (fun () -> ItemsAreEffectivelyEqual g item symbolUse.Item))
 
     member this.AllUsesOfSymbols = allUsesOfSymbols
 
@@ -1745,12 +1741,9 @@ type TcResultsSinkImpl(g, ?sourceText: ISourceText) =
     member this.GetSymbolUses() =
         // Make sure we only capture the information we really need to report symbol uses
         let allUsesOfSymbols =
-            let mappedBuilder = ChunkedArrayBuilder<_>.Create(64, 128)
-            capturedNameResolutions.Value.ForEachChunk(fun chunk ->
-                for cnr in chunk do
-                    mappedBuilder.Add { Item=cnr.Item; ItemOccurence=cnr.ItemOccurence; DisplayEnv=cnr.DisplayEnv; Range=cnr.Range }
-            )
-            mappedBuilder.ToChunkedArray()
+            capturedNameResolutions.Value
+            |> ChunkedArray.map (fun cnr ->
+                { Item=cnr.Item; ItemOccurence=cnr.ItemOccurence; DisplayEnv=cnr.DisplayEnv; Range=cnr.Range })
 
         TcSymbolUses(g, allUsesOfSymbols, capturedFormatSpecifierLocations.ToArray())
 
