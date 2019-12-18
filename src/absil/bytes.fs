@@ -6,6 +6,7 @@ namespace FSharp.Compiler.AbstractIL.Internal
 open System
 open System.IO
 open System.IO.MemoryMappedFiles
+open System.Buffers
 open System.Runtime.InteropServices
 open System.Runtime.CompilerServices
 open FSharp.NativeInterop
@@ -280,6 +281,32 @@ type ByteMemory with
                     mmf.Dispose() }
         RawByteMemory.FromUnsafePointer(accessor.SafeMemoryMappedViewHandle.DangerousGetHandle(), int length, safeHolder)
 
+    static member CreateMemoryMappedFile(bytes: byte[], offset, length) =
+        let mmf = 
+            let mmf =
+                MemoryMappedFile.CreateNew(
+                    null, 
+                    int64 length, 
+                    MemoryMappedFileAccess.ReadWrite, 
+                    MemoryMappedFileOptions.None, 
+                    HandleInheritability.None)
+            use stream = mmf.CreateViewStream(0L, int64 length, MemoryMappedFileAccess.ReadWrite)
+            stream.Write(bytes, offset, length)
+            mmf
+
+        let accessor = mmf.CreateViewAccessor(0L, int64 length, MemoryMappedFileAccess.ReadWrite)
+
+        let safeHolder =
+            { new obj() with
+                override x.Finalize() =
+                    (x :?> IDisposable).Dispose()
+              interface IDisposable with
+                member x.Dispose() =
+                    GC.SuppressFinalize x
+                    accessor.Dispose()
+                    mmf.Dispose() }
+        RawByteMemory.FromUnsafePointer(accessor.SafeMemoryMappedViewHandle.DangerousGetHandle(), int length, safeHolder)
+
     static member FromFile(path, access, ?canShadowCopy: bool) =
         let canShadowCopy = defaultArg canShadowCopy false
 
@@ -379,10 +406,21 @@ type internal ByteBuffer =
         let oldBufSize = buf.bbArray.Length 
         if newSize > oldBufSize then 
             let old = buf.bbArray 
-            buf.bbArray <- Bytes.zeroCreate (max newSize (oldBufSize * 2))
+            buf.bbArray <- ArrayPool.Shared.Rent (max newSize (oldBufSize * 2))
             Bytes.blit old 0 buf.bbArray 0 buf.bbCurrent
+            ArrayPool.Shared.Return old
 
-    member buf.Close () = Bytes.sub buf.bbArray 0 buf.bbCurrent
+    member buf.Close () =
+        let result = Bytes.sub buf.bbArray 0 buf.bbCurrent
+        ArrayPool.Shared.Return buf.bbArray
+        buf.bbArray <- [||]
+        result
+
+    member buf.CloseAsMemoryMappedFile() =
+        let result = ByteMemory.CreateMemoryMappedFile(buf.bbArray, 0, buf.bbCurrent)
+        ArrayPool.Shared.Return buf.bbArray
+        buf.bbArray <- [||]
+        result.AsReadOnly()
 
     member buf.EmitIntAsByte (i:int) = 
         let newSize = buf.bbCurrent + 1 
@@ -446,7 +484,7 @@ type internal ByteBuffer =
     member buf.Position = buf.bbCurrent
 
     static member Create sz = 
-        { bbArray=Bytes.zeroCreate sz 
+        { bbArray = ArrayPool<byte>.Shared.Rent sz
           bbCurrent = 0 }
 
 

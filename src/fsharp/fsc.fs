@@ -464,7 +464,8 @@ let EncodeOptimizationData(tcGlobals, tcConfig: TcConfig, outfile, exportRemappi
             let ccu, modulInfo = data
             let bytes = TastPickle.pickleObjWithDanglingCcus isIncrementalBuild outfile tcGlobals ccu Optimizer.p_CcuOptimizationInfo modulInfo
             let optDataFileName = (Filename.chopExtension outfile)+".optdata"
-            File.WriteAllBytes(optDataFileName, bytes)
+            use fileStream = File.Create optDataFileName
+            bytes.CopyTo fileStream
         let (ccu, optData) = 
             if tcConfig.onlyEssentialOptimizationData then 
                 map2Of2 Optimizer.AbstractOptimizationInfoToEssentials data 

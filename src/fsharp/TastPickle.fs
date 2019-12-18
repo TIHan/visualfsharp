@@ -202,6 +202,11 @@ let p_bytes (s: byte[]) st =
     p_int32 len st
     st.os.EmitBytes s
 
+let p_byte_memory (s: ReadOnlyByteMemory) st =
+    let len = s.Length
+    p_int32 len st
+    st.os.EmitByteMemory s
+
 let p_prim_string (s: string) st =
     let bytes = Encoding.UTF8.GetBytes s
     let len = bytes.Length
@@ -788,7 +793,7 @@ let pickleObjWithDanglingCcus inMem file g scope p x =
       st1.otypars.Size,
       st1.ovals.Size,
       st1.oanoninfos.Size
-    st1.occus, sizes, st1.ostrings, st1.opubpaths, st1.onlerefs, st1.osimpletys, st1.os.Close()
+    st1.occus, sizes, st1.ostrings, st1.opubpaths, st1.onlerefs, st1.osimpletys, st1.os.CloseAsMemoryMappedFile()
 
   let phase2bytes =
     let st2 =
@@ -819,10 +824,10 @@ let pickleObjWithDanglingCcus inMem file g scope p x =
         (p_array p_encoded_pubpath)
         (p_array p_encoded_nleref)
         (p_array p_encoded_simpletyp)
-        p_bytes
+        p_byte_memory
         (stringTab.AsArray, pubpathTab.AsArray, nlerefTab.AsArray, simpleTyTab.AsArray, phase1bytes)
         st2
-    st2.os.Close()
+    st2.os.CloseAsMemoryMappedFile()
   phase2bytes
 
 let check (ilscope: ILScopeRef) (inMap : NodeInTable<_, _>) =

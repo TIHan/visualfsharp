@@ -106,7 +106,8 @@ type ByteMemory with
 /// Imperative buffers and streams of byte[]
 [<Sealed>]
 type internal ByteBuffer = 
-    member Close : unit -> byte[] 
+    member Close : unit -> byte[]
+    member CloseAsMemoryMappedFile : unit -> ReadOnlyByteMemory
     member EmitIntAsByte : int -> unit
     member EmitIntsAsBytes : int[] -> unit
     member EmitByte : byte -> unit
