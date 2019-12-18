@@ -5551,6 +5551,54 @@ let TypeCheckClosedInputSet (ctok, checkForErrors, tcConfig, tcImports, tcGlobal
     let tcState, declaredImpls = TypeCheckClosedInputSetFinish (implFiles, tcState)
     tcState, topAttrs, declaredImpls, tcEnvAtEndOfLastFile
 
+type TypeCheckedResult = ((TcEnv * TopAttribs * TypedImplFile option * ModuleOrNamespaceType) * TcState)
+type TypeCheckedFinishResult = TcState * TopAttribs * TypedImplFile list * TcEnv
+
+type InputStatus =
+    | Parsed of ParsedInput * (TcState -> ParsedInput -> TypeCheckedResult)
+    | TypeChecked of ParsedInput * TypeCheckedResult
+
+    member x.ParsedInput =
+        match x with
+        | InputStatus.Parsed (input, _) -> input
+        | InputStatus.TypeChecked (input, _) -> input
+
+[<Sealed>]
+type TypeChecker (tcState: TcState, inputs: InputStatus []) =
+    
+    member x.Check input =
+        let index =
+            inputs
+            |> Array.findIndex (fun input2 -> obj.ReferenceEquals(input, input2))
+        match inputs.[index] with
+        | InputStatus.Parsed (input, typeCheck) ->
+            if index = 0 then
+                let result = typeCheck tcState input
+                inputs.[index] <- InputStatus.TypeChecked (input, result)
+                result
+            else
+                let (_, prevTcState) = x.Check inputs.[index - 1].ParsedInput
+                let result = typeCheck prevTcState input
+                inputs.[index] <- InputStatus.TypeChecked (input, result)
+                result
+        | InputStatus.TypeChecked (_, result) ->
+            result
+
+    member x.Finish() : TypeCheckedFinishResult =
+        // tcEnvAtEndOfLastFile is the environment required by fsi.exe when incrementally adding definitions 
+        let results, tcState = (tcState, Array.toList inputs) ||> List.mapFold (fun _ input -> x.Check input.ParsedInput) 
+        let (tcEnvAtEndOfLastFile, topAttrs, implFiles, _), tcState = TypeCheckMultipleInputsFinish(results, tcState)
+        let tcState, declaredImpls = TypeCheckClosedInputSetFinish (implFiles, tcState)
+        tcState, topAttrs, declaredImpls, tcEnvAtEndOfLastFile
+
+    static member Create (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPathOpt, tcState, inputs) =
+        let inputs =
+            inputs
+            |> Array.ofList
+            |> Array.map (fun input -> Parsed(input, fun tcState input -> TypeCheckOneInput (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPathOpt) tcState input))
+
+        TypeChecker (tcState, inputs)
+
 let TryTypeCheckOneInputSynExpr (ctok, tcConfig: TcConfig, tcImports: TcImports, tcGlobals, tcSink, tcState: TcState, inp: ParsedInput, synExpr: SynExpr) =
 
         RequireCompilationThread ctok // Everything here requires the compilation thread since it works on the TAST
