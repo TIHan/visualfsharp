@@ -250,6 +250,97 @@ type ReadOnlyByteMemory(bytes: ByteMemory) =
     [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
     member _.AsStream() = bytes.AsReadOnlyStream()
 
+[<Struct;NoEquality;NoComparison>]
+type ChunkedArray<'T> =
+
+    val Chunks : 'T[][]
+    val ChunkSize : int
+    val Length : int
+
+    new (chunkSize, length) =
+        let chunkCount = (length / chunkSize) + 1
+        let chunks = Array.init chunkCount (fun _ -> Array.zeroCreate<'T> chunkSize)
+        {
+            Chunks = chunks
+            ChunkSize = chunkSize
+            Length = length
+        }
+
+    member this.Item 
+        with get i =
+            this.Chunks.[i / this.ChunkSize].[i % this.ChunkSize]
+        and set i value =
+            this.Chunks.[i / this.ChunkSize].[i % this.ChunkSize] <- value
+
+[<Sealed>]
+type ChunkedByteMemory (chunked: ChunkedArray<byte>) =
+    inherit ByteMemory ()
+
+    let mutable chunked = chunked
+
+    let check i =
+        if i < 0 || i >= chunked.Length then 
+            raise (ArgumentOutOfRangeException("i"))
+
+    do
+        if chunked.Length < 0 then
+            raise (ArgumentOutOfRangeException("length"))
+
+    override _.Item 
+        with get i = chunked.[i]
+        and set i v = chunked.[i] <- v
+
+    override _.Length = chunked.Length
+
+    override _.ReadUtf8String(pos, count) =
+        let arr = ArrayPool.Shared.Rent count
+        let chunk = chunked.Chunks
+        check pos
+        check (pos + count - 1)
+        System.Text.Encoding.UTF8.GetString(NativePtr.add addr pos, count)
+
+    override _.ReadBytes(pos, count) = 
+        check pos
+        check (pos + count - 1)
+        let res = Bytes.zeroCreate count
+        Marshal.Copy(NativePtr.toNativeInt addr + nativeint pos, res, 0, count)
+        res
+
+    override _.ReadInt32 pos =
+        check pos
+        check (pos + 3)
+        Marshal.ReadInt32(NativePtr.toNativeInt addr + nativeint pos)
+
+    override _.ReadUInt16 pos =
+        check pos
+        check (pos + 1)
+        uint16(Marshal.ReadInt16(NativePtr.toNativeInt addr + nativeint pos))
+
+    override _.Slice(pos, count) =
+        check pos
+        check (pos + count - 1)
+        RawByteMemory(NativePtr.add addr pos, count, hold) :> ByteMemory
+
+    override x.CopyTo stream =
+        use stream2 = x.AsStream()
+        stream2.CopyTo stream
+
+    override _.Copy(srcOffset, dest, destOffset, count) =
+        check srcOffset
+        Marshal.Copy(NativePtr.toNativeInt addr + nativeint srcOffset, dest, destOffset, count)
+
+    override _.ToArray() =
+        let res = Array.zeroCreate<byte> length
+        Marshal.Copy(NativePtr.toNativeInt addr, res, 0, res.Length)
+        res
+
+    override _.AsStream() =
+        new SafeUnmanagedMemoryStream(addr, int64 length, hold) :> Stream
+
+    override _.AsReadOnlyStream() =
+        new SafeUnmanagedMemoryStream(addr, int64 length, int64 length, FileAccess.Read, hold) :> Stream
+    
+
 type ByteMemory with
 
     member x.AsReadOnly() = ReadOnlyByteMemory x
