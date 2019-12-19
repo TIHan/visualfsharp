@@ -1357,7 +1357,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     /// This is a build task function that gets placed into the build rules as the computation for a Vector.ScanLeft
     ///
     /// Type check all files.     
-    let TypeCheckTask ctok (tcAcc: TypeCheckAccumulator) input: Eventually<TypeCheckAccumulator> =    
+    let TypeCheckTask ctok (tcAcc: TypeCheckAccumulator) input (findSymbol: FSharpSymbol option) (foundSymbols: ResizeArray<range>): Eventually<TypeCheckAccumulator> =    
         match input with 
         | Some input, _sourceRange, filename, parseErrors->
             IncrementalBuilderEventTesting.MRU.Add(IncrementalBuilderEventTesting.IBETypechecked filename)
@@ -1368,7 +1368,30 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                     beforeFileChecked.Trigger filename
 
                     ApplyMetaCommandsFromInputToTcConfig (tcConfig, input, Path.GetDirectoryName filename) |> ignore
-                    let sink = TcResultsSinkImpl(tcAcc.tcGlobals)
+                    let resultsSink, sinkOpt =
+                        match findSymbol with
+                        | Some findSymbol ->
+                            let sink =
+                                { new ITypecheckResultsSink with
+                                    member _.NotifyEnvWithScope (_, _, _) = ()
+                                    member _.NotifyExprHasType (_, _, _, _, _, _) = ()
+                                    member _.NotifyFormatSpecifierLocation (_, _) = ()
+                                    member _.NotifyOpenDeclaration _ = ()
+                                    member _.CurrentSourceText = None
+                                    member _.FormatStringCheckContext = None
+                                    member _.NotifyNameResolution (endPos, item, itemMethodGroup, tpinst, occurenceType, denv, nenv, ad, m, replace) =
+                                        if ItemsAreEffectivelyEqual nenv.DisplayEnv.g findSymbol.Item item then
+                                            foundSymbols.Add m
+                                        
+                                }
+                            TcResultsSink.WithSink sink, None
+                        | _ ->
+                            // We are literally not going to capture anything, do not even use a sink.
+                            if not keepAllBackgroundResolutions && not keepAssemblyContents && disableSymbolCaching then
+                                TcResultsSink.NoSink, None
+                            else
+                                let sink = TcResultsSinkImpl(tcAcc.tcGlobals)
+                                TcResultsSink.WithSink(sink), Some sink
                     let hadParseErrors = not (Array.isEmpty parseErrors)
 
                     let input, moduleNamesDict = DeduplicateParsedInputModuleName tcAcc.tcModuleNamesDict input
@@ -1379,30 +1402,40 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                              tcConfig, tcAcc.tcImports, 
                              tcAcc.tcGlobals, 
                              None, 
-                             TcResultsSink.WithSink sink, 
+                             resultsSink, 
                              tcAcc.tcState, input)
                         
                     /// Only keep the typed interface files when doing a "full" build for fsc.exe, otherwise just throw them away
-                    let implFile = if keepAssemblyContents then implFile else None
-                    let tcResolutions = if keepAllBackgroundResolutions then sink.GetResolutions() else TcResolutions.Empty
+                    let implFile = if keepAssemblyContents && sinkOpt.IsSome then implFile else None
+                    let tcResolutions = if keepAllBackgroundResolutions && sinkOpt.IsSome then sinkOpt.Value.GetResolutions() else TcResolutions.Empty
                     let tcEnvAtEndOfFile = (if keepAllBackgroundResolutions then tcEnvAtEndOfFile else tcState.TcEnvFromImpls)
-                    let tcSymbolUsesRev = if disableSymbolCaching then [] else sink.GetSymbolUses() :: tcAcc.tcSymbolUsesRev
+                    let tcSymbolUsesRev = if disableSymbolCaching && sinkOpt.IsSome then tcAcc.tcSymbolUsesRev else sinkOpt.Value.GetSymbolUses() :: tcAcc.tcSymbolUsesRev
+                    let tcOpenDeclarationsRev = if sinkOpt.IsSome then sinkOpt.Value.GetOpenDeclarations() :: tcAcc.tcOpenDeclarationsRev else tcAcc.tcOpenDeclarationsRev
                     
                     RequireCompilationThread ctok // Note: events get raised on the CompilationThread
 
                     fileChecked.Trigger filename
                     let newErrors = Array.append parseErrors (capturingErrorLogger.GetErrors())
-                    return {tcAcc with tcState=tcState 
-                                       tcEnvAtEndOfFile=tcEnvAtEndOfFile
-                                       topAttribs=Some topAttribs
-                                       latestImplFile=implFile
-                                       latestCcuSigForFile=Some ccuSigForFile
-                                       tcResolutionsRev=tcResolutions :: tcAcc.tcResolutionsRev
-                                       tcSymbolUsesRev=tcSymbolUsesRev
-                                       tcOpenDeclarationsRev = sink.GetOpenDeclarations() :: tcAcc.tcOpenDeclarationsRev
-                                       tcErrorsRev = newErrors :: tcAcc.tcErrorsRev 
-                                       tcModuleNamesDict = moduleNamesDict
-                                       tcDependencyFiles = filename :: tcAcc.tcDependencyFiles } 
+                    if findSymbol.IsSome then
+                        return {tcAcc with tcState=tcState
+                                           tcEnvAtEndOfFile=tcEnvAtEndOfFile
+                                           topAttribs=Some topAttribs
+                                           latestCcuSigForFile=Some ccuSigForFile
+                                           tcErrorsRev = newErrors :: tcAcc.tcErrorsRev 
+                                           tcModuleNamesDict = moduleNamesDict
+                                           tcDependencyFiles = filename :: tcAcc.tcDependencyFiles } 
+                    else
+                        return {tcAcc with tcState=tcState 
+                                           tcEnvAtEndOfFile=tcEnvAtEndOfFile
+                                           topAttribs=Some topAttribs
+                                           latestImplFile=implFile
+                                           latestCcuSigForFile=Some ccuSigForFile
+                                           tcResolutionsRev=tcResolutions :: tcAcc.tcResolutionsRev
+                                           tcSymbolUsesRev=tcSymbolUsesRev
+                                           tcOpenDeclarationsRev = tcOpenDeclarationsRev
+                                           tcErrorsRev = newErrors :: tcAcc.tcErrorsRev 
+                                           tcModuleNamesDict = moduleNamesDict
+                                           tcDependencyFiles = filename :: tcAcc.tcDependencyFiles } 
                 }
                     
             // Run part of the Eventually<_> computation until a timeout is reached. If not complete, 
