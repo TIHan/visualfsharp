@@ -51,14 +51,6 @@ val TypeCheckOneSigFile :
       -> ParsedSigFileInput
       -> Eventually<TcEnv * ModuleOrNamespaceType * bool>
 
-val TypeCheckOneSynExpr :
-      TcGlobals * NiceNameGenerator * ImportMap * CcuThunk * ConditionalDefines option * NameResolution.TcResultsSink * bool
-      -> TcEnv
-      -> Tast.ModuleOrNamespaceType option
-      -> isScript: bool
-      -> SynExpr
-      -> TType
-
 //-------------------------------------------------------------------------
 // Some of the exceptions arising from type checking. These should be moved to 
 // use ErrorLogger.

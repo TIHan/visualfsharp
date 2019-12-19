@@ -5578,6 +5578,8 @@ type TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPa
 
     member _.TcImports = tcImports
 
+    member _.InitialTcState = tcState
+
     member _.SourceFiles =
         inputs
         |> Array.map (fun input ->
@@ -5618,14 +5620,6 @@ type TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPa
         let slot = x.GetSlot fileName
         x.Check slot
 
-    member x.CheckBefore (fileName: string) =
-        match x.GetSlot fileName with
-        | 0 -> x.Check 0
-        | slot -> x.Check (slot - 1)
-
-    member x.CheckLast () =
-        x.Check (inputs.Length - 1)
-
     member x.Check (input: ParsedInput) =
         let slot = x.GetSlot input
         x.Check slot
@@ -5635,10 +5629,7 @@ type TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPa
         | InputStatus.TypeChecked _ -> true
         | _ -> false
 
-    member x.IsReadyBefore (fileName: string) =
-        match x.GetSlot fileName with
-        | 0 -> true
-        | slot -> x.IsReady (slot - 1)
+    member x.InputCount = inputs.Length
 
     member x.Finish() : TypeCheckedFinishResult =
         // tcEnvAtEndOfLastFile is the environment required by fsi.exe when incrementally adding definitions 
@@ -5654,29 +5645,6 @@ type TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPa
             |> Array.map InputStatus.New
 
         TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPathOpt, tcState, inputs)
-
-let TryTypeCheckOneInputSynExpr (ctok, tcConfig: TcConfig, tcImports: TcImports, tcGlobals, tcSink, tcState: TcState, inp: ParsedInput, synExpr: SynExpr) =
-
-        RequireCompilationThread ctok // Everything here requires the compilation thread since it works on the TAST
-
-        CheckSimulateException tcConfig
-
-        let amap = tcImports.GetImportMap()
-        match inp with 
-        | ParsedInput.ImplFile (ParsedImplFileInput (_, isScript, qualNameOfFile, _, _, _, _)) ->
-
-            // Check if we've got an interface for this fragment 
-            let rootSigOpt = tcState.tcsRootSigs.TryFind qualNameOfFile
-
-            let tcImplEnv = tcState.tcsTcImplEnv
-
-            let conditionalDefines =
-                if tcConfig.noConditionalErasure then None else Some (tcConfig.conditionalCompilationDefines)
-
-            let ty = TypeCheckOneSynExpr (tcGlobals, tcState.tcsNiceNameGen, amap, tcState.tcsCcu, conditionalDefines, tcSink, tcConfig.internalTestSpanStackReferring) tcImplEnv rootSigOpt isScript synExpr
-            Some ty
-        | _ ->
-            None
 
 // Existing public APIs delegate to newer implementations
 let GetFSharpCoreLibraryName () = getFSharpCoreLibraryName

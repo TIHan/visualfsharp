@@ -94,7 +94,7 @@ type Compilation =
 
     member GetParsedInput: fileName: string -> ParsedInput
 
-    static member Create: argv: string [] * CompilationKind * ReferenceResolver.Resolver * (TcConfigBuilder -> unit) -> Compilation
+    static member Create: ctok: CompilationThreadToken * argv: string [] * CompilationKind * TcConfigBuilder * (TcConfigBuilder -> unit) -> Compilation
 
 
 /// Part of LegacyHostedCompilerForTesting

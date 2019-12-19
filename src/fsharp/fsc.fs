@@ -1716,8 +1716,7 @@ type CompilationKind =
     | Script
 
 // Parse files and setup framework TcImports
-let main0a (ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, bannerAlreadyPrinted, 
-            reduceMemoryUsage: ReduceMemoryFlag, defaultCopyFSharpCore: CopyFSharpCoreFlag, 
+let main0a (ctok, argv, kind, tcConfigB: TcConfigBuilder, tcConfigBCallback, bannerAlreadyPrinted, 
             exiter: Exiter, errorLoggerProvider : ErrorLoggerProvider, disposables : DisposablesTracker) =
 
     // See Bug 735819 
@@ -1733,7 +1732,6 @@ let main0a (ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, banner
         else
             None
 
-    let directoryBuildingFrom = Directory.GetCurrentDirectory()
     let setProcessThreadLocals tcConfigB =
         if kind = CompilationKind.CommandLine then
             match tcConfigB.preferredUiLang with
@@ -1746,15 +1744,6 @@ let main0a (ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, banner
         // display the banner text, if necessary
         if kind = CompilationKind.CommandLine && not bannerAlreadyPrinted then 
             DisplayBannerText tcConfigB
-
-    let tryGetMetadataSnapshot = (fun _ -> None)
-
-    let tcConfigB = 
-        TcConfigBuilder.CreateNew(legacyReferenceResolver, DefaultFSharpBinariesDir, 
-            reduceMemoryUsage=reduceMemoryUsage, implicitIncludeDir=directoryBuildingFrom, 
-            isInteractive=false, isInvalidationSupported=false, 
-            defaultCopyFSharpCore=defaultCopyFSharpCore, 
-            tryGetMetadataSnapshot=tryGetMetadataSnapshot)
 
     // Preset: --optimize+ -g --tailcalls+ (see 4505)
     SetOptimizeSwitch tcConfigB OptionSwitch.On
@@ -2208,7 +2197,17 @@ let typecheckAndCompile
                     System.Console.SetOut(savedOut)
                 with _ -> ()}
 
-    main0a(ctok, argv, CompilationKind.CommandLine, (fun _ -> ()), legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, defaultCopyFSharpCore, exiter, errorLoggerProvider, d)
+    let directoryBuildingFrom = Directory.GetCurrentDirectory()
+    let tryGetMetadataSnapshot = (fun _ -> None)
+
+    let tcConfigB = 
+        TcConfigBuilder.CreateNew(legacyReferenceResolver, DefaultFSharpBinariesDir, 
+            reduceMemoryUsage=reduceMemoryUsage, implicitIncludeDir=directoryBuildingFrom, 
+            isInteractive=false, isInvalidationSupported=false, 
+            defaultCopyFSharpCore=defaultCopyFSharpCore, 
+            tryGetMetadataSnapshot=tryGetMetadataSnapshot)
+
+    main0a(ctok, argv, CompilationKind.CommandLine, tcConfigB, (fun _ -> ()), bannerAlreadyPrinted, exiter, errorLoggerProvider, d)
     |> main0b
     |> main0c
     |> main1
@@ -2238,14 +2237,12 @@ let mainCompile
         defaultCopyFSharpCore, exiter, errorLoggerProvider, tcImportsCapture, dynamicAssemblyCreator)
 
 [<Sealed>]
-type Compilation(ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, bannerAlreadyPrinted, 
-                 reduceMemoryUsage: ReduceMemoryFlag, defaultCopyFSharpCore: CopyFSharpCoreFlag, 
+type Compilation(ctok, argv, kind, tcConfigB, tcConfigBCallback, bannerAlreadyPrinted,
                  exiter: Exiter, errorLoggerProvider : ErrorLoggerProvider, disposables : DisposablesTracker) =
 
     let parsedInputs =
         lazy
-            main0a(ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, defaultCopyFSharpCore,
-                   exiter, errorLoggerProvider, disposables)
+            main0a(ctok, argv, kind, tcConfigB, tcConfigBCallback, bannerAlreadyPrinted, exiter, errorLoggerProvider, disposables)
 
     let typeChecker = 
         lazy
@@ -2289,15 +2286,14 @@ type Compilation(ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, b
             | ParsedInput.SigFile(ParsedSigFileInput.ParsedSigFileInput(fileName=fileName2)) -> fileName = fileName2) 
         |> fst
 
-    static member Create(argv, kind, referenceResolver, tcConfigBCallback) =
+    static member Create(ctok, argv, kind, tcConfigB, tcConfigBCallback) =
         let argv = Array.append [| "fsc.exe" |] argv
-        let ctok = AssumeCompilationThreadWithoutEvidence ()
 
         let quitProcessExiter = 
             { new Exiter with 
-                member _.Exit _ = Unchecked.defaultof<_>
+                member _.Exit _ = failwith "Unknown exception"
             }
 
         let d = new DisposablesTracker()
 
-        Compilation (ctok, argv, kind, tcConfigBCallback, referenceResolver, (*bannerAlreadyPrinted*)true, ReduceMemoryFlag.Yes, CopyFSharpCoreFlag.No, quitProcessExiter, ConsoleLoggerProvider(), d)
+        Compilation (ctok, argv, kind, tcConfigB, tcConfigBCallback,(*bannerAlreadyPrinted*)true, quitProcessExiter, ConsoleLoggerProvider(), d)

@@ -17662,8 +17662,3 @@ let TypeCheckOneSigFile (g, niceNameGen, amap, topCcu, checkForErrors, condition
 
     return (tcEnv, sigFileType, cenv.createsGeneratedProvidedTypes)
  }
-
-let TypeCheckOneSynExpr (g, niceNameGen, amap, topCcu, conditionalDefines, tcSink, isInternalTestSpanStackReferring) env (rootSigOpt: ModuleOrNamespaceType option) isScript synExpr =
-    let cenv = cenv.Create (g, isScript, niceNameGen, amap, topCcu, false, Option.isSome rootSigOpt, conditionalDefines, tcSink, (fun _ _ -> ()), (LightweightTcValForUsingInBuildMethodCall g), isInternalTestSpanStackReferring)
-    let _, ty, _ = TcExprOfUnknownType cenv env emptyUnscopedTyparEnv synExpr
-    ty

@@ -1206,7 +1206,6 @@ type RawFSharpAssemblyDataBackedByLanguageService (tcConfig, tcGlobals, tcState:
 /// Manages an incremental build graph for the build of a single F# project
 type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: bool, keepAllBackgroundResolutions: bool) =
 
-    let mutable compilation = compilation
     let () = keepAssemblyContents |> ignore
     let () = keepAllBackgroundResolutions |> ignore
 
@@ -1217,6 +1216,34 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
 #if !NO_EXTENSIONTYPING
     let importsInvalidatedByTypeProvider = new Event<string>()
 #endif
+
+    let initial (compilation: Driver.Compilation) =
+        { 
+            TcState = compilation.TypeChecker.InitialTcState
+            TcImports = compilation.TypeChecker.TcImports
+            TcGlobals = compilation.TcGlobals
+            TcConfig = compilation.TcConfig
+            TcEnvAtEnd = compilation.TypeChecker.InitialTcState.TcEnvFromImpls
+
+            TcErrorsRev = []
+
+            TcResolutionsRev = []
+
+            TcSymbolUsesRev = []
+
+            TcOpenDeclarationsRev = []
+
+            ModuleNamesDict = Map.empty
+
+            TcDependencyFiles = []
+
+            TopAttribs = None
+
+            TimeStamp = DateTime.Now
+
+            LatestImplementationFile = None
+            
+            LatestCcuSigForFile = None }
 
     let convert (compilation: Driver.Compilation) ((tcEnv, topAttribs, impl, mty), tcState) =
         {
@@ -1248,6 +1275,8 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
             LatestCcuSigForFile = Some mty
         }
 
+    let mutable compilation = compilation
+
     member _.TcConfig = compilation.TcConfig
            
     member _.FileParsed = fileParsed.Publish
@@ -1275,30 +1304,64 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
     
     member builder.GetCheckResultsBeforeFileInProjectEvenIfStale filename: PartialCheckResults option  = 
         let compilation = compilation
-        compilation.TypeChecker.CheckBefore filename
-        |> convert compilation
-        |> Some
+        try
+            let typeChecker = compilation.TypeChecker
+            match typeChecker.GetSlot filename with
+            | 0 -> 
+                initial compilation
+                |> Some
+            | slot -> 
+                typeChecker.Check (slot - 1)
+                |> convert compilation
+                |> Some
+        with
+        | _ -> None
     
     member builder.AreCheckResultsBeforeFileInProjectReady filename = 
-        compilation.TypeChecker.IsReadyBefore filename  
+        let compilation = compilation
+        try
+            let typeChecker = compilation.TypeChecker
+            match typeChecker.GetSlot filename with
+            | 0 -> true
+            | slot -> typeChecker.IsReady (slot - 1) 
+        with
+        | _ -> false
 
     member builder.GetCheckResultsBeforeFileInProject (_ctok: CompilationThreadToken, filename) = 
         let compilation = compilation
-        compilation.TypeChecker.CheckBefore filename
-        |> convert compilation
-        |> Cancellable.ret
+        try
+            let typeChecker = compilation.TypeChecker
+            match typeChecker.GetSlot filename with
+            | 0 -> 
+                initial compilation
+                |> Cancellable.ret
+            | slot -> 
+                typeChecker.Check (slot - 1)
+                |> convert compilation
+                |> Cancellable.ret
+        with
+        | _ -> Cancellable.ret (initial compilation)
 
     member builder.GetCheckResultsAfterFileInProject (_ctok: CompilationThreadToken, filename: string) = 
         let compilation = compilation
-        compilation.TypeChecker.Check filename
-        |> convert compilation
-        |> Cancellable.ret
+        try
+            let typeChecker = compilation.TypeChecker
+            typeChecker.GetSlot filename
+            |> typeChecker.Check
+            |> convert compilation
+            |> Cancellable.ret
+        with
+        | _ -> Cancellable.ret (initial compilation)
 
     member builder.GetCheckResultsAfterLastFileInProject (_ctok: CompilationThreadToken) = 
         let compilation = compilation
-        compilation.TypeChecker.CheckLast()
-        |> convert compilation
-        |> Cancellable.ret
+        try
+            let typeChecker = compilation.TypeChecker
+            typeChecker.Check (typeChecker.InputCount - 1)
+            |> convert compilation
+            |> Cancellable.ret
+        with
+        | _ -> Cancellable.ret (initial compilation)
 
     member builder.GetCheckResultsAndImplementationsForProject(_ctok: CompilationThreadToken) = 
       cancellable {
@@ -1411,20 +1474,20 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
     /// CreateIncrementalBuilder (for background type checking). Note that fsc.fs also
     /// creates an incremental builder used by the command line compiler.
     static member TryCreateBackgroundBuilderForProjectOptions
-                      (_ctok: CompilationThreadToken, 
-                       _legacyReferenceResolver: ReferenceResolver.Resolver, 
-                       _defaultFSharpBinariesDir: string,
+                      (ctok: CompilationThreadToken, 
+                       legacyReferenceResolver: ReferenceResolver.Resolver, 
+                       defaultFSharpBinariesDir: string,
                        _frameworkTcImportsCache: FrameworkImportsCache,
                        loadClosureOpt: LoadClosure option,
                        sourceFiles: string list,
                        commandLineArgs: string list,
                        projectReferences: IProjectReference list,
-                       _projectDirectory: string,
+                       projectDirectory: string,
                        useScriptResolutionRules: bool, 
                        keepAssemblyContents: bool,
                        keepAllBackgroundResolutions: bool, 
                        _maxTimeShareMilliseconds: int64,
-                       _tryGetMetadataSnapshot: ILBinaryReader.ILReaderTryGetMetadataSnapshot, 
+                       tryGetMetadataSnapshot: ILBinaryReader.ILReaderTryGetMetadataSnapshot, 
                        suggestNamesForErrors: bool) =
       let useSimpleResolutionSwitch = "--simpleresolution"
 
@@ -1439,7 +1502,18 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
          cancellable {
           try
 
+            let tcConfigB = 
+                TcConfigBuilder.CreateNew(legacyReferenceResolver, 
+                     defaultFSharpBinariesDir, 
+                     implicitIncludeDir=projectDirectory, 
+                     reduceMemoryUsage=ReduceMemoryFlag.Yes, 
+                     isInteractive=useScriptResolutionRules, 
+                     isInvalidationSupported=true, 
+                     defaultCopyFSharpCore=CopyFSharpCoreFlag.No, 
+                     tryGetMetadataSnapshot=tryGetMetadataSnapshot)
+
             let config (tcConfigB: TcConfigBuilder) =
+
                 let getSwitchValue switchString =
                     match commandLineArgs |> Seq.tryFindIndex(fun s -> s.StartsWithOrdinal switchString) with
                     | Some idx -> Some(commandLineArgs.[idx].Substring(switchString.Length))
@@ -1489,8 +1563,7 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
                 else
                     Driver.CompilationKind.Script
 
-
-            let compilation = Driver.Compilation.Create(Array.ofList (commandLineArgs @ sourceFiles), compilationKind, fun _ -> ())
+            let compilation = Driver.Compilation.Create(ctok, Array.ofList (commandLineArgs @ sourceFiles), compilationKind, tcConfigB, config)
             let builder = 
                 new IncrementalBuilder(compilation,
                                        keepAssemblyContents=keepAssemblyContents, 

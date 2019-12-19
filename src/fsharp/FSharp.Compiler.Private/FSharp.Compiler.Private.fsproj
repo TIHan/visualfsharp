@@ -704,9 +704,6 @@
     <Compile Include="..\LegacyHostedCompilerForTesting.fs" Condition="'$(MonoPackaging)' != 'true'">
       <Link>Misc/LegacyHostedCompilerForTesting.fs</Link>
     </Compile>
-    <Compile Include="AstVisitor.fs" />
-    <Compile Include="SyntaxTree.fs" />
-    <Compile Include="IncrementalChecker.fs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -756,8 +756,6 @@ val TypeCheckClosedInputSetFinish: TypedImplFile list * TcState -> TcState * Typ
 /// Check a closed set of inputs 
 val TypeCheckClosedInputSet: CompilationThreadToken * checkForErrors: (unit -> bool) * TcConfig * TcImports * TcGlobals * Ast.LongIdent option * TcState * Ast.ParsedInput  list  -> TcState * TopAttribs * TypedImplFile list * TcEnv
 
-val TryTypeCheckOneInputSynExpr: CompilationThreadToken * TcConfig * TcImports * TcGlobals * NameResolution.TcResultsSink * TcState * Ast.ParsedInput * Ast.SynExpr -> TType option
-
 /// Check a single input and finish the checking
 val TypeCheckOneInputAndFinishEventually :
     checkForErrors: (unit -> bool) * TcConfig * TcImports * TcGlobals * Ast.LongIdent option * NameResolution.TcResultsSink * TcState * Ast.ParsedInput 
@@ -832,16 +830,18 @@ type TypeCheckedFinishResult = TcState * TopAttribs * TypedImplFile list * TcEnv
 [<Sealed>]
 type TypeChecker =
 
-    member Check: fileName: string -> TypeCheckedResult
+    member Check: slot: int -> TypeCheckedResult
 
-    member CheckBefore: fileName: string -> TypeCheckedResult
+    member IsReady: slot: int -> bool
 
-    member CheckLast: unit -> TypeCheckedResult
-
-    member IsReadyBefore: fileName: string -> bool
+    member GetSlot: fileName: string -> int 
 
     member Finish: unit -> TypeCheckedFinishResult
 
     member TcImports: TcImports
+
+    member InitialTcState: TcState
+
+    member InputCount: int
 
     static member Create: ctok: CompilationThreadToken * checkForErrors: (unit -> bool) * TcConfig * TcImports * TcGlobals * LongIdent option * TcState * ParsedInput list -> TypeChecker
