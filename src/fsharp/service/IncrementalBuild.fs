@@ -1208,7 +1208,7 @@ type RawFSharpAssemblyDataBackedByLanguageService (tcConfig, tcGlobals, tcState:
 type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInputs, nonFrameworkResolutions, unresolvedReferences, tcConfig: TcConfig, projectDirectory, outfile, 
                         assemblyName, niceNameGen: NiceNameGenerator, lexResourceManager, 
                         sourceFiles, loadClosureOpt: LoadClosure option, 
-                        keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds) =
+                        keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds, disableSymbolCaching) =
 
     let tcConfigP = TcConfigProvider.Constant tcConfig
     let fileParsed = new Event<string>()
@@ -1386,7 +1386,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                     let implFile = if keepAssemblyContents then implFile else None
                     let tcResolutions = if keepAllBackgroundResolutions then sink.GetResolutions() else TcResolutions.Empty
                     let tcEnvAtEndOfFile = (if keepAllBackgroundResolutions then tcEnvAtEndOfFile else tcState.TcEnvFromImpls)
-                    let tcSymbolUses = sink.GetSymbolUses()  
+                    let tcSymbolUsesRev = if disableSymbolCaching then [] else sink.GetSymbolUses() :: tcAcc.tcSymbolUsesRev
                     
                     RequireCompilationThread ctok // Note: events get raised on the CompilationThread
 
@@ -1398,7 +1398,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                                        latestImplFile=implFile
                                        latestCcuSigForFile=Some ccuSigForFile
                                        tcResolutionsRev=tcResolutions :: tcAcc.tcResolutionsRev
-                                       tcSymbolUsesRev=tcSymbolUses :: tcAcc.tcSymbolUsesRev
+                                       tcSymbolUsesRev=tcSymbolUsesRev
                                        tcOpenDeclarationsRev = sink.GetOpenDeclarations() :: tcAcc.tcOpenDeclarationsRev
                                        tcErrorsRev = newErrors :: tcAcc.tcErrorsRev 
                                        tcModuleNamesDict = moduleNamesDict
@@ -1700,7 +1700,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                        projectReferences, projectDirectory,
                        useScriptResolutionRules, keepAssemblyContents,
                        keepAllBackgroundResolutions, maxTimeShareMilliseconds,
-                       tryGetMetadataSnapshot, suggestNamesForErrors) =
+                       tryGetMetadataSnapshot, suggestNamesForErrors, disableSymbolCaching) =
       let useSimpleResolutionSwitch = "--simpleresolution"
 
       cancellable {
@@ -1820,7 +1820,8 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                                         resourceManager, sourceFilesNew, loadClosureOpt, 
                                         keepAssemblyContents=keepAssemblyContents, 
                                         keepAllBackgroundResolutions=keepAllBackgroundResolutions, 
-                                        maxTimeShareMilliseconds=maxTimeShareMilliseconds)
+                                        maxTimeShareMilliseconds=maxTimeShareMilliseconds,
+                                        disableSymbolCaching=disableSymbolCaching)
             return Some builder
           with e -> 
             errorRecoveryNoRange e
