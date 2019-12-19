@@ -1415,18 +1415,18 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
                        _legacyReferenceResolver: ReferenceResolver.Resolver, 
                        _defaultFSharpBinariesDir: string,
                        _frameworkTcImportsCache: FrameworkImportsCache,
-                       _loadClosureOpt: LoadClosure option,
+                       loadClosureOpt: LoadClosure option,
                        sourceFiles: string list,
                        commandLineArgs: string list,
-                       _projectReferences: IProjectReference list,
+                       projectReferences: IProjectReference list,
                        _projectDirectory: string,
-                       _useScriptResolutionRules: bool, 
+                       useScriptResolutionRules: bool, 
                        keepAssemblyContents: bool,
                        keepAllBackgroundResolutions: bool, 
                        _maxTimeShareMilliseconds: int64,
                        _tryGetMetadataSnapshot: ILBinaryReader.ILReaderTryGetMetadataSnapshot, 
                        suggestNamesForErrors: bool) =
-      let _useSimpleResolutionSwitch = "--simpleresolution"
+      let useSimpleResolutionSwitch = "--simpleresolution"
 
       cancellable {
 
@@ -1438,7 +1438,59 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
         let! builderOpt =
          cancellable {
           try
-            let compilation = Driver.Compilation.Create(Array.ofList (commandLineArgs @ sourceFiles), Driver.CompilationKind.Default, fun _ -> ())
+
+            let config (tcConfigB: TcConfigBuilder) =
+                let getSwitchValue switchString =
+                    match commandLineArgs |> Seq.tryFindIndex(fun s -> s.StartsWithOrdinal switchString) with
+                    | Some idx -> Some(commandLineArgs.[idx].Substring(switchString.Length))
+                    | _ -> None
+
+                tcConfigB.resolutionEnvironment <- (ReferenceResolver.ResolutionEnvironment.EditingOrCompilation true)
+
+                tcConfigB.conditionalCompilationDefines <- 
+                    let define = if useScriptResolutionRules then "INTERACTIVE" else "COMPILED"
+                    define :: tcConfigB.conditionalCompilationDefines
+
+                tcConfigB.projectReferences <- projectReferences
+
+                tcConfigB.useSimpleResolution <- (getSwitchValue useSimpleResolutionSwitch) |> Option.isSome
+
+                // Never open PDB files for the language service, even if --standalone is specified
+                tcConfigB.openDebugInformationForLaterStaticLinking <- false
+
+                tcConfigB.compilationThread <- 
+                    { new ICompilationThread with 
+                        member __.EnqueueWork work = 
+                            Reactor.Singleton.EnqueueOp ("Unknown", "ICompilationThread.EnqueueWork", "work", fun ctok ->
+                                work ctok
+                            )
+                    }
+
+                match loadClosureOpt with
+                | Some loadClosure ->
+                    let dllReferences =
+                        [for reference in tcConfigB.referencedDLLs do
+                            // If there's (one or more) resolutions of closure references then yield them all
+                            match loadClosure.References  |> List.tryFind (fun (resolved, _)->resolved=reference.Text) with
+                            | Some (resolved, closureReferences) -> 
+                                for closureReference in closureReferences do
+                                    yield AssemblyReference(closureReference.originalReference.Range, resolved, None)
+                            | None -> yield reference]
+                    tcConfigB.referencedDLLs <- []
+                    // Add one by one to remove duplicates
+                    dllReferences |> List.iter (fun dllReference ->
+                        tcConfigB.AddReferencedAssemblyByPath(dllReference.Range, dllReference.Text))
+                    tcConfigB.knownUnresolvedReferences <- loadClosure.UnresolvedReferences
+                | None -> ()
+
+            let compilationKind =
+                if useScriptResolutionRules then
+                    Driver.CompilationKind.Default
+                else
+                    Driver.CompilationKind.Script
+
+
+            let compilation = Driver.Compilation.Create(Array.ofList (commandLineArgs @ sourceFiles), compilationKind, fun _ -> ())
             let builder = 
                 new IncrementalBuilder(compilation,
                                        keepAssemblyContents=keepAssemblyContents, 

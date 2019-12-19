@@ -32,27 +32,7 @@ val internal ProcessCommandLineFlags : TcConfigBuilder * setProcessThreadLocals:
 type CompilationKind =
     | Default
     | CommandLine
-    | Script
-
-[<Sealed>]
-type Compilation =
-
-    member SourceFiles: string list
-
-    member TcConfig: TcConfig
-
-    member TcGlobals: TcGlobals
-
-    member TypeChecker: TypeChecker
-
-    member AssemblyName: string
-
-    member OutputFileName: string
-
-    member GetParsedInput: fileName: string -> ParsedInput
-
-    static member Create: argv: string [] * CompilationKind * (TcConfigBuilder -> unit) -> Compilation
-    
+    | Script    
 
 val typecheckAndCompile : 
     ctok: CompilationThreadToken *
@@ -96,6 +76,25 @@ val compileOfAst :
     tcImportsCapture : (TcImports -> unit) option *
     dynamicAssemblyCreator: (TcGlobals * string * ILModuleDef -> unit) option
       -> unit
+
+[<Sealed>]
+type Compilation =
+
+    member SourceFiles: string list
+
+    member TcConfig: TcConfig
+
+    member TcGlobals: TcGlobals
+
+    member TypeChecker: TypeChecker
+
+    member AssemblyName: string
+
+    member OutputFileName: string
+
+    member GetParsedInput: fileName: string -> ParsedInput
+
+    static member Create: argv: string [] * CompilationKind * ReferenceResolver.Resolver * (TcConfigBuilder -> unit) -> Compilation
 
 
 /// Part of LegacyHostedCompilerForTesting

@@ -832,8 +832,6 @@ type TypeCheckedFinishResult = TcState * TopAttribs * TypedImplFile list * TcEnv
 [<Sealed>]
 type TypeChecker =
 
-    member Check: ParsedInput -> TypeCheckedResult
-
     member Check: fileName: string -> TypeCheckedResult
 
     member CheckBefore: fileName: string -> TypeCheckedResult

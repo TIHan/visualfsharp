@@ -5576,8 +5576,6 @@ type TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPa
                 fun tcState input -> 
                     TypeCheckOneInput (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPathOpt) tcState input))
 
-    member _.TcConfig = tcConfig
-
     member _.TcImports = tcImports
 
     member _.SourceFiles =

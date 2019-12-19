@@ -184,7 +184,7 @@ type DisposablesTracker() =
             for i in l do 
                 try i.Dispose() with _ -> ()
 
-
+// TODO: Remove in favor of CreateTypeChecker
 let TypeCheck (ctok, tcConfig, tcImports, tcGlobals, errorLogger: ErrorLogger, assemblyName, niceNameGen, tcEnv0, inputs, exiter: Exiter) =
     try 
         if isNil inputs then error(Error(FSComp.SR.fscNoImplementationFiles(), Range.rangeStartup))
@@ -1706,316 +1706,55 @@ let CopyFSharpCore(outFile: string, referencedDlls: AssemblyReference list) =
 // Main phases of compilation
 //-----------------------------------------------------------------------------
 
+[<NoEquality; NoComparison>]
+type Args<'T> = Args  of 'T
+
 [<Struct;RequireQualifiedAccess>]
 type CompilationKind =
     | Default
     | CommandLine
     | Script
 
-[<Sealed>]
-type Compilation(ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, bannerAlreadyPrinted, 
-                 reduceMemoryUsage: ReduceMemoryFlag, defaultCopyFSharpCore: CopyFSharpCoreFlag, 
-                 exiter: Exiter, errorLoggerProvider : ErrorLoggerProvider, disposables : DisposablesTracker) =
-
-    let parseInputs () =
-        // See Bug 735819 
-        let lcidFromCodePage =
-            if CompilationKind.CommandLine = kind then
-                if (Console.OutputEncoding.CodePage <> 65001) &&
-                   (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.OEMCodePage) &&
-                   (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.ANSICodePage) then
-                        Thread.CurrentThread.CurrentUICulture <- new CultureInfo("en-US")
-                        Some 1033
-                else
-                    None
-            else
-                None
-
-        let directoryBuildingFrom = Directory.GetCurrentDirectory()
-        let setProcessThreadLocals tcConfigB =
-            if kind = CompilationKind.CommandLine then
-                match tcConfigB.preferredUiLang with
-                | Some s -> Thread.CurrentThread.CurrentUICulture <- new CultureInfo(s)
-                | None -> ()
-                if tcConfigB.utf8output then 
-                    Console.OutputEncoding <- Encoding.UTF8
-
-        let displayBannerIfNeeded tcConfigB =
-            // display the banner text, if necessary
-            if kind = CompilationKind.CommandLine && not bannerAlreadyPrinted then 
-                DisplayBannerText tcConfigB
-
-        let tryGetMetadataSnapshot = (fun _ -> None)
-
-        let tcConfigB = 
-           TcConfigBuilder.CreateNew(legacyReferenceResolver, DefaultFSharpBinariesDir, 
-              reduceMemoryUsage=reduceMemoryUsage, implicitIncludeDir=directoryBuildingFrom, 
-              isInteractive=false, isInvalidationSupported=false, 
-              defaultCopyFSharpCore=defaultCopyFSharpCore, 
-              tryGetMetadataSnapshot=tryGetMetadataSnapshot)
-
-        // Preset: --optimize+ -g --tailcalls+ (see 4505)
-        SetOptimizeSwitch tcConfigB OptionSwitch.On
-        SetDebugSwitch    tcConfigB None OptionSwitch.Off
-        SetTailcallSwitch tcConfigB OptionSwitch.On    
-
-        // Now install a delayed logger to hold all errors from flags until after all flags have been parsed (for example, --vserrors)
-        let delayForFlagsLogger =  errorLoggerProvider.CreateDelayAndForwardLogger exiter
-        let _unwindEL_1 = PushErrorLoggerPhaseUntilUnwind (fun _ -> delayForFlagsLogger)          
-    
-        // Share intern'd strings across all lexing/parsing
-        let lexResourceManager = new Lexhelp.LexResourceManager()
-
-        // process command line, flags and collect filenames 
-        let sourceFiles = 
-
-            // The ParseCompilerOptions function calls imperative function to process "real" args
-            // Rather than start processing, just collect names, then process them. 
-            try 
-                let sourceFiles = 
-                    let files = ProcessCommandLineFlags (tcConfigB, setProcessThreadLocals, lcidFromCodePage, argv)
-                    AdjustForScriptCompile(ctok, tcConfigB, files, lexResourceManager)
-                sourceFiles
-
-            with e -> 
-                errorRecovery e rangeStartup
-                delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
-                exiter.Exit 1 
-    
-        tcConfigB.conditionalCompilationDefines <- 
-            (if kind = CompilationKind.Script then "INTERACTIVE" else "COMPILED") :: tcConfigB.conditionalCompilationDefines 
-        displayBannerIfNeeded tcConfigB
-
-        // Create tcGlobals and frameworkTcImports
-        let outfile, pdbfile, assemblyName = 
-            try 
-                tcConfigB.DecideNames sourceFiles
-            with e ->
-                errorRecovery e rangeStartup
-                delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
-                exiter.Exit 1 
-                    
-        // DecideNames may give "no inputs" error. Abort on error at this point. bug://3911
-        if not tcConfigB.continueAfterParseFailure && delayForFlagsLogger.ErrorCount > 0 then
-            delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
-            exiter.Exit 1
-
-        tcConfigBCallback tcConfigB
-    
-        // If there's a problem building TcConfig, abort    
-        let tcConfig = 
-            try
-                TcConfig.Create(tcConfigB, validate=false)
-            with e ->
-                delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
-                exiter.Exit 1
-    
-        let errorLogger =  errorLoggerProvider.CreateErrorLoggerUpToMaxErrors(tcConfigB, exiter)
-
-        // Install the global error logger and never remove it. This logger does have all command-line flags considered.
-        let _unwindEL_2 = PushErrorLoggerPhaseUntilUnwind (fun _ -> errorLogger)
-    
-        // Forward all errors from flags
-        delayForFlagsLogger.CommitDelayedDiagnostics errorLogger
-
-        if not tcConfigB.continueAfterParseFailure then 
-            AbortOnError(errorLogger, exiter)
-
-        // Resolve assemblies
-        ReportTime tcConfig "Import mscorlib and FSharp.Core.dll"
-        let foundationalTcConfigP = TcConfigProvider.Constant tcConfig
-        let sysRes, otherRes, knownUnresolved = TcAssemblyResolutions.SplitNonFoundationalResolutions(ctok, tcConfig)
-    
-        // Import basic assemblies
-        let tcGlobals, frameworkTcImports = TcImports.BuildFrameworkTcImports (ctok, foundationalTcConfigP, sysRes, otherRes) |> Cancellable.runWithoutCancellation
-
-        // Register framework tcImports to be disposed in future
-        disposables.Register frameworkTcImports
-
-        // Parse sourceFiles 
-        ReportTime tcConfig "Parse inputs"
-        use unwindParsePhase = PushThreadBuildPhaseUntilUnwind BuildPhase.Parse
-        let inputs =
-            try
-                let isLastCompiland, isExe = sourceFiles |> tcConfig.ComputeCanContainEntryPoint 
-                isLastCompiland |> List.zip sourceFiles
-                // PERF: consider making this parallel, once uses of global state relevant to parsing are cleaned up 
-                |> List.choose (fun (filename: string, isLastCompiland) -> 
-                    let pathOfMetaCommandSource = Path.GetDirectoryName filename
-                    match ParseOneInputFile(tcConfig, lexResourceManager, ["COMPILED"], filename, (isLastCompiland, isExe), errorLogger, (*retryLocked*)false) with
-                    | Some input -> Some (input, pathOfMetaCommandSource)
-                    | None -> None
-                    ) 
-            with e -> 
-                errorRecoveryNoRange e
-                exiter.Exit 1
-
-        let inputs, _ =
-            (Map.empty, inputs)
-            ||> List.mapFold (fun state (input,x) -> let inputT, stateT = DeduplicateParsedInputModuleName state input in (inputT,x), stateT)
-
-        tcConfig, errorLogger, frameworkTcImports, otherRes, outfile, pdbfile, assemblyName, knownUnresolved, tcGlobals, inputs, sourceFiles
-
-    let createTypeChecker (tcConfig: TcConfig, errorLogger, inputs, tcGlobals, frameworkTcImports, otherRes, knownUnresolved, assemblyName) =
-        if not tcConfig.continueAfterParseFailure then 
-            AbortOnError(errorLogger, exiter)
-
-        if tcConfig.printAst then                
-            inputs |> List.iter (fun (input, _filename) -> printf "AST:\n"; printfn "%+A" input; printf "\n") 
-
-        let tcConfig = (tcConfig, inputs) ||> List.fold (fun z (x, m) -> ApplyMetaCommandsFromInputToTcConfig(z, x, m))
-        let tcConfigP = TcConfigProvider.Constant tcConfig
-
-        // Import other assemblies
-        ReportTime tcConfig "Import non-system references"
-        let tcImports = TcImports.BuildNonFrameworkTcImports(ctok, tcConfigP, tcGlobals, frameworkTcImports, otherRes, knownUnresolved)  |> Cancellable.runWithoutCancellation
-
-        // register tcImports to be disposed in future
-        disposables.Register tcImports
-
-        if not tcConfig.continueAfterParseFailure then 
-            AbortOnError(errorLogger, exiter)
-
-        if tcConfig.importAllReferencesOnly then exiter.Exit 0 
-
-        // Build the initial type checking environment
-        ReportTime tcConfig "Typecheck"
-        use unwindParsePhase = PushThreadBuildPhaseUntilUnwind BuildPhase.TypeCheck
-        let tcEnv0 = GetInitialTcEnv (assemblyName, rangeStartup, tcConfig, tcImports, tcGlobals)
-
-        // Type check the inputs
-        let inputs = inputs |> List.map fst
-        CreateTypeChecker(ctok, tcConfig, tcImports, tcGlobals, errorLogger, assemblyName, NiceNameGenerator(), tcEnv0, inputs, exiter)
-
-    let parsedInputs = lazy parseInputs()
-
-    let typeChecker = 
-        lazy
-            let (tcConfig, errorLogger, frameworkTcImports, otherRes, _outfile, _pdbfile, assemblyName, knownUnresolved, tcGlobals, inputs, _) = parsedInputs.Value
-            createTypeChecker (tcConfig, errorLogger, inputs, tcGlobals, frameworkTcImports, otherRes, knownUnresolved, assemblyName)
-
-    member _.TcConfig =
-        let (tcConfig, _, _, _, _, _, _, _, _, _, _) = parsedInputs.Value
-        tcConfig
-
-    member _.SourceFiles =
-        let (_, _, _, _, _, _, _, _, _, _, sourceFiles) = parsedInputs.Value
-        sourceFiles
-        
-    member _.TcGlobals =
-        let (_, _, _, _, _, _, _, _, tcGlobals, _, _) = parsedInputs.Value
-        tcGlobals
-
-    member _.AssemblyName =
-        let (_, _, _, _, _, _, assemblyName, _, _, _, _) = parsedInputs.Value
-        assemblyName
-
-    member _.OutputFileName =
-        let (_, _, _, _, outfile, _, _, _, _, _, _) = parsedInputs.Value
-        outfile
-
-    member _.TypeChecker = typeChecker.Value
-
-    member _.GetParsedInput fileName =
-        let (_, _, _, _, _, _, _, _, _, inputs, _) = parsedInputs.Value
-        inputs
-        |> List.find (fun (parsedInput, _) ->
-            match parsedInput with
-            | ParsedInput.ImplFile(ParsedImplFileInput.ParsedImplFileInput(fileName=fileName2)) -> fileName = fileName2
-            | ParsedInput.SigFile(ParsedSigFileInput.ParsedSigFileInput(fileName=fileName2)) -> fileName = fileName2) 
-        |> fst
-
-    static member Create(argv, kind, tcConfigBCallback) =
-        let argv = Array.append [| "fsc.exe" |] argv
-        let ctok = AssumeCompilationThreadWithoutEvidence ()
-
-        // Check for --pause as the very first step so that a compiler can be attached here.
-        let pauseFlag = argv |> Array.exists  (fun x -> x = "/pause" || x = "--pause")
-        if kind = CompilationKind.CommandLine && pauseFlag then 
-            System.Console.WriteLine("Press return to continue...")
-            System.Console.ReadLine() |> ignore
-
-#if !FX_NO_APP_DOMAINS
-        let timesFlag = argv |> Array.exists  (fun x -> x = "/times" || x = "--times")
-        if kind = CompilationKind.CommandLine && timesFlag then 
-            let stats = ILBinaryReader.GetStatistics()
-            AppDomain.CurrentDomain.ProcessExit.Add(fun _ -> 
-                printfn "STATS: #ByteArrayFile = %d, #MemoryMappedFileOpen = %d, #MemoryMappedFileClosed = %d, #RawMemoryFile = %d, #WeakByteArrayFile = %d" 
-                    stats.byteFileCount 
-                    stats.memoryMapFileOpenedCount 
-                    stats.memoryMapFileClosedCount 
-                    stats.rawMemoryFileCount 
-                    stats.weakByteFileCount)
-#endif
-
-        let quitProcessExiter = 
-            if kind = CompilationKind.CommandLine then
-                { new Exiter with 
-                    member x.Exit(n) =                    
-                        try 
-                          exit n
-                        with _ -> 
-                          ()            
-                        failwithf "%s" <| FSComp.SR.elSysEnvExitDidntExit() 
-                }
-            else
-                { new Exiter with 
-                    member _.Exit _ = Unchecked.defaultof<_>
-                }
-
-        let legacyReferenceResolver = 
-#if CROSS_PLATFORM_COMPILER
-            SimulatedMSBuildReferenceResolver.SimulatedMSBuildResolver
-#else
-            LegacyMSBuildReferenceResolver.getResolver()
-#endif
-
-        let d = new DisposablesTracker()
-
-        // This is the only place where ReduceMemoryFlag.No is set. This is because fsc.exe is not a long-running process and
-        // thus we can use file-locking memory mapped files.
-        //
-        // This is also one of only two places where CopyFSharpCoreFlag.Yes is set.  The other is in LegacyHostedCompilerForTesting.
-        Compilation (ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, (*bannerAlreadyPrinted*)false, ReduceMemoryFlag.No, CopyFSharpCoreFlag.Yes, quitProcessExiter, ConsoleLoggerProvider(), d)
-
-[<NoEquality; NoComparison>]
-type Args<'T> = Args  of 'T
-
-let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, 
-          reduceMemoryUsage: ReduceMemoryFlag, defaultCopyFSharpCore: CopyFSharpCoreFlag, 
-          exiter: Exiter, errorLoggerProvider : ErrorLoggerProvider, disposables : DisposablesTracker) = 
+// Parse files and setup framework TcImports
+let main0a (ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, bannerAlreadyPrinted, 
+            reduceMemoryUsage: ReduceMemoryFlag, defaultCopyFSharpCore: CopyFSharpCoreFlag, 
+            exiter: Exiter, errorLoggerProvider : ErrorLoggerProvider, disposables : DisposablesTracker) =
 
     // See Bug 735819 
     let lcidFromCodePage =
-        if (Console.OutputEncoding.CodePage <> 65001) &&
-           (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.OEMCodePage) &&
-           (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.ANSICodePage) then
-                Thread.CurrentThread.CurrentUICulture <- new CultureInfo("en-US")
-                Some 1033
+        if CompilationKind.CommandLine = kind then
+            if (Console.OutputEncoding.CodePage <> 65001) &&
+                (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.OEMCodePage) &&
+                (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.ANSICodePage) then
+                    Thread.CurrentThread.CurrentUICulture <- new CultureInfo("en-US")
+                    Some 1033
+            else
+                None
         else
             None
 
     let directoryBuildingFrom = Directory.GetCurrentDirectory()
     let setProcessThreadLocals tcConfigB =
-                    match tcConfigB.preferredUiLang with
-                    | Some s -> Thread.CurrentThread.CurrentUICulture <- new CultureInfo(s)
-                    | None -> ()
-                    if tcConfigB.utf8output then 
-                        Console.OutputEncoding <- Encoding.UTF8
+        if kind = CompilationKind.CommandLine then
+            match tcConfigB.preferredUiLang with
+            | Some s -> Thread.CurrentThread.CurrentUICulture <- new CultureInfo(s)
+            | None -> ()
+            if tcConfigB.utf8output then 
+                Console.OutputEncoding <- Encoding.UTF8
 
     let displayBannerIfNeeded tcConfigB =
-                    // display the banner text, if necessary
-                    if not bannerAlreadyPrinted then 
-                        DisplayBannerText tcConfigB
+        // display the banner text, if necessary
+        if kind = CompilationKind.CommandLine && not bannerAlreadyPrinted then 
+            DisplayBannerText tcConfigB
 
     let tryGetMetadataSnapshot = (fun _ -> None)
 
     let tcConfigB = 
-       TcConfigBuilder.CreateNew(legacyReferenceResolver, DefaultFSharpBinariesDir, 
-          reduceMemoryUsage=reduceMemoryUsage, implicitIncludeDir=directoryBuildingFrom, 
-          isInteractive=false, isInvalidationSupported=false, 
-          defaultCopyFSharpCore=defaultCopyFSharpCore, 
-          tryGetMetadataSnapshot=tryGetMetadataSnapshot)
+        TcConfigBuilder.CreateNew(legacyReferenceResolver, DefaultFSharpBinariesDir, 
+            reduceMemoryUsage=reduceMemoryUsage, implicitIncludeDir=directoryBuildingFrom, 
+            isInteractive=false, isInvalidationSupported=false, 
+            defaultCopyFSharpCore=defaultCopyFSharpCore, 
+            tryGetMetadataSnapshot=tryGetMetadataSnapshot)
 
     // Preset: --optimize+ -g --tailcalls+ (see 4505)
     SetOptimizeSwitch tcConfigB OptionSwitch.On
@@ -2045,7 +1784,8 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
             delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
             exiter.Exit 1 
     
-    tcConfigB.conditionalCompilationDefines <- "COMPILED" :: tcConfigB.conditionalCompilationDefines 
+    tcConfigB.conditionalCompilationDefines <- 
+        (if kind = CompilationKind.Script then "INTERACTIVE" else "COMPILED") :: tcConfigB.conditionalCompilationDefines 
     displayBannerIfNeeded tcConfigB
 
     // Create tcGlobals and frameworkTcImports
@@ -2061,6 +1801,8 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
     if not tcConfigB.continueAfterParseFailure && delayForFlagsLogger.ErrorCount > 0 then
         delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
         exiter.Exit 1
+
+    tcConfigBCallback tcConfigB
     
     // If there's a problem building TcConfig, abort    
     let tcConfig = 
@@ -2109,16 +1851,19 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
         with e -> 
             errorRecoveryNoRange e
             exiter.Exit 1
-    
+
     let inputs, _ =
         (Map.empty, inputs)
         ||> List.mapFold (fun state (input,x) -> let inputT, stateT = DeduplicateParsedInputModuleName state input in (inputT,x), stateT)
 
-    if tcConfig.parseOnly then exiter.Exit 0 
-    if not tcConfig.continueAfterParseFailure then 
+    Args(ctok, kind, tcConfig, errorLogger, inputs, tcGlobals, frameworkTcImports, otherRes, outfile, pdbfile, assemblyName, knownUnresolved, exiter, disposables)
+
+// Type-check files
+let main0b (Args(ctok, kind, tcConfig: TcConfig, errorLogger, inputs, tcGlobals, frameworkTcImports, otherRes, outfile, pdbfile, assemblyName, knownUnresolved, exiter, disposables : DisposablesTracker)) =
+    if kind = CompilationKind.CommandLine && not tcConfig.continueAfterParseFailure then 
         AbortOnError(errorLogger, exiter)
 
-    if tcConfig.printAst then                
+    if kind = CompilationKind.CommandLine && tcConfig.printAst then                
         inputs |> List.iter (fun (input, _filename) -> printf "AST:\n"; printfn "%+A" input; printf "\n") 
 
     let tcConfig = (tcConfig, inputs) ||> List.fold (fun z (x, m) -> ApplyMetaCommandsFromInputToTcConfig(z, x, m))
@@ -2143,13 +1888,17 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
 
     // Type check the inputs
     let inputs = inputs |> List.map fst
-    let tcState, topAttrs, typedAssembly, _tcEnvAtEnd = 
-        TypeCheck(ctok, tcConfig, tcImports, tcGlobals, errorLogger, assemblyName, NiceNameGenerator(), tcEnv0, inputs, exiter)
+    Args(ctok, tcGlobals, frameworkTcImports, CreateTypeChecker(ctok, tcConfig, tcImports, tcGlobals, errorLogger, assemblyName, NiceNameGenerator(), tcEnv0, inputs, exiter), tcConfig, outfile, pdbfile, assemblyName, errorLogger, exiter)
+
+// Finalize type-checking
+let main0c(Args(ctok, tcGlobals, frameworkTcImports, typeChecker: TypeChecker, tcConfig, outfile, pdbfile, assemblyName, errorLogger, exiter)) =
+
+    let (tcState, topAttrs, typedImplFiles, _) = typeChecker.Finish()
 
     AbortOnError(errorLogger, exiter)
     ReportTime tcConfig "Typechecked"
 
-    Args (ctok, tcGlobals, tcImports, frameworkTcImports, tcState.Ccu, typedAssembly, topAttrs, tcConfig, outfile, pdbfile, assemblyName, errorLogger, exiter)
+    Args(ctok, tcGlobals, typeChecker.TcImports, frameworkTcImports, tcState.Ccu, typedImplFiles, topAttrs, tcConfig, outfile, pdbfile, assemblyName, errorLogger, exiter)
 
 let main1(Args (ctok, tcGlobals, tcImports: TcImports, frameworkTcImports, generatedCcu: CcuThunk, typedImplFiles, topAttrs, tcConfig: TcConfig, outfile, pdbfile, assemblyName, errorLogger, exiter: Exiter)) =
 
@@ -2459,7 +2208,9 @@ let typecheckAndCompile
                     System.Console.SetOut(savedOut)
                 with _ -> ()}
 
-    main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, defaultCopyFSharpCore, exiter, errorLoggerProvider, d)
+    main0a(ctok, argv, CompilationKind.CommandLine, (fun _ -> ()), legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, defaultCopyFSharpCore, exiter, errorLoggerProvider, d)
+    |> main0b
+    |> main0c
     |> main1
     |> main2a
     |> main2b (tcImportsCapture,dynamicAssemblyCreator)
@@ -2486,3 +2237,67 @@ let mainCompile
        (ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, 
         defaultCopyFSharpCore, exiter, errorLoggerProvider, tcImportsCapture, dynamicAssemblyCreator)
 
+[<Sealed>]
+type Compilation(ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, bannerAlreadyPrinted, 
+                 reduceMemoryUsage: ReduceMemoryFlag, defaultCopyFSharpCore: CopyFSharpCoreFlag, 
+                 exiter: Exiter, errorLoggerProvider : ErrorLoggerProvider, disposables : DisposablesTracker) =
+
+    let parsedInputs =
+        lazy
+            main0a(ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, bannerAlreadyPrinted, reduceMemoryUsage, defaultCopyFSharpCore,
+                   exiter, errorLoggerProvider, disposables)
+
+    let typeChecker = 
+        lazy
+            parsedInputs.Value
+            |> main0b
+
+    member _.TcConfig =
+        let (Args(_, _, tcConfig, _, _, _, _, _, _, _, _, _, _, _)) = parsedInputs.Value
+        tcConfig
+
+    member _.SourceFiles =
+        let (Args(_, _, _, _, inputs, _, _, _, _, _, _, _, _, _)) = parsedInputs.Value
+        inputs
+        |> List.map (fun (parsedInput, _) ->
+            match parsedInput with
+            | ParsedInput.ImplFile(ParsedImplFileInput.ParsedImplFileInput(fileName=fileName))
+            | ParsedInput.SigFile(ParsedSigFileInput.ParsedSigFileInput(fileName=fileName)) -> fileName)
+        
+    member _.TcGlobals =
+        let (Args(_, _, _, _, _, tcGlobals, _, _, _, _, _, _, _, _)) = parsedInputs.Value
+        tcGlobals
+
+    member _.AssemblyName =
+        let (Args(_, _, _, _, _, _, _, _, _, _, assemblyName, _, _, _)) = parsedInputs.Value
+        assemblyName
+
+    member _.OutputFileName =
+        let (Args(_, _, _, _, _, _, _, _, outfile, _, _, _, _, _)) = parsedInputs.Value
+        outfile
+
+    member _.TypeChecker = 
+        let (Args(_, _, _, typeChecker, _, _, _, _, _, _)) = typeChecker.Value
+        typeChecker
+
+    member _.GetParsedInput fileName =
+        let (Args(_, _, _, _, inputs, _, _, _, _, _, _, _, _, _)) = parsedInputs.Value
+        inputs
+        |> List.find (fun (parsedInput, _) ->
+            match parsedInput with
+            | ParsedInput.ImplFile(ParsedImplFileInput.ParsedImplFileInput(fileName=fileName2)) -> fileName = fileName2
+            | ParsedInput.SigFile(ParsedSigFileInput.ParsedSigFileInput(fileName=fileName2)) -> fileName = fileName2) 
+        |> fst
+
+    static member Create(argv, kind, referenceResolver, tcConfigBCallback) =
+        let argv = Array.append [| "fsc.exe" |] argv
+        let ctok = AssumeCompilationThreadWithoutEvidence ()
+
+        let quitProcessExiter = 
+            { new Exiter with 
+                member _.Exit _ = Unchecked.defaultof<_>
+            }
+
+        let d = new DisposablesTracker()
+
+        Compilation (ctok, argv, kind, tcConfigBCallback, referenceResolver, (*bannerAlreadyPrinted*)true, ReduceMemoryFlag.Yes, CopyFSharpCoreFlag.No, quitProcessExiter, ConsoleLoggerProvider(), d)
