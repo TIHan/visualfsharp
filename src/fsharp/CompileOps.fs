@@ -5578,6 +5578,8 @@ type TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPa
 
     member _.TcConfig = tcConfig
 
+    member _.TcImports = tcImports
+
     member _.SourceFiles =
         inputs
         |> Array.map (fun input ->

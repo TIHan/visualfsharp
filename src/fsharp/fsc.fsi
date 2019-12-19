@@ -28,6 +28,20 @@ val internal ProcessCommandLineFlags : TcConfigBuilder * setProcessThreadLocals:
 //---------------------------------------------------------------------------
 // The entry point used by fsc.exe
 
+[<Sealed>]
+type Compilation =
+
+    member SourceFiles: string list
+
+    member TcImports: TcImports
+
+    member TcConfig: TcConfig
+
+    member TypeChecker: TypeChecker
+
+    static member Create: argv: string [] -> Compilation
+    
+
 val typecheckAndCompile : 
     ctok: CompilationThreadToken *
     argv : string[] * 

@@ -836,4 +836,6 @@ type TypeChecker =
 
     member Finish: unit -> TypeCheckedFinishResult
 
+    member TcImports: TcImports
+
     static member Create: ctok: CompilationThreadToken * checkForErrors: (unit -> bool) * TcConfig * TcImports * TcGlobals * LongIdent option * TcState * ParsedInput list -> TypeChecker

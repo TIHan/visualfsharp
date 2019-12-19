@@ -1706,6 +1706,7 @@ let CopyFSharpCore(outFile: string, referencedDlls: AssemblyReference list) =
 // Main phases of compilation
 //-----------------------------------------------------------------------------
 
+[<Sealed>]
 type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, 
                  reduceMemoryUsage: ReduceMemoryFlag, defaultCopyFSharpCore: CopyFSharpCoreFlag, 
                  exiter: Exiter, errorLoggerProvider : ErrorLoggerProvider, disposables : DisposablesTracker) =
@@ -1840,7 +1841,7 @@ type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
             (Map.empty, inputs)
             ||> List.mapFold (fun state (input,x) -> let inputT, stateT = DeduplicateParsedInputModuleName state input in (inputT,x), stateT)
 
-        outfile, pdbfile, assemblyName, knownUnresolved, tcGlobals, inputs
+        tcConfig, errorLogger, frameworkTcImports, otherRes, outfile, pdbfile, assemblyName, knownUnresolved, tcGlobals, inputs, sourceFiles
 
     let createTypeChecker (tcConfig: TcConfig, errorLogger, inputs, tcGlobals, frameworkTcImports, otherRes, knownUnresolved, assemblyName) =
         if not tcConfig.continueAfterParseFailure then 
@@ -1875,9 +1876,52 @@ type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
 
     let parsedInputs = lazy parseInputs()
 
-    member _.GetParsedInput fileName =
-        ()
-    
+    let typeChecker = 
+        lazy
+            let (tcConfig, errorLogger, frameworkTcImports, otherRes, _outfile, _pdbfile, assemblyName, knownUnresolved, tcGlobals, inputs, _) = parsedInputs.Value
+            createTypeChecker (tcConfig, errorLogger, inputs, tcGlobals, frameworkTcImports, otherRes, knownUnresolved, assemblyName)
+
+    member _.TcConfig =
+        let (tcConfig, _, _, _, _, _, _, _, _, _, _) = parsedInputs.Value
+        tcConfig
+
+    member _.SourceFiles =
+        let (_, _, _, _, _, _, _, _, _, _, sourceFiles) = parsedInputs.Value
+        sourceFiles
+
+    member _.TcImports =
+        typeChecker.Value.TcImports    
+
+    member _.TypeChecker = typeChecker.Value
+
+    static member Create(argv) =
+        let argv = Array.append [| "fsc.exe" |] argv
+        let ctok = AssumeCompilationThreadWithoutEvidence ()
+
+        let quitProcessExiter = 
+            { new Exiter with 
+                member x.Exit(_n) = Unchecked.defaultof<_>            
+                    //try 
+                    //  exit n
+                    //with _ -> 
+                    //  ()            
+                    //failwithf "%s" <| FSComp.SR.elSysEnvExitDidntExit() 
+            }
+
+        let legacyReferenceResolver = 
+#if CROSS_PLATFORM_COMPILER
+            SimulatedMSBuildReferenceResolver.SimulatedMSBuildResolver
+#else
+            LegacyMSBuildReferenceResolver.getResolver()
+#endif
+
+        let d = new DisposablesTracker()
+
+        // This is the only place where ReduceMemoryFlag.No is set. This is because fsc.exe is not a long-running process and
+        // thus we can use file-locking memory mapped files.
+        //
+        // This is also one of only two places where CopyFSharpCoreFlag.Yes is set.  The other is in LegacyHostedCompilerForTesting.
+        Compilation (ctok, argv, legacyReferenceResolver, (*bannerAlreadyPrinted*)false, ReduceMemoryFlag.No, CopyFSharpCoreFlag.Yes, quitProcessExiter, ConsoleLoggerProvider(), d)
 
 [<NoEquality; NoComparison>]
 type Args<'T> = Args  of 'T
