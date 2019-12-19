@@ -33,11 +33,17 @@ type Compilation =
 
     member SourceFiles: string list
 
-    member TcImports: TcImports
-
     member TcConfig: TcConfig
 
+    member TcGlobals: TcGlobals
+
     member TypeChecker: TypeChecker
+
+    member AssemblyName: string
+
+    member OutputFileName: string
+
+    member GetParsedInput: fileName: string -> ParsedInput
 
     static member Create: argv: string [] -> Compilation
     

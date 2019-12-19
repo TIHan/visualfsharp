@@ -834,6 +834,14 @@ type TypeChecker =
 
     member Check: ParsedInput -> TypeCheckedResult
 
+    member Check: fileName: string -> TypeCheckedResult
+
+    member CheckBefore: fileName: string -> TypeCheckedResult
+
+    member CheckLast: unit -> TypeCheckedResult
+
+    member IsReadyBefore: fileName: string -> bool
+
     member Finish: unit -> TypeCheckedFinishResult
 
     member TcImports: TcImports

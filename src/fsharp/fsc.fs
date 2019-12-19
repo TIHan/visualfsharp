@@ -1888,11 +1888,29 @@ type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
     member _.SourceFiles =
         let (_, _, _, _, _, _, _, _, _, _, sourceFiles) = parsedInputs.Value
         sourceFiles
+        
+    member _.TcGlobals =
+        let (_, _, _, _, _, _, _, _, tcGlobals, _, _) = parsedInputs.Value
+        tcGlobals
 
-    member _.TcImports =
-        typeChecker.Value.TcImports    
+    member _.AssemblyName =
+        let (_, _, _, _, _, _, assemblyName, _, _, _, _) = parsedInputs.Value
+        assemblyName
+
+    member _.OutputFileName =
+        let (_, _, _, _, outfile, _, _, _, _, _, _) = parsedInputs.Value
+        outfile
 
     member _.TypeChecker = typeChecker.Value
+
+    member _.GetParsedInput fileName =
+        let (_, _, _, _, _, _, _, _, _, inputs, _) = parsedInputs.Value
+        inputs
+        |> List.find (fun (parsedInput, _) ->
+            match parsedInput with
+            | ParsedInput.ImplFile(ParsedImplFileInput.ParsedImplFileInput(fileName=fileName2)) -> fileName = fileName2
+            | ParsedInput.SigFile(ParsedSigFileInput.ParsedSigFileInput(fileName=fileName2)) -> fileName = fileName2) 
+        |> fst
 
     static member Create(argv) =
         let argv = Array.append [| "fsc.exe" |] argv

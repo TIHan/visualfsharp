@@ -5588,25 +5588,59 @@ type TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPa
             | ParsedInput.SigFile(ParsedSigFileInput.ParsedSigFileInput(fileName=fileName)) -> fileName)
         |> List.ofArray
 
-    member x.Check input =
-        let index =
-            inputs
-            |> Array.findIndex (fun input2 -> obj.ReferenceEquals(input, input2))
-        match inputs.[index] with
+    member x.GetSlot fileName =
+        inputs
+        |> Array.findIndex (fun input ->
+            match input.ParsedInput with
+            | ParsedInput.ImplFile(ParsedImplFileInput.ParsedImplFileInput(fileName=fileName2)) -> fileName = fileName2
+            | ParsedInput.SigFile(ParsedSigFileInput.ParsedSigFileInput(fileName=fileName2)) -> fileName = fileName2)
+
+    member _.GetSlot (input: ParsedInput) =
+        inputs
+        |> Array.findIndex (fun input2 -> obj.ReferenceEquals(input, input2))
+
+    member x.Check slot =
+        match inputs.[slot] with
         | InputStatus.Parsed (input, typeCheck) ->
-            if index = 0 then
+            if slot = 0 then
                 let result = typeCheck tcState input
-                inputs.[index] <- InputStatus.TypeChecked (input, result)
+                inputs.[slot] <- InputStatus.TypeChecked (input, result)
                 result
             else
-                let (_, prevTcState) = x.Check inputs.[index - 1].ParsedInput
+                let (_, prevTcState) = x.Check (slot - 1)
                 let result = typeCheck prevTcState input
-                inputs.[index] <- InputStatus.TypeChecked (input, result)
+                inputs.[slot] <- InputStatus.TypeChecked (input, result)
                 result
         | InputStatus.TypeChecked (_, result) ->
             result
         | InputStatus.New _ ->
             failwith "Input cannot be checked"
+
+    member x.Check (fileName: string) =
+        let slot = x.GetSlot fileName
+        x.Check slot
+
+    member x.CheckBefore (fileName: string) =
+        match x.GetSlot fileName with
+        | 0 -> x.Check 0
+        | slot -> x.Check (slot - 1)
+
+    member x.CheckLast () =
+        x.Check (inputs.Length - 1)
+
+    member x.Check (input: ParsedInput) =
+        let slot = x.GetSlot input
+        x.Check slot
+
+    member x.IsReady slot =
+        match inputs.[slot] with
+        | InputStatus.TypeChecked _ -> true
+        | _ -> false
+
+    member x.IsReadyBefore (fileName: string) =
+        match x.GetSlot fileName with
+        | 0 -> true
+        | slot -> x.IsReady (slot - 1)
 
     member x.Finish() : TypeCheckedFinishResult =
         // tcEnvAtEndOfLastFile is the environment required by fsi.exe when incrementally adding definitions 
