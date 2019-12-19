@@ -825,3 +825,15 @@ type LoadClosure =
     /// Analyze a set of script files and find the closure of their references. The resulting references are then added to the given TcConfig.
     /// Used from fsi.fs and fsc.fs, for #load and command line. 
     static member ComputeClosureOfScriptFiles: CompilationThreadToken * tcConfig:TcConfig * (string * range) list * implicitDefines:CodeContext * lexResourceManager: Lexhelp.LexResourceManager -> LoadClosure
+
+type TypeCheckedResult = ((TcEnv * TopAttribs * TypedImplFile option * ModuleOrNamespaceType) * TcState)
+type TypeCheckedFinishResult = TcState * TopAttribs * TypedImplFile list * TcEnv
+
+[<Sealed>]
+type TypeChecker =
+
+    member Check: ParsedInput -> TypeCheckedResult
+
+    member Finish: unit -> TypeCheckedFinishResult
+
+    static member Create: ctok: CompilationThreadToken * checkForErrors: (unit -> bool) * TcConfig * TcImports * TcGlobals * LongIdent option * TcState * ParsedInput list -> TypeChecker

@@ -195,6 +195,16 @@ let TypeCheck (ctok, tcConfig, tcImports, tcGlobals, errorLogger: ErrorLogger, a
         errorRecovery e rangeStartup
         exiter.Exit 1
 
+let CreateTypeChecker (ctok, tcConfig, tcImports, tcGlobals, errorLogger: ErrorLogger, assemblyName, niceNameGen, tcEnv0, inputs, exiter: Exiter) =
+    try 
+        if isNil inputs then error(Error(FSComp.SR.fscNoImplementationFiles(), Range.rangeStartup))
+        let ccuName = assemblyName
+        let tcInitialState = GetInitialTcState (rangeStartup, ccuName, tcConfig, tcGlobals, tcImports, niceNameGen, tcEnv0)
+        TypeChecker.Create (ctok, (fun () -> errorLogger.ErrorCount > 0), tcConfig, tcImports, tcGlobals, None, tcInitialState, inputs)
+    with e -> 
+        errorRecovery e rangeStartup
+        exiter.Exit 1
+
 /// Check for .fsx and, if present, compute the load closure for of #loaded files.
 let AdjustForScriptCompile(ctok, tcConfigB: TcConfigBuilder, commandLineSourceFiles, lexResourceManager) =
 
@@ -1695,6 +1705,179 @@ let CopyFSharpCore(outFile: string, referencedDlls: AssemblyReference list) =
 //----------------------------------------------------------------------------
 // Main phases of compilation
 //-----------------------------------------------------------------------------
+
+type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, 
+                 reduceMemoryUsage: ReduceMemoryFlag, defaultCopyFSharpCore: CopyFSharpCoreFlag, 
+                 exiter: Exiter, errorLoggerProvider : ErrorLoggerProvider, disposables : DisposablesTracker) =
+
+    let parseInputs () =
+        // See Bug 735819 
+        let lcidFromCodePage =
+            if (Console.OutputEncoding.CodePage <> 65001) &&
+               (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.OEMCodePage) &&
+               (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.ANSICodePage) then
+                    Thread.CurrentThread.CurrentUICulture <- new CultureInfo("en-US")
+                    Some 1033
+            else
+                None
+
+        let directoryBuildingFrom = Directory.GetCurrentDirectory()
+        let setProcessThreadLocals tcConfigB =
+                        match tcConfigB.preferredUiLang with
+                        | Some s -> Thread.CurrentThread.CurrentUICulture <- new CultureInfo(s)
+                        | None -> ()
+                        if tcConfigB.utf8output then 
+                            Console.OutputEncoding <- Encoding.UTF8
+
+        let displayBannerIfNeeded tcConfigB =
+                        // display the banner text, if necessary
+                        if not bannerAlreadyPrinted then 
+                            DisplayBannerText tcConfigB
+
+        let tryGetMetadataSnapshot = (fun _ -> None)
+
+        let tcConfigB = 
+           TcConfigBuilder.CreateNew(legacyReferenceResolver, DefaultFSharpBinariesDir, 
+              reduceMemoryUsage=reduceMemoryUsage, implicitIncludeDir=directoryBuildingFrom, 
+              isInteractive=false, isInvalidationSupported=false, 
+              defaultCopyFSharpCore=defaultCopyFSharpCore, 
+              tryGetMetadataSnapshot=tryGetMetadataSnapshot)
+
+        // Preset: --optimize+ -g --tailcalls+ (see 4505)
+        SetOptimizeSwitch tcConfigB OptionSwitch.On
+        SetDebugSwitch    tcConfigB None OptionSwitch.Off
+        SetTailcallSwitch tcConfigB OptionSwitch.On    
+
+        // Now install a delayed logger to hold all errors from flags until after all flags have been parsed (for example, --vserrors)
+        let delayForFlagsLogger =  errorLoggerProvider.CreateDelayAndForwardLogger exiter
+        let _unwindEL_1 = PushErrorLoggerPhaseUntilUnwind (fun _ -> delayForFlagsLogger)          
+    
+        // Share intern'd strings across all lexing/parsing
+        let lexResourceManager = new Lexhelp.LexResourceManager()
+
+        // process command line, flags and collect filenames 
+        let sourceFiles = 
+
+            // The ParseCompilerOptions function calls imperative function to process "real" args
+            // Rather than start processing, just collect names, then process them. 
+            try 
+                let sourceFiles = 
+                    let files = ProcessCommandLineFlags (tcConfigB, setProcessThreadLocals, lcidFromCodePage, argv)
+                    AdjustForScriptCompile(ctok, tcConfigB, files, lexResourceManager)
+                sourceFiles
+
+            with e -> 
+                errorRecovery e rangeStartup
+                delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
+                exiter.Exit 1 
+    
+        tcConfigB.conditionalCompilationDefines <- "COMPILED" :: tcConfigB.conditionalCompilationDefines 
+        displayBannerIfNeeded tcConfigB
+
+        // Create tcGlobals and frameworkTcImports
+        let outfile, pdbfile, assemblyName = 
+            try 
+                tcConfigB.DecideNames sourceFiles
+            with e ->
+                errorRecovery e rangeStartup
+                delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
+                exiter.Exit 1 
+                    
+        // DecideNames may give "no inputs" error. Abort on error at this point. bug://3911
+        if not tcConfigB.continueAfterParseFailure && delayForFlagsLogger.ErrorCount > 0 then
+            delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
+            exiter.Exit 1
+    
+        // If there's a problem building TcConfig, abort    
+        let tcConfig = 
+            try
+                TcConfig.Create(tcConfigB, validate=false)
+            with e ->
+                delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
+                exiter.Exit 1
+    
+        let errorLogger =  errorLoggerProvider.CreateErrorLoggerUpToMaxErrors(tcConfigB, exiter)
+
+        // Install the global error logger and never remove it. This logger does have all command-line flags considered.
+        let _unwindEL_2 = PushErrorLoggerPhaseUntilUnwind (fun _ -> errorLogger)
+    
+        // Forward all errors from flags
+        delayForFlagsLogger.CommitDelayedDiagnostics errorLogger
+
+        if not tcConfigB.continueAfterParseFailure then 
+            AbortOnError(errorLogger, exiter)
+
+        // Resolve assemblies
+        ReportTime tcConfig "Import mscorlib and FSharp.Core.dll"
+        let foundationalTcConfigP = TcConfigProvider.Constant tcConfig
+        let sysRes, otherRes, knownUnresolved = TcAssemblyResolutions.SplitNonFoundationalResolutions(ctok, tcConfig)
+    
+        // Import basic assemblies
+        let tcGlobals, frameworkTcImports = TcImports.BuildFrameworkTcImports (ctok, foundationalTcConfigP, sysRes, otherRes) |> Cancellable.runWithoutCancellation
+
+        // Register framework tcImports to be disposed in future
+        disposables.Register frameworkTcImports
+
+        // Parse sourceFiles 
+        ReportTime tcConfig "Parse inputs"
+        use unwindParsePhase = PushThreadBuildPhaseUntilUnwind BuildPhase.Parse
+        let inputs =
+            try
+                let isLastCompiland, isExe = sourceFiles |> tcConfig.ComputeCanContainEntryPoint 
+                isLastCompiland |> List.zip sourceFiles
+                // PERF: consider making this parallel, once uses of global state relevant to parsing are cleaned up 
+                |> List.choose (fun (filename: string, isLastCompiland) -> 
+                    let pathOfMetaCommandSource = Path.GetDirectoryName filename
+                    match ParseOneInputFile(tcConfig, lexResourceManager, ["COMPILED"], filename, (isLastCompiland, isExe), errorLogger, (*retryLocked*)false) with
+                    | Some input -> Some (input, pathOfMetaCommandSource)
+                    | None -> None
+                    ) 
+            with e -> 
+                errorRecoveryNoRange e
+                exiter.Exit 1
+
+        let inputs, _ =
+            (Map.empty, inputs)
+            ||> List.mapFold (fun state (input,x) -> let inputT, stateT = DeduplicateParsedInputModuleName state input in (inputT,x), stateT)
+
+        outfile, pdbfile, assemblyName, knownUnresolved, tcGlobals, inputs
+
+    let createTypeChecker (tcConfig: TcConfig, errorLogger, inputs, tcGlobals, frameworkTcImports, otherRes, knownUnresolved, assemblyName) =
+        if not tcConfig.continueAfterParseFailure then 
+            AbortOnError(errorLogger, exiter)
+
+        if tcConfig.printAst then                
+            inputs |> List.iter (fun (input, _filename) -> printf "AST:\n"; printfn "%+A" input; printf "\n") 
+
+        let tcConfig = (tcConfig, inputs) ||> List.fold (fun z (x, m) -> ApplyMetaCommandsFromInputToTcConfig(z, x, m))
+        let tcConfigP = TcConfigProvider.Constant tcConfig
+
+        // Import other assemblies
+        ReportTime tcConfig "Import non-system references"
+        let tcImports = TcImports.BuildNonFrameworkTcImports(ctok, tcConfigP, tcGlobals, frameworkTcImports, otherRes, knownUnresolved)  |> Cancellable.runWithoutCancellation
+
+        // register tcImports to be disposed in future
+        disposables.Register tcImports
+
+        if not tcConfig.continueAfterParseFailure then 
+            AbortOnError(errorLogger, exiter)
+
+        if tcConfig.importAllReferencesOnly then exiter.Exit 0 
+
+        // Build the initial type checking environment
+        ReportTime tcConfig "Typecheck"
+        use unwindParsePhase = PushThreadBuildPhaseUntilUnwind BuildPhase.TypeCheck
+        let tcEnv0 = GetInitialTcEnv (assemblyName, rangeStartup, tcConfig, tcImports, tcGlobals)
+
+        // Type check the inputs
+        let inputs = inputs |> List.map fst
+        CreateTypeChecker(ctok, tcConfig, tcImports, tcGlobals, errorLogger, assemblyName, NiceNameGenerator(), tcEnv0, inputs, exiter)
+
+    let parsedInputs = lazy parseInputs()
+
+    member _.GetParsedInput fileName =
+        ()
+    
 
 [<NoEquality; NoComparison>]
 type Args<'T> = Args  of 'T
