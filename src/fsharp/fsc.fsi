@@ -28,6 +28,12 @@ val internal ProcessCommandLineFlags : TcConfigBuilder * setProcessThreadLocals:
 //---------------------------------------------------------------------------
 // The entry point used by fsc.exe
 
+[<Struct;RequireQualifiedAccess>]
+type CompilationKind =
+    | Default
+    | CommandLine
+    | Script
+
 [<Sealed>]
 type Compilation =
 
@@ -45,7 +51,7 @@ type Compilation =
 
     member GetParsedInput: fileName: string -> ParsedInput
 
-    static member Create: argv: string [] -> Compilation
+    static member Create: argv: string [] * CompilationKind * (TcConfigBuilder -> unit) -> Compilation
     
 
 val typecheckAndCompile : 

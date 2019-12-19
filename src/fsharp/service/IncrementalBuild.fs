@@ -1438,7 +1438,7 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
         let! builderOpt =
          cancellable {
           try
-            let compilation = Driver.Compilation.Create(Array.ofList commandLineArgs)
+            let compilation = Driver.Compilation.Create(Array.ofList commandLineArgs, Driver.CompilationKind.Default, fun _ -> ())
             let builder = 
                 new IncrementalBuilder(compilation,
                                        keepAssemblyContents=keepAssemblyContents, 

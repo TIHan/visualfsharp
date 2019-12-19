@@ -1706,34 +1706,44 @@ let CopyFSharpCore(outFile: string, referencedDlls: AssemblyReference list) =
 // Main phases of compilation
 //-----------------------------------------------------------------------------
 
+[<Struct;RequireQualifiedAccess>]
+type CompilationKind =
+    | Default
+    | CommandLine
+    | Script
+
 [<Sealed>]
-type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted, 
+type Compilation(ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, bannerAlreadyPrinted, 
                  reduceMemoryUsage: ReduceMemoryFlag, defaultCopyFSharpCore: CopyFSharpCoreFlag, 
                  exiter: Exiter, errorLoggerProvider : ErrorLoggerProvider, disposables : DisposablesTracker) =
 
     let parseInputs () =
         // See Bug 735819 
         let lcidFromCodePage =
-            if (Console.OutputEncoding.CodePage <> 65001) &&
-               (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.OEMCodePage) &&
-               (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.ANSICodePage) then
-                    Thread.CurrentThread.CurrentUICulture <- new CultureInfo("en-US")
-                    Some 1033
+            if CompilationKind.CommandLine = kind then
+                if (Console.OutputEncoding.CodePage <> 65001) &&
+                   (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.OEMCodePage) &&
+                   (Console.OutputEncoding.CodePage <> Thread.CurrentThread.CurrentUICulture.TextInfo.ANSICodePage) then
+                        Thread.CurrentThread.CurrentUICulture <- new CultureInfo("en-US")
+                        Some 1033
+                else
+                    None
             else
                 None
 
         let directoryBuildingFrom = Directory.GetCurrentDirectory()
         let setProcessThreadLocals tcConfigB =
-                        match tcConfigB.preferredUiLang with
-                        | Some s -> Thread.CurrentThread.CurrentUICulture <- new CultureInfo(s)
-                        | None -> ()
-                        if tcConfigB.utf8output then 
-                            Console.OutputEncoding <- Encoding.UTF8
+            if kind = CompilationKind.CommandLine then
+                match tcConfigB.preferredUiLang with
+                | Some s -> Thread.CurrentThread.CurrentUICulture <- new CultureInfo(s)
+                | None -> ()
+                if tcConfigB.utf8output then 
+                    Console.OutputEncoding <- Encoding.UTF8
 
         let displayBannerIfNeeded tcConfigB =
-                        // display the banner text, if necessary
-                        if not bannerAlreadyPrinted then 
-                            DisplayBannerText tcConfigB
+            // display the banner text, if necessary
+            if kind = CompilationKind.CommandLine && not bannerAlreadyPrinted then 
+                DisplayBannerText tcConfigB
 
         let tryGetMetadataSnapshot = (fun _ -> None)
 
@@ -1772,7 +1782,8 @@ type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
                 delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
                 exiter.Exit 1 
     
-        tcConfigB.conditionalCompilationDefines <- "COMPILED" :: tcConfigB.conditionalCompilationDefines 
+        tcConfigB.conditionalCompilationDefines <- 
+            (if kind = CompilationKind.Script then "INTERACTIVE" else "COMPILED") :: tcConfigB.conditionalCompilationDefines 
         displayBannerIfNeeded tcConfigB
 
         // Create tcGlobals and frameworkTcImports
@@ -1788,6 +1799,8 @@ type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
         if not tcConfigB.continueAfterParseFailure && delayForFlagsLogger.ErrorCount > 0 then
             delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
             exiter.Exit 1
+
+        tcConfigBCallback tcConfigB
     
         // If there's a problem building TcConfig, abort    
         let tcConfig = 
@@ -1912,19 +1925,43 @@ type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
             | ParsedInput.SigFile(ParsedSigFileInput.ParsedSigFileInput(fileName=fileName2)) -> fileName = fileName2) 
         |> fst
 
-    static member Create(argv) =
+    static member Create(argv, kind, tcConfigBCallback) =
         let argv = Array.append [| "fsc.exe" |] argv
         let ctok = AssumeCompilationThreadWithoutEvidence ()
 
+        // Check for --pause as the very first step so that a compiler can be attached here.
+        let pauseFlag = argv |> Array.exists  (fun x -> x = "/pause" || x = "--pause")
+        if kind = CompilationKind.CommandLine && pauseFlag then 
+            System.Console.WriteLine("Press return to continue...")
+            System.Console.ReadLine() |> ignore
+
+#if !FX_NO_APP_DOMAINS
+        let timesFlag = argv |> Array.exists  (fun x -> x = "/times" || x = "--times")
+        if kind = CompilationKind.CommandLine && timesFlag then 
+            let stats = ILBinaryReader.GetStatistics()
+            AppDomain.CurrentDomain.ProcessExit.Add(fun _ -> 
+                printfn "STATS: #ByteArrayFile = %d, #MemoryMappedFileOpen = %d, #MemoryMappedFileClosed = %d, #RawMemoryFile = %d, #WeakByteArrayFile = %d" 
+                    stats.byteFileCount 
+                    stats.memoryMapFileOpenedCount 
+                    stats.memoryMapFileClosedCount 
+                    stats.rawMemoryFileCount 
+                    stats.weakByteFileCount)
+#endif
+
         let quitProcessExiter = 
-            { new Exiter with 
-                member x.Exit(_n) = Unchecked.defaultof<_>            
-                    //try 
-                    //  exit n
-                    //with _ -> 
-                    //  ()            
-                    //failwithf "%s" <| FSComp.SR.elSysEnvExitDidntExit() 
-            }
+            if kind = CompilationKind.CommandLine then
+                { new Exiter with 
+                    member x.Exit(n) =                    
+                        try 
+                          exit n
+                        with _ -> 
+                          ()            
+                        failwithf "%s" <| FSComp.SR.elSysEnvExitDidntExit() 
+                }
+            else
+                { new Exiter with 
+                    member _.Exit _ = Unchecked.defaultof<_>
+                }
 
         let legacyReferenceResolver = 
 #if CROSS_PLATFORM_COMPILER
@@ -1939,7 +1976,7 @@ type Compilation(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
         // thus we can use file-locking memory mapped files.
         //
         // This is also one of only two places where CopyFSharpCoreFlag.Yes is set.  The other is in LegacyHostedCompilerForTesting.
-        Compilation (ctok, argv, legacyReferenceResolver, (*bannerAlreadyPrinted*)false, ReduceMemoryFlag.No, CopyFSharpCoreFlag.Yes, quitProcessExiter, ConsoleLoggerProvider(), d)
+        Compilation (ctok, argv, kind, tcConfigBCallback, legacyReferenceResolver, (*bannerAlreadyPrinted*)false, ReduceMemoryFlag.No, CopyFSharpCoreFlag.Yes, quitProcessExiter, ConsoleLoggerProvider(), d)
 
 [<NoEquality; NoComparison>]
 type Args<'T> = Args  of 'T
