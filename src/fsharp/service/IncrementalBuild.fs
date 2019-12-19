@@ -1416,7 +1416,7 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
                        _defaultFSharpBinariesDir: string,
                        _frameworkTcImportsCache: FrameworkImportsCache,
                        _loadClosureOpt: LoadClosure option,
-                       _sourceFiles: string list,
+                       sourceFiles: string list,
                        commandLineArgs: string list,
                        _projectReferences: IProjectReference list,
                        _projectDirectory: string,
@@ -1438,7 +1438,7 @@ type IncrementalBuilder(compilation: Driver.Compilation, keepAssemblyContents: b
         let! builderOpt =
          cancellable {
           try
-            let compilation = Driver.Compilation.Create(Array.ofList commandLineArgs, Driver.CompilationKind.Default, fun _ -> ())
+            let compilation = Driver.Compilation.Create(Array.ofList (commandLineArgs @ sourceFiles), Driver.CompilationKind.Default, fun _ -> ())
             let builder = 
                 new IncrementalBuilder(compilation,
                                        keepAssemblyContents=keepAssemblyContents, 
