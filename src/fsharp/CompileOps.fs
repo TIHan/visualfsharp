@@ -5554,18 +5554,38 @@ let TypeCheckClosedInputSet (ctok, checkForErrors, tcConfig, tcImports, tcGlobal
 type TypeCheckedResult = ((TcEnv * TopAttribs * TypedImplFile option * ModuleOrNamespaceType) * TcState)
 type TypeCheckedFinishResult = TcState * TopAttribs * TypedImplFile list * TcEnv
 
+[<RequireQualifiedAccess>]
 type InputStatus =
+    | New of ParsedInput
     | Parsed of ParsedInput * (TcState -> ParsedInput -> TypeCheckedResult)
     | TypeChecked of ParsedInput * TypeCheckedResult
 
     member x.ParsedInput =
         match x with
+        | InputStatus.New input -> input
         | InputStatus.Parsed (input, _) -> input
         | InputStatus.TypeChecked (input, _) -> input
 
 [<Sealed>]
-type TypeChecker (tcState: TcState, inputs: InputStatus []) =
-    
+type TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPathOpt, tcState: TcState, inputs: InputStatus []) =
+
+    let inputs =
+        inputs
+        |> Array.map (fun input ->
+            InputStatus.Parsed(input.ParsedInput,
+                fun tcState input -> 
+                    TypeCheckOneInput (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPathOpt) tcState input))
+
+    member _.TcConfig = tcConfig
+
+    member _.SourceFiles =
+        inputs
+        |> Array.map (fun input ->
+            match input.ParsedInput with
+            | ParsedInput.ImplFile(ParsedImplFileInput.ParsedImplFileInput(fileName=fileName)) -> fileName
+            | ParsedInput.SigFile(ParsedSigFileInput.ParsedSigFileInput(fileName=fileName)) -> fileName)
+        |> List.ofArray
+
     member x.Check input =
         let index =
             inputs
@@ -5583,6 +5603,8 @@ type TypeChecker (tcState: TcState, inputs: InputStatus []) =
                 result
         | InputStatus.TypeChecked (_, result) ->
             result
+        | InputStatus.New _ ->
+            failwith "Input cannot be checked"
 
     member x.Finish() : TypeCheckedFinishResult =
         // tcEnvAtEndOfLastFile is the environment required by fsi.exe when incrementally adding definitions 
@@ -5595,9 +5617,9 @@ type TypeChecker (tcState: TcState, inputs: InputStatus []) =
         let inputs =
             inputs
             |> Array.ofList
-            |> Array.map (fun input -> Parsed(input, fun tcState input -> TypeCheckOneInput (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPathOpt) tcState input))
+            |> Array.map InputStatus.New
 
-        TypeChecker (tcState, inputs)
+        TypeChecker (ctok, checkForErrors, tcConfig, tcImports, tcGlobals, prefixPathOpt, tcState, inputs)
 
 let TryTypeCheckOneInputSynExpr (ctok, tcConfig: TcConfig, tcImports: TcImports, tcGlobals, tcSink, tcState: TcState, inp: ParsedInput, synExpr: SynExpr) =
 
