@@ -110,6 +110,8 @@ type public FSharpCheckFileResults =
     /// Tries to get the current successful TcImports. This is only used in testing. Do not use it for other stuff.
     member internal TryGetCurrentTcImports: unit -> TcImports option
 
+    member FoundSymbols: range seq
+
     /// Indicates the set of files which must be watched to accurately track changes that affect these results,
     /// Clients interested in reacting to updates to these files should watch these files and take actions as described
     /// in the documentation for compiler service.
@@ -317,6 +319,7 @@ type public FSharpCheckFileResults =
          backgroundDiagnostics: (PhasedDiagnostic * FSharpErrorSeverity)[] *    
          reactorOps: IReactorOperations *
          textSnapshotInfo : obj option *
+         findSymbol: FSharpSymbol option *
          userOpName: string *
          isIncompleteTypeCheckEnvironment: bool * 
          builder: IncrementalBuilder * 

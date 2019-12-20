@@ -1675,6 +1675,7 @@ module internal ParseAndCheckFile =
            reactorOps: IReactorOperations,
            // Used by 'FSharpDeclarationListInfo' to check the IncrementalBuilder is still alive.
            textSnapshotInfo : obj option,
+           findSymbol: FSharpSymbol option,
            userOpName: string,
            suggestNamesForErrors: bool) = async {
 
@@ -1710,9 +1711,27 @@ module internal ParseAndCheckFile =
         // be done in the backend, but is also done in the typechecker for better or worse. 
         // If we don't do this the NNG accumulates data and we get a memory leak. 
         tcState.NiceNameGenerator.Reset()
+
+        let foundSymbols = ResizeArray()
                 
         // Typecheck the real input.  
-        let sink = TcResultsSinkImpl(tcGlobals, sourceText = sourceText)
+        let sink =
+            match findSymbol with
+            | Some symbol ->
+                { new ITypecheckResultsSink with
+                    member _.NotifyEnvWithScope (_, _, _) = ()
+                    member _.NotifyExprHasType (_, _, _, _, _, _) = ()
+                    member _.NotifyFormatSpecifierLocation (_, _) = ()
+                    member _.NotifyOpenDeclaration _ = ()
+                    member _.CurrentSourceText = None
+                    member _.FormatStringCheckContext = None
+                    member _.NotifyNameResolution (endPos, item, itemMethodGroup, tpinst, occurenceType, denv, nenv, ad, m, replace) =
+                        if ItemsAreEffectivelyEqual nenv.DisplayEnv.g symbol.Item item then
+                            foundSymbols.Add m
+                            
+                }
+            | _ ->
+                TcResultsSinkImpl(tcGlobals, sourceText = sourceText) :> ITypecheckResultsSink
 
         let! ct = Async.CancellationToken
             
@@ -1752,21 +1771,21 @@ module internal ParseAndCheckFile =
         let res = 
             match resOpt with
             | Some ((tcEnvAtEnd, _, implFiles, ccuSigsForFiles), tcState) ->
-                TypeCheckInfo(tcConfig, tcGlobals, 
+                (TypeCheckInfo(tcConfig, tcGlobals, 
                               List.head ccuSigsForFiles, 
                               tcState.Ccu,
                               tcImports,
                               tcEnvAtEnd.AccessRights,
                               projectFileName, 
                               mainInputFileName, 
-                              sink.GetResolutions(), 
-                              sink.GetSymbolUses(),
+                              (match sink with :? TcResultsSinkImpl as sink -> sink.GetResolutions() | _ -> TcResolutions.Empty), 
+                              (match sink with :? TcResultsSinkImpl as sink -> sink.GetSymbolUses() | _ -> TcSymbolUses(tcGlobals, ResizeArray(), [||])),
                               tcEnvAtEnd.NameEnv,
                               loadClosure,
                               reactorOps,
                               textSnapshotInfo,
                               List.tryHead implFiles,
-                              sink.GetOpenDeclarations())     
+                              (match sink with :? TcResultsSinkImpl as sink -> sink.GetOpenDeclarations() | _ -> [||])), foundSymbols :> range seq)     
                      |> Result.Ok
             | None -> 
                 Result.Error()
@@ -1795,7 +1814,8 @@ type FSharpCheckFileResults
          dependencyFiles: string[], 
          builderX: IncrementalBuilder option, 
          reactorOpsX:IReactorOperations, 
-         keepAssemblyContents: bool) =
+         keepAssemblyContents: bool,
+         foundSymbols: range seq) =
 
     // This may be None initially
     let mutable details = match scopeOptX with None -> None | Some scopeX -> Some (scopeX, builderX, reactorOpsX)
@@ -1826,6 +1846,8 @@ type FSharpCheckFileResults
         match builderX with
         | Some builder -> builder.TryGetCurrentTcImports ()
         | _ -> None
+
+    member __.FoundSymbols = foundSymbols
 
     /// Intellisense autocompletions
     member __.GetDeclarationListInfo(parseResultsOpt, line, lineStr, partialName, ?getAllEntities, ?hasTextChangedSinceLastTypecheck, ?userOpName: string) = 
@@ -1994,7 +2016,7 @@ type FSharpCheckFileResults
     override __.ToString() = "FSharpCheckFileResults(" + filename + ")"
 
     static member MakeEmpty(filename: string, creationErrors: FSharpErrorInfo[], reactorOps, keepAssemblyContents) = 
-        FSharpCheckFileResults (filename, creationErrors, None, [| |], None, reactorOps, keepAssemblyContents)
+        FSharpCheckFileResults (filename, creationErrors, None, [| |], None, reactorOps, keepAssemblyContents, Seq.empty)
 
     static member JoinErrors(isIncompleteTypeCheckEnvironment, 
                              creationErrors: FSharpErrorInfo[], 
@@ -2033,7 +2055,7 @@ type FSharpCheckFileResults
                           None, implFileOpt, openDeclarations) 
                 
         let errors = FSharpCheckFileResults.JoinErrors(isIncompleteTypeCheckEnvironment, creationErrors, parseErrors, tcErrors)
-        FSharpCheckFileResults (mainInputFileName, errors, Some tcFileInfo, dependencyFiles, Some builder, reactorOps, keepAssemblyContents)
+        FSharpCheckFileResults (mainInputFileName, errors, Some tcFileInfo, dependencyFiles, Some builder, reactorOps, keepAssemblyContents, Seq.empty)
 
     static member CheckOneFile
         (parseResults: FSharpParseFileResults,
@@ -2049,6 +2071,7 @@ type FSharpCheckFileResults
          backgroundDiagnostics: (PhasedDiagnostic * FSharpErrorSeverity)[],    
          reactorOps: IReactorOperations,
          textSnapshotInfo : obj option,
+         findSymbol: FSharpSymbol option,
          userOpName: string,
          isIncompleteTypeCheckEnvironment: bool, 
          builder: IncrementalBuilder, 
@@ -2058,17 +2081,17 @@ type FSharpCheckFileResults
          keepAssemblyContents: bool,
          suggestNamesForErrors: bool) = 
         async {
-            let! tcErrors, tcFileInfo = 
+            let! tcErrors, res = 
                 ParseAndCheckFile.CheckOneFile
                     (parseResults, sourceText, mainInputFileName, projectFileName, tcConfig, tcGlobals, tcImports, 
                      tcState, moduleNamesDict, loadClosure, backgroundDiagnostics, reactorOps, 
-                     textSnapshotInfo, userOpName, suggestNamesForErrors)
-            match tcFileInfo with 
+                     textSnapshotInfo, findSymbol, userOpName, suggestNamesForErrors)
+            match res with 
             | Result.Error ()  ->  
                 return FSharpCheckFileAnswer.Aborted                
-            | Result.Ok tcFileInfo -> 
+            | Result.Ok (tcFileInfo, foundSymbols) -> 
                 let errors = FSharpCheckFileResults.JoinErrors(isIncompleteTypeCheckEnvironment, creationErrors, parseErrors, tcErrors)
-                let results = FSharpCheckFileResults (mainInputFileName, errors, Some tcFileInfo, dependencyFiles, Some builder, reactorOps, keepAssemblyContents)
+                let results = FSharpCheckFileResults (mainInputFileName, errors, Some tcFileInfo, dependencyFiles, Some builder, reactorOps, keepAssemblyContents, foundSymbols)
                 return FSharpCheckFileAnswer.Succeeded(results)
         }
 
@@ -2228,13 +2251,13 @@ type FsiInteractiveChecker(legacyReferenceResolver,
                     (parseResults, sourceText, filename, "project",
                      tcConfig, tcGlobals, tcImports,  tcState, 
                      Map.empty, Some loadClosure, backgroundDiagnostics,
-                     reactorOps, None, userOpName, suggestNamesForErrors)
+                     reactorOps, None, None, userOpName, suggestNamesForErrors)
 
             return
                 match tcFileInfo with 
-                | Result.Ok tcFileInfo ->
+                | Result.Ok (tcFileInfo, foundSymbols) ->
                     let errors = [|  yield! parseErrors; yield! tcErrors |]
-                    let typeCheckResults = FSharpCheckFileResults (filename, errors, Some tcFileInfo, dependencyFiles, None, reactorOps, false)   
+                    let typeCheckResults = FSharpCheckFileResults (filename, errors, Some tcFileInfo, dependencyFiles, None, reactorOps, false, foundSymbols)   
                     let projectResults = 
                         FSharpCheckProjectResults (filename, Some tcConfig,
                             keepAssemblyContents, errors, 

@@ -1379,14 +1379,14 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                              tcConfig, tcAcc.tcImports, 
                              tcAcc.tcGlobals, 
                              None, 
-                             TcResultsSink.WithSink sink, 
+                             (if keepAllBackgroundResolutions then TcResultsSink.WithSink sink else TcResultsSink.NoSink), 
                              tcAcc.tcState, input)
                         
                     /// Only keep the typed interface files when doing a "full" build for fsc.exe, otherwise just throw them away
                     let implFile = if keepAssemblyContents then implFile else None
                     let tcResolutions = if keepAllBackgroundResolutions then sink.GetResolutions() else TcResolutions.Empty
                     let tcEnvAtEndOfFile = (if keepAllBackgroundResolutions then tcEnvAtEndOfFile else tcState.TcEnvFromImpls)
-                    let tcSymbolUses = sink.GetSymbolUses()  
+                  //  let tcSymbolUses = sink.GetSymbolUses()  
                     
                     RequireCompilationThread ctok // Note: events get raised on the CompilationThread
 
@@ -1398,7 +1398,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                                        latestImplFile=implFile
                                        latestCcuSigForFile=Some ccuSigForFile
                                        tcResolutionsRev=tcResolutions :: tcAcc.tcResolutionsRev
-                                       tcSymbolUsesRev=tcSymbolUses :: tcAcc.tcSymbolUsesRev
+                                       tcSymbolUsesRev=[]
                                        tcOpenDeclarationsRev = sink.GetOpenDeclarations() :: tcAcc.tcOpenDeclarationsRev
                                        tcErrorsRev = newErrors :: tcAcc.tcErrorsRev 
                                        tcModuleNamesDict = moduleNamesDict

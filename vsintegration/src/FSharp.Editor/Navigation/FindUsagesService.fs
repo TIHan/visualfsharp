@@ -92,7 +92,7 @@ type internal FSharpFindUsagesService
             let! symbolUses =
                 match symbolUse.GetDeclarationLocation document with
                 | Some SymbolDeclarationLocation.CurrentDocument ->
-                    checkFileResults.GetUsesOfSymbolInFile(symbolUse.Symbol) |> liftAsync
+                    async { return seq { yield symbolUse.RangeAlternate } } |> liftAsync
                 | scope ->
                     let projectsToCheck =
                         match scope with
@@ -110,11 +110,11 @@ type internal FSharpFindUsagesService
 
             for symbolUse in symbolUses do
                 match declarationRange with
-                | Some declRange when declRange = symbolUse.RangeAlternate -> ()
+                | Some declRange when declRange = symbolUse -> ()
                 | _ ->
                     // report a reference if we're interested in all _or_ if we're looking at an implementation
-                    if allReferences || symbolUse.IsFromDispatchSlotImplementation then
-                        let! referenceDocSpans = rangeToDocumentSpans(document.Project.Solution, symbolUse.RangeAlternate) |> liftAsync
+                    if allReferences then
+                        let! referenceDocSpans = rangeToDocumentSpans(document.Project.Solution, symbolUse) |> liftAsync
                         match referenceDocSpans with
                         | [] -> ()
                         | _ ->

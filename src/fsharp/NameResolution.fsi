@@ -317,6 +317,8 @@ type TcSymbolUseData =
 /// Represents container for all name resolutions that were met so far when typechecking some particular file
 type internal TcSymbolUses = 
 
+    new: TcGlobals * capturedNameResolutions: ResizeArray<CapturedNameResolution> * formatSpecifierLocations: (range * int)[] -> TcSymbolUses
+
     /// Get all the uses of a particular item within the file
     member GetUsesOfSymbol : Item -> TcSymbolUseData[]
 
