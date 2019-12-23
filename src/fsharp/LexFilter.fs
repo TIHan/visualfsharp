@@ -487,10 +487,15 @@ type PositionWithColumn =
     val Column: int
     new (position: Position, column: int) = { Position = position; Column = column }
 
+/// Allows up to 50 items on the stack.
 [<Sealed>]
 type TokenTupStack () =
 
-    let buffer = Array.zeroCreate<TokenTup> 100
+    /// Arbitrary, but should never reach this limit when processing tokens.
+    [<Literal>]
+    let MaxCount = 50
+
+    let buffer = Array.zeroCreate<TokenTup> MaxCount
     let mutable count = 0
     let mutable nextIndex = 0
 
@@ -544,7 +549,21 @@ type TokenTupStack () =
             else
                 nextIndex - 1
         count <- count - 1
+
         &buffer.[nextIndex]
+
+    member _.Peek () =
+        if count = 0 then
+            invalidOp "Cannot peek toke up as the count is zero."
+
+        let index =
+            if nextIndex = 0 then
+                buffer.Length - 1
+            else
+                nextIndex - 1
+
+        &buffer.[index]
+        
 
 //----------------------------------------------------------------------------
 // build a LexFilter
@@ -899,9 +918,12 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
     //--------------------------------------------------------------------------
 
     let peekNextTokenTup() = 
-        let tokenTup = &popNextTokenTup()
-        delayToken &tokenTup
-        &tokenTup
+        if delayedStack.Count > 0 then
+            &delayedStack.Peek()
+        else
+            let tokenTup = &popNextTokenTup()
+            delayToken &tokenTup
+            &tokenTup
     
     let peekNextToken() = 
         peekNextTokenTup().Token
