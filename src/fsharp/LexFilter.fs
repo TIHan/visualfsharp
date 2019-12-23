@@ -542,7 +542,7 @@ type TokenTupStack () =
 
         x.Increase ()
 
-    member _.Pop () =
+    member _.Pop (tokenTup: outref<TokenTup>) =
         nextIndex <- 
             if nextIndex = 0 then
                 buffer.Length - 1
@@ -550,7 +550,7 @@ type TokenTupStack () =
                 nextIndex - 1
         count <- count - 1
 
-        &buffer.[nextIndex]
+        tokenTup <- buffer.[nextIndex]
 
     member _.Peek () =
         if count = 0 then
@@ -653,16 +653,21 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
         delayTokenUseLocation &tokenTup token
         tokensThatNeedNoProcessingCount <- tokensThatNeedNoProcessingCount + 1
 
-    let mutable poppedNextToken = Unchecked.defaultof<_>
+    let poppedTokens = Array.zeroCreate<TokenTup> 50
+    let mutable poppedTokensCount = 0
     let popNextTokenTup() : inref<TokenTup> = 
+        if poppedTokensCount >= poppedTokens.Length then
+            invalidOp "Too many tokens were popped."
+        let index = poppedTokensCount
+        poppedTokensCount <- poppedTokensCount + 1
+
         if delayedStack.Count > 0 then 
-            let tokenTup = &delayedStack.Pop()
-            if debug then dprintf "popNextTokenTup: delayed token, tokenStartPos = %a\n" outputPos (startPosOfTokenTup &tokenTup)
-            &tokenTup
+            delayedStack.Pop(&poppedTokens.[index])
+            if debug then dprintf "popNextTokenTup: delayed token, tokenStartPos = %a\n" outputPos (startPosOfTokenTup &poppedTokens.[index])    
         else
             if debug then dprintf "popNextTokenTup: no delayed tokens, running lexer...\n"
-            poppedNextToken <- runWrappedLexerInConsistentLexbufState() 
-            &poppedNextToken
+            poppedTokens.[index] <- runWrappedLexerInConsistentLexbufState()
+        &poppedTokens.[index]
 
     //----------------------------------------------------------------------------
     // Part III. Initial configuration of state.
@@ -950,7 +955,7 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
         isAdjacent &firstTokenTup &lookaheadTokenTup
 
     let peekAdjacentTypars indentation (tokenTup: inref<TokenTup>) =
-        let lookaheadTokenTup = peekNextTokenTup()
+        let lookaheadTokenTup = &peekNextTokenTup()
         match lookaheadTokenTup.Token with 
         | INFIX_COMPARE_OP "</" | LESS _ -> 
             let tokenEndPos = tokenTup.LexbufState.EndPos 
@@ -1134,6 +1139,7 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
     let mutable tokenTup = Unchecked.defaultof<_>
     let mutable nextTokenTup = Unchecked.defaultof<_>
     let rec hwTokenFetch (useBlockRule) =
+        poppedTokensCount <- 0
         tokenTup <- popNextTokenTup()
         let tokenReplaced = rulesForBothSoftWhiteAndHardWhite()
         if tokenReplaced then hwTokenFetch useBlockRule else 
@@ -1161,12 +1167,12 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
             | Parser.GLOBAL
             | Parser.IDENT _ -> 
                 let rec loop() = 
-                    let tokenTup = popNextTokenTup()
+                    let tokenTup = &popNextTokenTup()
                     let res = 
                         match tokenTup.Token with 
                         | Parser.EOF _ -> false
                         | DOT -> 
-                            let tokenTup = popNextTokenTup()
+                            let tokenTup = &popNextTokenTup()
                             let res = 
                                 match tokenTup.Token with 
                                 | Parser.EOF _ -> false
@@ -1436,7 +1442,7 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
                 | _ -> 
                     delayToken &tokenTup
                     pushCtxt &tokenTup (CtxtNamespaceBody namespaceTokenPos)
-                    pushCtxtSeqBlockAt (tokenTup, true, AddBlockEnd) 
+                    pushCtxtSeqBlockAt (&tokenTup, true, AddBlockEnd) 
                     hwTokenFetch false
                    
         //  Transition rule. CtxtModuleHead ~~~> push CtxtModuleBody; push CtxtSeqBlock 
@@ -1471,7 +1477,7 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
                 | _ -> 
                     delayToken &tokenTup 
                     pushCtxt &tokenTup (CtxtModuleBody (moduleTokenPos, true))
-                    pushCtxtSeqBlockAt (tokenTup, true, AddBlockEnd) 
+                    pushCtxtSeqBlockAt (&tokenTup, true, AddBlockEnd) 
                     hwTokenFetch false
 
         //  Offside rule for SeqBlock.  
@@ -2314,8 +2320,8 @@ type LexFilterImpl (lightSyntaxStatus: LightSyntaxStatus, compilingFsLib, lexer,
           | _ -> 
               false
   
-    and pushCtxtSeqBlock(addBlockBegin, addBlockEnd) = pushCtxtSeqBlockAt (peekNextTokenTup(), addBlockBegin, addBlockEnd) 
-    and pushCtxtSeqBlockAt(p: TokenTup, addBlockBegin, addBlockEnd) = 
+    and pushCtxtSeqBlock(addBlockBegin, addBlockEnd) = pushCtxtSeqBlockAt (&peekNextTokenTup(), addBlockBegin, addBlockEnd) 
+    and pushCtxtSeqBlockAt(p: inref<TokenTup>, addBlockBegin, addBlockEnd) = 
          if addBlockBegin then
              if debug then dprintf "--> insert OBLOCKBEGIN \n"
              delayTokenUseLocation &p OBLOCKBEGIN
