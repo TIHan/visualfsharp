@@ -214,7 +214,7 @@ type public FSharpChecker =
     ///
     /// <param name="options">The options for the project or script.</param>
     /// <param name="userOpName">An optional string used for tracing compiler operations associated with this request.</param>
-    member ParseAndCheckProject : options: FSharpProjectOptions * ?userOpName: string -> Async<FSharpCheckProjectResults>
+    member ParseAndCheckProject : options: FSharpProjectOptions * ?findSymbol: FSharpSymbol * ?userOpName: string -> Async<FSharpCheckProjectResults>
 
     /// <summary>
     /// <para>For a given script file, get the FSharpProjectOptions implied by the #load closure.</para>

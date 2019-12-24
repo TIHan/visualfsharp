@@ -296,6 +296,7 @@ type SourceTypeCheckState =
 type TypeCheckOperation =
     | UseCache
     | ReTypeCheck
+    | FindSymbol of FSharpSymbol
 
 /// Manages an incremental build graph for the build of a single F# project
 type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInputs, nonFrameworkResolutions, unresolvedReferences, tcConfig: TcConfig, projectDirectory, outfile, 
@@ -436,7 +437,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     /// This is a build task function that gets placed into the build rules as the computation for a Vector.ScanLeft
     ///
     /// Type check all files.     
-    let TypeCheckTask ctok (tcAcc: TypeCheckAccumulator) input: Eventually<TypeCheckAccumulator> =    
+    let TypeCheckTask ctok (tcAcc: TypeCheckAccumulator) input (findSymbol: FSharpSymbol option): Eventually<TypeCheckAccumulator> =    
         match input with 
         | Some input, _sourceRange, filename, parseErrors->
             IncrementalBuilderEventTesting.MRU.Add(IncrementalBuilderEventTesting.IBETypechecked filename)
@@ -447,7 +448,12 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                     beforeFileChecked.Trigger filename
 
                     ApplyMetaCommandsFromInputToTcConfig (tcConfig, input, Path.GetDirectoryName filename) |> ignore
-                    let sink = TcResultsSinkImpl(tcAcc.tcGlobals)
+                    let sink =
+                        match findSymbol with
+                        | Some symbol ->
+                            TcResultsSinkImpl(tcAcc.tcGlobals, findItem = symbol.Item)
+                        | _ ->
+                            TcResultsSinkImpl(tcAcc.tcGlobals)
                     let hadParseErrors = not (Array.isEmpty parseErrors)
 
                     let input, moduleNamesDict = DeduplicateParsedInputModuleName tcAcc.tcModuleNamesDict input
@@ -465,7 +471,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                     let implFile = if keepAssemblyContents then implFile else None
                     let tcResolutions = if keepAllBackgroundResolutions then sink.GetResolutions() else TcResolutions.Empty
                     let tcEnvAtEndOfFile = (if keepAllBackgroundResolutions then tcEnvAtEndOfFile else tcState.TcEnvFromImpls)
-                    let tcSymbolUses = sink.GetSymbolUses()  
+                    let tcSymbolUses = if findSymbol.IsSome then sink.GetSymbolUses() :: tcAcc.tcSymbolUsesRev else []
                     
                     RequireCompilationThread ctok // Note: events get raised on the CompilationThread
 
@@ -477,7 +483,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                                        latestImplFile=implFile
                                        latestCcuSigForFile=Some ccuSigForFile
                                        tcResolutionsRev=tcResolutions :: tcAcc.tcResolutionsRev
-                                       tcSymbolUsesRev=tcSymbolUses :: tcAcc.tcSymbolUsesRev
+                                       tcSymbolUsesRev = tcSymbolUses
                                        tcOpenDeclarationsRev = sink.GetOpenDeclarations() :: tcAcc.tcOpenDeclarationsRev
                                        tcErrorsRev = newErrors :: tcAcc.tcErrorsRev 
                                        tcModuleNamesDict = moduleNamesDict
@@ -627,7 +633,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
             cancellable {
                 let! ct = Cancellable.token ()
                 let! priorTcAcc = priorTypeCheck ctok UseCache slot
-                let tcAccTask = TypeCheckTask ctok priorTcAcc (input, sourceRange, filename, errors)
+                let tcAccTask = TypeCheckTask ctok priorTcAcc (input, sourceRange, filename, errors) (match op with FindSymbol symbol -> Some symbol | _ -> None)
                 let tcAccOpt = Eventually.forceWhile ctok (fun () -> not ct.IsCancellationRequested) tcAccTask
                 match tcAccOpt with
                 | Some tcAcc ->
@@ -641,7 +647,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         | Checked(sourceFile, tcAcc, weakInfo) ->
             match op with
             | UseCache -> Cancellable.ret tcAcc
-            | ReTypeCheck ->
+            | _ ->
                 match weakInfo.TryGetTarget() with
                 | true, parsedInfo ->
                     match parsedInfo.input with
@@ -831,14 +837,18 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     member builder.GetCheckResultsAfterLastFileInProject (ctok: CompilationThreadToken) = 
         builder.GetCheckResultsBeforeSlotInProject(ctok, builder.SlotCount) 
 
-    member builder.GetCheckResultsAndImplementationsForProject(ctok: CompilationThreadToken) = 
+    member builder.GetCheckResultsAndImplementationsForProject(ctok: CompilationThreadToken, findSymbol: FSharpSymbol option) = 
       cancellable {
         let cache = TimeStampCache defaultTimeStamp       
         let timeStamp = builder.GetLogicalTimeStampForProject(cache, ctok)
+        let op =
+            match findSymbol with
+            | Some symbol -> FindSymbol symbol
+            | _ -> UseCache
         let! multipleTcAcc = 
             cancellable {
                 for i = 0 to builder.SlotCount do
-                    yield! priorTypeCheck ctok UseCache i }
+                    yield! priorTypeCheck ctok op i }
 
         let! ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt, tcAcc = FinalizeTypeCheckTask ctok (multipleTcAcc |> Array.ofList)
         return PartialCheckResults.Create(tcAcc, timeStamp), ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt }

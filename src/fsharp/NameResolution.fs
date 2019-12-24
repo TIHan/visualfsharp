@@ -1703,7 +1703,7 @@ type TcSymbolUses(g, capturedNameResolutions: ResizeArray<CapturedNameResolution
     member this.GetFormatSpecifierLocationsAndArity() = formatSpecifierLocations
 
 /// An accumulator for the results being emitted into the tcSink.
-type TcResultsSinkImpl(g, ?sourceText: ISourceText) =
+type TcResultsSinkImpl(g, ?sourceText: ISourceText, ?findItem: Item) =
     let capturedEnvs = ResizeArray<_>()
     let capturedExprTypings = ResizeArray<_>()
     let capturedNameResolutions = ResizeArray<_>()
@@ -1760,6 +1760,14 @@ type TcResultsSinkImpl(g, ?sourceText: ISourceText) =
                 capturedExprTypings.Add((endPos, ty, denv, nenv, ad, m))
 
         member sink.NotifyNameResolution(endPos, item, itemMethodGroup, tpinst, occurenceType, denv, nenv, ad, m, replace) =
+            let canCapture =
+                match findItem with
+                | Some item2 when ItemsAreEffectivelyEqual g item2 item -> true
+                | Some _ -> false
+                | _ -> true
+
+            if not canCapture then ()
+            else
             // Desugaring some F# constructs (notably computation expressions with custom operators)
             // results in duplication of textual variables. So we ensure we never record two name resolutions
             // for the same identifier at the same location.

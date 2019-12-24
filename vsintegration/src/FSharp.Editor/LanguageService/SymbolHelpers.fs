@@ -41,7 +41,7 @@ module internal SymbolHelpers =
             async {
                 match! projectInfoManager.TryGetOptionsByProject(project, CancellationToken.None) with
                 | Some (_parsingOptions, projectOptions) ->
-                    let! projectCheckResults = checker.ParseAndCheckProject(projectOptions, userOpName = userOpName)
+                    let! projectCheckResults = checker.ParseAndCheckProject(projectOptions, findSymbol = symbol, userOpName = userOpName)
                     let! uses = projectCheckResults.GetUsesOfSymbol(symbol) 
                     let distinctUses = uses |> Array.distinctBy (fun symbolUse -> symbolUse.RangeAlternate)
                     return distinctUses
