@@ -65,9 +65,7 @@ let CanImportILScopeRef (env: ImportMap) m scoref =
         // which import types (and resolve assemblies from the tcImports tables) happen on the compilation thread.
         let ctok = AssumeCompilationThreadWithoutEvidence() 
 
-        match env.assemblyLoader.FindCcuFromAssemblyRef (ctok, m, assemblyRef) with
-        | UnresolvedCcu _ ->  false
-        | ResolvedCcu _ -> true
+        env.assemblyLoader.FindCcuFromAssemblyRef (ctok, m, assemblyRef)
 
 
 /// Import a reference to a type definition, given the AbstractIL data for the type reference
@@ -85,11 +83,6 @@ let ImportTypeRefData (env: ImportMap) m (scoref, path, typeName) =
 
     // Do a dereference of a fake tcref for the type just to check it exists in the target assembly and to find
     // the corresponding Tycon.
-    let ccu = 
-        match ccu with
-        | ResolvedCcu ccu->ccu
-        | UnresolvedCcu ccuName -> 
-            error (Error(FSComp.SR.impTypeRequiredUnavailable(typeName, ccuName), m))
     let fakeTyconRef = mkNonLocalTyconRef (mkNonLocalEntityRef ccu path) typeName
     let tycon = 
         try   
