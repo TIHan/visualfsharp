@@ -194,18 +194,6 @@ type AssemblyReference =
     member Text: string
     member ProjectReference: IProjectReference option
 
-type AssemblyResolution = 
-      {/// The original reference to the assembly.
-       originalReference: AssemblyReference
-       /// Path to the resolvedFile
-       resolvedPath: string    
-       /// Create the tooltip text for the assembly reference
-       prepareToolTip: unit -> string
-       /// Whether or not this is an installed system assembly (for example, System.dll)
-       sysdir: bool
-       // Lazily populated ilAssemblyRef for this reference. 
-       ilAssemblyRef: ILAssemblyRef option ref  }
-
 type UnresolvedAssemblyReference = UnresolvedAssemblyReference of string * AssemblyReference list
 
 #if !NO_EXTENSIONTYPING
@@ -415,7 +403,7 @@ type TcConfigBuilder =
 [<Sealed>]
 // Immutable TcConfig
 type TcConfig =
-    member primaryAssembly: ILAssemblyRef
+    member primaryAssembly: (string * ILAssemblyRef)
     member noFeedback: bool
     member stackReserveSize: int32 option
     member implicitIncludeDir: string
@@ -592,13 +580,6 @@ type ImportedAssembly =
 #endif
       FSharpOptimizationData: Lazy<Option<Optimizer.LazyModuleInfo>> }
 
-
-[<Sealed>] 
-type TcAssemblyResolutions = 
-    member GetAssemblyResolutions: unit -> AssemblyResolution list
-    static member SplitNonFoundationalResolutions : CompilationThreadToken * TcConfig -> AssemblyResolution list * AssemblyResolution list * UnresolvedAssemblyReference list
-    static member BuildFromPriorResolutions    : CompilationThreadToken * TcConfig * AssemblyResolution list * UnresolvedAssemblyReference list -> TcAssemblyResolutions 
-
 /// Represents a table of imported assemblies with their resolutions.
 /// Is a disposable object, but it is recommended not to explicitly call Dispose unless you absolutely know nothing will be using its contents after the disposal.
 /// Otherwise, simply allow the GC to collect this and it will properly call Dispose from the finalizer.
@@ -619,19 +600,6 @@ type TcImports =
 #endif
     member GetImportMap: unit -> Import.ImportMap
 
-    /// Try to resolve a referenced assembly based on TcConfig settings.
-    member TryResolveAssemblyReference: CompilationThreadToken * AssemblyReference * ResolveAssemblyReferenceMode -> OperationResult<AssemblyResolution list>
-
-    /// Resolve a referenced assembly and report an error if the resolution fails.
-    member ResolveAssemblyReference: CompilationThreadToken * AssemblyReference * ResolveAssemblyReferenceMode -> AssemblyResolution list
-
-    /// Try to find the given assembly reference by simple name.  Used in magic assembly resolution.  Effectively does implicit
-    /// unification of assemblies by simple assembly name.
-    member TryFindExistingFullyQualifiedPathBySimpleAssemblyName: CompilationThreadToken * string -> string option
-
-    /// Try to find the given assembly reference.
-    member TryFindExistingFullyQualifiedPathByExactAssemblyRef: CompilationThreadToken * ILAssemblyRef -> string option
-
 #if !NO_EXTENSIONTYPING
     /// Try to find a provider-generated assembly
     member TryFindProviderGeneratedAssemblyByName: CompilationThreadToken * assemblyName:string -> System.Reflection.Assembly option
@@ -640,8 +608,6 @@ type TcImports =
     member ReportUnresolvedAssemblyReferences: UnresolvedAssemblyReference list -> unit
     member SystemRuntimeContainsType: string -> bool
 
-    static member BuildFrameworkTcImports     : CompilationThreadToken * TcConfigProvider * AssemblyResolution list * AssemblyResolution list -> Cancellable<TcGlobals * TcImports>
-    static member BuildNonFrameworkTcImports  : CompilationThreadToken * TcConfigProvider * TcGlobals * TcImports * AssemblyResolution list * UnresolvedAssemblyReference list -> Cancellable<TcImports>
     static member BuildTcImports              : CompilationThreadToken * TcConfigProvider -> Cancellable<TcGlobals * TcImports>
 
 //----------------------------------------------------------------------------
@@ -790,10 +756,7 @@ type LoadClosure =
       SourceFiles: (string * range list) list
 
       /// The resolved references along with the ranges of the #r positions in each file.
-      References: (string * AssemblyResolution list) list
-
-      /// The list of references that were not resolved during load closure.
-      UnresolvedReferences: UnresolvedAssemblyReference list
+      References: (string * AssemblyReference list) list
 
       /// The list of all sources in the closure with inputs when available, with associated parse errors and warnings
       Inputs: LoadClosureInput list
@@ -803,9 +766,6 @@ type LoadClosure =
 
       /// The #nowarns
       NoWarns: (string * range list) list
-
-      /// Diagnostics seen while processing resolutions
-      ResolutionDiagnostics: (PhasedDiagnostic * bool)  list
 
       /// Diagnostics to show for root of closure (used by fsc.fs)
       AllRootFileDiagnostics: (PhasedDiagnostic * bool) list

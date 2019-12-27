@@ -4352,21 +4352,6 @@ and
 
     override ccu.ToString() = ccu.AssemblyName
 
-/// The result of attempting to resolve an assembly name to a full ccu.
-/// UnresolvedCcu will contain the name of the assembly that could not be resolved.
-and 
-    [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
-    CcuResolutionResult =
-
-    | ResolvedCcu of CcuThunk
-
-    | UnresolvedCcu of string
-
-    [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
-    member x.DebugText = x.ToString()
-
-    override x.ToString() = match x with ResolvedCcu ccu -> ccu.ToString() | UnresolvedCcu s -> "unresolved " + s
-
 /// Represents the information saved in the assembly signature data resource for an F# assembly
 and 
     [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
