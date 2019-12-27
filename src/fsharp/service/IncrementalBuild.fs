@@ -1154,7 +1154,7 @@ type RawFSharpAssemblyDataBackedByLanguageService (tcConfig, tcGlobals, tcState:
 
 
 /// Manages an incremental build graph for the build of a single F# project
-type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInputs, nonFrameworkResolutions, unresolvedReferences, tcConfig: TcConfig, projectDirectory, outfile, 
+type IncrementalBuilder(tcGlobals, tcImports: TcImports, tcConfig: TcConfig, projectDirectory, outfile, 
                         assemblyName, niceNameGen: NiceNameGenerator, lexResourceManager, 
                         sourceFiles, loadClosureOpt: LoadClosure option, 
                         keepAssemblyContents, keepAllBackgroundResolutions, maxTimeShareMilliseconds) =
@@ -1179,18 +1179,8 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
     let defaultTimeStamp = DateTime.UtcNow
 
-    let basicDependencies = 
-        [ for (UnresolvedAssemblyReference(referenceText, _))  in unresolvedReferences do
-            // Exclude things that are definitely not a file name
-            if not(FileSystem.IsInvalidPathShim referenceText) then 
-                let file = if FileSystem.IsPathRootedShim referenceText then referenceText else Path.Combine(projectDirectory, referenceText) 
-                yield file 
-
-          for r in nonFrameworkResolutions do 
-                yield  r.resolvedPath  ]
-
     let allDependencies =
-        [| yield! basicDependencies
+        [| yield! tcConfig.referencedDLLs |> List.map (fun r -> r.Text)
            for (_, f, _) in sourceFiles do
                 yield f |]
 
@@ -1244,7 +1234,6 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         let! tcImports = 
           cancellable {
             try
-                let! tcImports = TcImports.BuildNonFrameworkTcImports(ctok, tcConfigP, tcGlobals, frameworkTcImports, nonFrameworkResolutions, unresolvedReferences)  
 #if !NO_EXTENSIONTYPING
                 tcImports.GetCcusExcludingBase() |> Seq.iter (fun ccu -> 
                     // When a CCU reports an invalidation, merge them together and just report a 
@@ -1272,7 +1261,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
             with e -> 
                 System.Diagnostics.Debug.Assert(false, sprintf "Could not BuildAllReferencedDllTcImports %A" e)
                 errorLogger.Warning e
-                return frameworkTcImports           
+                return tcImports           
           }
 
         let tcInitial = GetInitialTcEnv (assemblyName, rangeStartup, tcConfig, tcImports, tcGlobals)
@@ -1298,7 +1287,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
               topAttribs=None
               latestImplFile=None
               latestCcuSigForFile=None
-              tcDependencyFiles=basicDependencies
+              tcDependencyFiles=tcConfig.referencedDLLs |> List.map (fun r -> r.Text)
               tcErrorsRev = [ initialErrors ] 
               tcModuleNamesDict = Map.empty }   
         return tcAcc }
