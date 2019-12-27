@@ -211,7 +211,7 @@ let AdjustForScriptCompile(ctok, tcConfigB: TcConfigBuilder, commandLineSourceFi
         
     let allSources = ref []       
     
-    let tcConfig = TcConfig.Create(tcConfigB, validate=false) 
+    let tcConfig = TcConfig.Create(tcConfigB) 
     
     let AddIfNotPresent(filename: string) =
         if not(!allSources |> List.contains filename) then
@@ -221,16 +221,16 @@ let AdjustForScriptCompile(ctok, tcConfigB: TcConfigBuilder, commandLineSourceFi
         if IsScript filename then 
             let closure = 
                 LoadClosure.ComputeClosureOfScriptFiles
-                   (ctok, tcConfig, [filename, rangeStartup], CodeContext.Compilation, lexResourceManager=lexResourceManager)
+                   (tcConfig, [filename, rangeStartup], CodeContext.Compilation, lexResourceManager=lexResourceManager)
 
             // Record the references from the analysis of the script. The full resolutions are recorded as the corresponding #I paths used to resolve them
             // are local to the scripts and not added to the tcConfigB (they are added to localized clones of the tcConfigB).
             let references =
                 closure.References
                 |> List.collect snd
-                |> List.filter (fun r -> not (Range.equals r.originalReference.Range range0) && not (Range.equals r.originalReference.Range rangeStartup))
+                |> List.filter (fun r -> not (Range.equals r.Range range0) && not (Range.equals r.Range rangeStartup))
 
-            references |> List.iter (fun r -> tcConfigB.AddReferencedAssemblyByPath(r.originalReference.Range, r.resolvedPath))
+            references |> List.iter (fun r -> tcConfigB.AddReferencedAssemblyByPath(r.Range, r.Text))
             closure.NoWarns |> List.collect (fun (n, ms) -> ms|>List.map(fun m->m, n)) |> List.iter (fun (x,m) -> tcConfigB.TurnWarningOff(x, m))
             closure.SourceFiles |> List.map fst |> List.iter AddIfNotPresent
             closure.AllRootFileDiagnostics |> List.iter diagnosticSink
@@ -793,7 +793,7 @@ module MainModuleBuilder =
 
     let createSystemNumericsExportList (tcConfig: TcConfig) (tcImports: TcImports) =
         let refNumericsDllName =
-            if (tcConfig.primaryAssembly.Name = "mscorlib") then "System.Numerics"
+            if ((snd tcImports.PrimaryAssembly).Name = "mscorlib") then "System.Numerics"
             else "System.Runtime.Numerics"
         let numericsAssemblyRef =
             match tcImports.GetImportedAssemblies() |> List.tryFind<ImportedAssembly>(fun a -> a.FSharpViewOfMetadata.AssemblyName = refNumericsDllName) with
@@ -1306,12 +1306,9 @@ module StaticLinker =
                         depModuleTable.[ilAssemRef.Name] <- dummyEntry ilAssemRef.Name
                     else
                         if not (depModuleTable.ContainsKey ilAssemRef.Name) then 
-                            match tcImports.TryFindDllInfo(ctok, Range.rangeStartup, ilAssemRef.Name, lookupOnly=false) with 
+                            match tcImports.TryFindDllInfo(ilAssemRef.Name) with 
                             | Some dllInfo ->
-                                let ccu = 
-                                    match tcImports.FindCcuFromAssemblyRef (ctok, Range.rangeStartup, ilAssemRef) with 
-                                    | ResolvedCcu ccu -> Some ccu
-                                    | UnresolvedCcu(_ccuName) -> None
+                                let ccu = tcImports.FindCcuFromAssemblyRef (ilAssemRef)
 
                                 let fileName = dllInfo.FileName
                                 let modul = 
@@ -1352,7 +1349,7 @@ module StaticLinker =
                                 depModuleTable.[ilAssemRef.Name] <- 
                                     { refs=refs
                                       name=ilAssemRef.Name
-                                      ccu=ccu
+                                      ccu=Some ccu
                                       data=modul 
                                       edges = [] 
                                       visited = false }
@@ -1399,15 +1396,12 @@ module StaticLinker =
         [ for (importedBinary, provAssemStaticLinkInfo) in providerGeneratedAssemblies do 
               let ilAssemRef  = importedBinary.ILScopeRef.AssemblyRef
               if debugStaticLinking then printfn "adding provider-generated assembly '%s' into static linking set" ilAssemRef.Name
-              match tcImports.TryFindDllInfo(ctok, Range.rangeStartup, ilAssemRef.Name, lookupOnly=false) with 
+              match tcImports.TryFindDllInfo(ilAssemRef.Name) with 
               | Some dllInfo ->
-                  let ccu = 
-                      match tcImports.FindCcuFromAssemblyRef (ctok, Range.rangeStartup, ilAssemRef) with 
-                      | ResolvedCcu ccu -> Some ccu
-                      | UnresolvedCcu(_ccuName) -> None
+                  let ccu = tcImports.FindCcuFromAssemblyRef (ilAssemRef)
 
                   let modul = dllInfo.RawMetadata.TryGetILModuleDef().Value
-                  yield (ccu, dllInfo.ILScopeRef, modul), (ilAssemRef.Name, provAssemStaticLinkInfo)
+                  yield (Some ccu, dllInfo.ILScopeRef, modul), (ilAssemRef.Name, provAssemStaticLinkInfo)
               | None -> () ]
 
     // Compute a static linker. This only captures tcImports (a large data structure) if
@@ -1785,7 +1779,7 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
     // If there's a problem building TcConfig, abort    
     let tcConfig = 
         try
-            TcConfig.Create(tcConfigB, validate=false)
+            TcConfig.Create(tcConfigB)
         with e ->
             delayForFlagsLogger.ForwardDelayedDiagnostics tcConfigB
             exiter.Exit 1
@@ -1803,14 +1797,13 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
 
     // Resolve assemblies
     ReportTime tcConfig "Import mscorlib and FSharp.Core.dll"
-    let foundationalTcConfigP = TcConfigProvider.Constant tcConfig
-    let sysRes, otherRes, knownUnresolved = TcAssemblyResolutions.SplitNonFoundationalResolutions(ctok, tcConfig)
+    let tcConfigP = TcConfigProvider.Constant tcConfig
     
     // Import basic assemblies
-    let tcGlobals, frameworkTcImports = TcImports.BuildFrameworkTcImports (ctok, foundationalTcConfigP, sysRes, otherRes) |> Cancellable.runWithoutCancellation
+    let tcGlobals, tcImports = TcImports.BuildTcImports (ctok, tcConfigP) |> Cancellable.runWithoutCancellation
 
     // Register framework tcImports to be disposed in future
-    disposables.Register frameworkTcImports
+    disposables.Register tcImports
 
     // Parse sourceFiles 
     ReportTime tcConfig "Parse inputs"
@@ -1841,12 +1834,8 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
     if tcConfig.printAst then                
         inputs |> List.iter (fun (input, _filename) -> printf "AST:\n"; printfn "%+A" input; printf "\n") 
 
-    let tcConfig = (tcConfig, inputs) ||> List.fold (fun z (x, m) -> ApplyMetaCommandsFromInputToTcConfig(z, x, m))
-    let tcConfigP = TcConfigProvider.Constant tcConfig
-
-    // Import other assemblies
-    ReportTime tcConfig "Import non-system references"
-    let tcImports = TcImports.BuildNonFrameworkTcImports(ctok, tcConfigP, tcGlobals, frameworkTcImports, otherRes, knownUnresolved)  |> Cancellable.runWithoutCancellation
+    //let tcConfig = (tcConfig, inputs) ||> List.fold (fun z (x, m) -> ApplyMetaCommandsFromInputToTcConfig(z, x, m))
+    //let tcConfigP = TcConfigProvider.Constant tcConfig
 
     // register tcImports to be disposed in future
     disposables.Register tcImports
@@ -1869,7 +1858,7 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
     AbortOnError(errorLogger, exiter)
     ReportTime tcConfig "Typechecked"
 
-    Args (ctok, tcGlobals, tcImports, frameworkTcImports, tcState.Ccu, typedAssembly, topAttrs, tcConfig, outfile, pdbfile, assemblyName, errorLogger, exiter)
+    Args (ctok, tcGlobals, tcImports, tcImports, tcState.Ccu, typedAssembly, topAttrs, tcConfig, outfile, pdbfile, assemblyName, errorLogger, exiter)
 
 let main1(Args (ctok, tcGlobals, tcImports: TcImports, frameworkTcImports, generatedCcu: CcuThunk, typedImplFiles, topAttrs, tcConfig: TcConfig, outfile, pdbfile, assemblyName, errorLogger, exiter: Exiter)) =
 
@@ -1955,13 +1944,12 @@ let main1OfAst (ctok, legacyReferenceResolver, reduceMemoryUsage, assemblyName, 
     // If there's a problem building TcConfig, abort    
     let tcConfig = 
         try
-            TcConfig.Create(tcConfigB,validate=false)
+            TcConfig.Create(tcConfigB)
         with e ->
             exiter.Exit 1
     
     let foundationalTcConfigP = TcConfigProvider.Constant tcConfig
-    let sysRes,otherRes,knownUnresolved = TcAssemblyResolutions.SplitNonFoundationalResolutions(ctok, tcConfig)
-    let tcGlobals,frameworkTcImports = TcImports.BuildFrameworkTcImports (ctok, foundationalTcConfigP, sysRes, otherRes) |> Cancellable.runWithoutCancellation
+    let tcGlobals,frameworkTcImports = TcImports.BuildTcImports (ctok, foundationalTcConfigP) |> Cancellable.runWithoutCancellation
 
     use unwindParsePhase = PushThreadBuildPhaseUntilUnwind (BuildPhase.Parse) 
 

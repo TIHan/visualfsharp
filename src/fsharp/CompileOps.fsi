@@ -585,6 +585,7 @@ type ImportedAssembly =
 [<Sealed>] 
 type TcImports =
     interface System.IDisposable
+    member PrimaryAssembly: (string * ILAssemblyRef)
     //new: TcImports option -> TcImports
     member DllTable: NameMap<ImportedBinary> with get
     member GetImportedAssemblies: unit -> ImportedAssembly list

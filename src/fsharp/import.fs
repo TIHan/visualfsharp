@@ -25,6 +25,9 @@ type AssemblyLoader =
 
     /// Resolve an Abstract IL assembly reference to a Ccu
     abstract FindCcuFromAssemblyRef : CompilationThreadToken * range * ILAssemblyRef -> CcuThunk
+
+    abstract HasCcuFromAssemblyRef : ILAssemblyRef -> bool
+
 #if !NO_EXTENSIONTYPING
 
     /// Get a flag indicating if an assembly is a provided assembly, plus the
@@ -55,17 +58,12 @@ type ImportMap(g: TcGlobals, assemblyLoader: AssemblyLoader) =
     member this.assemblyLoader = assemblyLoader
     member this.ILTypeRefToTyconRefCache = typeRefToTyconRefCache
 
-let CanImportILScopeRef (env: ImportMap) m scoref = 
+let CanImportILScopeRef (env: ImportMap) scoref = 
     match scoref with 
     | ILScopeRef.Local    -> true
     | ILScopeRef.Module _ -> true
     | ILScopeRef.Assembly assemblyRef -> 
-
-        // Explanation: This represents an unchecked invariant in the hosted compiler: that any operations
-        // which import types (and resolve assemblies from the tcImports tables) happen on the compilation thread.
-        let ctok = AssumeCompilationThreadWithoutEvidence() 
-
-        env.assemblyLoader.FindCcuFromAssemblyRef (ctok, m, assemblyRef)
+        env.assemblyLoader.HasCcuFromAssemblyRef assemblyRef
 
 
 /// Import a reference to a type definition, given the AbstractIL data for the type reference
@@ -132,8 +130,8 @@ let ImportILTypeRef (env: ImportMap) m (tref: ILTypeRef) =
         tcref
 
 /// Import a reference to a type definition, given an AbstractIL ILTypeRef, with caching
-let CanImportILTypeRef (env: ImportMap) m (tref: ILTypeRef) =
-    env.ILTypeRefToTyconRefCache.ContainsKey(tref) || CanImportILScopeRef env m tref.Scope
+let CanImportILTypeRef (env: ImportMap) (tref: ILTypeRef) =
+    env.ILTypeRefToTyconRefCache.ContainsKey(tref) || CanImportILScopeRef env tref.Scope
 
 /// Import a type, given an AbstractIL ILTypeRef and an F# type instantiation.
 /// 
@@ -170,12 +168,12 @@ let rec ImportILType (env: ImportMap) m tinst ty =
          with _ -> 
               error(Error(FSComp.SR.impNotEnoughTypeParamsInScopeWhileImporting(), m))
 
-let rec CanImportILType (env: ImportMap) m ty =  
+let rec CanImportILType (env: ImportMap) (m: range) ty =  
     match ty with
     | ILType.Void -> true
     | ILType.Array(_bounds, ety) -> CanImportILType env m ety
     | ILType.Boxed  tspec | ILType.Value tspec ->
-        CanImportILTypeRef env m tspec.TypeRef 
+        CanImportILTypeRef env tspec.TypeRef 
         && tspec.GenericArgs |> List.forall (CanImportILType env m) 
     | ILType.Byref ety -> CanImportILType env m ety
     | ILType.Ptr ety  -> CanImportILType env m ety

@@ -3312,6 +3312,8 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, primaryAssembly: (string *
                 | None -> false
         | None -> false
 
+    member _.PrimaryAssembly = primaryAssembly
+
     member internal tcImports.Base = 
             CheckDisposed()
             importsBase
@@ -3397,6 +3399,9 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, primaryAssembly: (string *
         let importedAssembly = tcImports.FindCcuInfo(assemblyRef.Name)
         importedAssembly.FSharpViewOfMetadata
 
+    member tcImports.HasCcuFromAssemblyRef(assemblyRef: ILAssemblyRef) =
+        NameMap.tryFind assemblyRef.Name ccuTable
+        |> Option.isSome
 
 #if !NO_EXTENSIONTYPING
     member tcImports.GetProvidedAssemblyInfo(m, assembly: Tainted<ProvidedAssembly>) = 
@@ -3505,6 +3510,8 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, primaryAssembly: (string *
             { new Import.AssemblyLoader with 
                  member x.FindCcuFromAssemblyRef (_ctok, _m, ilAssemblyRef) = 
                      tcImports.FindCcuFromAssemblyRef ilAssemblyRef
+                 member x.HasCcuFromAssemblyRef ilAssemblyRef =
+                     tcImports.HasCcuFromAssemblyRef ilAssemblyRef
 #if !NO_EXTENSIONTYPING
                  member x.GetProvidedAssemblyInfo (ctok, m, assembly) = tcImports.GetProvidedAssemblyInfo (m, assembly)
                  member x.RecordGeneratedTypeRoot root = tcImports.RecordGeneratedTypeRoot root
