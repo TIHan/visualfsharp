@@ -1813,12 +1813,12 @@ let GenerateIlxCode
 // by the same references. Only used for static linking.
 //----------------------------------------------------------------------------
 
-let NormalizeAssemblyRefs (ctok, tcImports:TcImports) scoref =
+let NormalizeAssemblyRefs (_ctok: CompilationThreadToken, tcImports:TcImports) scoref =
     match scoref with 
     | ILScopeRef.Local 
     | ILScopeRef.Module _ -> scoref
     | ILScopeRef.Assembly aref -> 
-        match tcImports.TryFindDllInfo (ctok, Range.rangeStartup, aref.Name, lookupOnly=false) with 
+        match tcImports.TryFindDllInfo (aref.Name) with 
         | Some dllInfo -> dllInfo.ILScopeRef
         | None -> scoref
 

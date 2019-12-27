@@ -468,7 +468,7 @@ let private GetCSharpStyleIndexedExtensionMembersForTyconRef (amap: Import.Impor
                                 match firstTy with
                                 | ILType.Boxed  tspec | ILType.Value tspec ->
                                     let tref = (tspec |> rescopeILTypeSpec scoref).TypeRef
-                                    if Import.CanImportILTypeRef amap m tref then
+                                    if Import.CanImportILTypeRef amap tref then
                                         let tcref = tref |> Import.ImportILTypeRef amap m
                                         if isCompiledTupleTyconRef g tcref || tyconRefEq g tcref g.fastFunc_tcr then None
                                         else Some tcref

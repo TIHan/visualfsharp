@@ -196,7 +196,7 @@ let TypeCheck (ctok, tcConfig, tcImports, tcGlobals, errorLogger: ErrorLogger, a
         exiter.Exit 1
 
 /// Check for .fsx and, if present, compute the load closure for of #loaded files.
-let AdjustForScriptCompile(ctok, tcConfigB: TcConfigBuilder, commandLineSourceFiles, lexResourceManager) =
+let AdjustForScriptCompile(tcConfigB: TcConfigBuilder, commandLineSourceFiles, lexResourceManager) =
 
     let combineFilePath file =
         try
@@ -791,7 +791,7 @@ module MainModuleBuilder =
           Seq.map (fun t -> mkTypeForwarder (tcGlobals.ilg.primaryAssemblyScopeRef) t (mkILNestedExportedTypes List.empty<ILNestedExportedType>) (mkILCustomAttrs List.empty<ILAttribute>) ILTypeDefAccess.Public ) 
           |> Seq.toList
 
-    let createSystemNumericsExportList (tcConfig: TcConfig) (tcImports: TcImports) =
+    let createSystemNumericsExportList (tcImports: TcImports) =
         let refNumericsDllName =
             if ((snd tcImports.PrimaryAssembly).Name = "mscorlib") then "System.Numerics"
             else "System.Runtime.Numerics"
@@ -870,7 +870,7 @@ module MainModuleBuilder =
             // Add the type forwarders to any .NET DLL post-.NET-2.0, to give binary compatibility
             let exportedTypesList =
                 if tcConfig.compilingFslib then
-                   List.append (createMscorlibExportList tcGlobals) (createSystemNumericsExportList tcConfig tcImports)
+                   List.append (createMscorlibExportList tcGlobals) (createSystemNumericsExportList tcImports)
                 else
                     []
 
@@ -1282,7 +1282,7 @@ module StaticLinker =
           mutable visited: bool }
 
     // Find all IL modules that are to be statically linked given the static linking roots.
-    let FindDependentILModulesForStaticLinking (ctok, tcConfig: TcConfig, tcImports: TcImports, ilGlobals, ilxMainModule) = 
+    let FindDependentILModulesForStaticLinking (tcConfig: TcConfig, tcImports: TcImports, ilGlobals, ilxMainModule) = 
         if not tcConfig.standalone && tcConfig.extraStaticLinkRoots.IsEmpty then 
             []
         else
@@ -1392,7 +1392,7 @@ module StaticLinker =
                     yield (n.ccu, n.data)  ]
 
     // Add all provider-generated assemblies into the static linking set
-    let FindProviderGeneratedILModules (ctok, tcImports: TcImports, providerGeneratedAssemblies: (ImportedBinary * _) list) = 
+    let FindProviderGeneratedILModules (tcImports: TcImports, providerGeneratedAssemblies: (ImportedBinary * _) list) = 
         [ for (importedBinary, provAssemStaticLinkInfo) in providerGeneratedAssemblies do 
               let ilAssemRef  = importedBinary.ILScopeRef.AssemblyRef
               if debugStaticLinking then printfn "adding provider-generated assembly '%s' into static linking set" ilAssemRef.Name
@@ -1429,13 +1429,13 @@ module StaticLinker =
             (fun ilxMainModule  ->
               ReportTime tcConfig "Find assembly references"
 
-              let dependentILModules = FindDependentILModulesForStaticLinking (ctok, tcConfig, tcImports, ilGlobals, ilxMainModule)
+              let dependentILModules = FindDependentILModulesForStaticLinking (tcConfig, tcImports, ilGlobals, ilxMainModule)
 
               ReportTime tcConfig "Static link"
 
 #if !NO_EXTENSIONTYPING
               Morphs.enableMorphCustomAttributeData()
-              let providerGeneratedILModules =  FindProviderGeneratedILModules (ctok, tcImports, providerGeneratedAssemblies) 
+              let providerGeneratedILModules =  FindProviderGeneratedILModules (tcImports, providerGeneratedAssemblies) 
 
               // Transform the ILTypeRefs references in the IL of all provider-generated assemblies so that the references
               // are now local.
@@ -1751,7 +1751,7 @@ let main0(ctok, argv, legacyReferenceResolver, bannerAlreadyPrinted,
         try 
             let sourceFiles = 
                 let files = ProcessCommandLineFlags (tcConfigB, setProcessThreadLocals, lcidFromCodePage, argv)
-                AdjustForScriptCompile(ctok, tcConfigB, files, lexResourceManager)
+                AdjustForScriptCompile(tcConfigB, files, lexResourceManager)
             sourceFiles
 
         with e -> 
@@ -1948,18 +1948,14 @@ let main1OfAst (ctok, legacyReferenceResolver, reduceMemoryUsage, assemblyName, 
         with e ->
             exiter.Exit 1
     
-    let foundationalTcConfigP = TcConfigProvider.Constant tcConfig
-    let tcGlobals,frameworkTcImports = TcImports.BuildTcImports (ctok, foundationalTcConfigP) |> Cancellable.runWithoutCancellation
+    let tcConfigP = TcConfigProvider.Constant tcConfig
+    let tcGlobals,tcImports = TcImports.BuildTcImports (ctok, tcConfigP) |> Cancellable.runWithoutCancellation
 
     use unwindParsePhase = PushThreadBuildPhaseUntilUnwind (BuildPhase.Parse) 
 
-    let meta = Directory.GetCurrentDirectory()
-    let tcConfig = (tcConfig,inputs) ||> List.fold (fun tcc inp -> ApplyMetaCommandsFromInputToTcConfig (tcc, inp,meta))
-    let tcConfigP = TcConfigProvider.Constant tcConfig
-
-    let tcGlobals,tcImports =  
-        let tcImports = TcImports.BuildNonFrameworkTcImports(ctok, tcConfigP, tcGlobals, frameworkTcImports, otherRes,knownUnresolved) |> Cancellable.runWithoutCancellation
-        tcGlobals,tcImports
+    //let meta = Directory.GetCurrentDirectory()
+    //let tcConfig = (tcConfig,inputs) ||> List.fold (fun tcc inp -> ApplyMetaCommandsFromInputToTcConfig (tcc, inp,meta))
+    //let tcConfigP = TcConfigProvider.Constant tcConfig
 
     use unwindParsePhase = PushThreadBuildPhaseUntilUnwind (BuildPhase.TypeCheck)            
     let tcEnv0 = GetInitialTcEnv (assemblyName, rangeStartup, tcConfig, tcImports, tcGlobals)
@@ -1985,7 +1981,7 @@ let main1OfAst (ctok, legacyReferenceResolver, reduceMemoryUsage, assemblyName, 
     // Pass on only the minimum information required for the next phase to ensure GC kicks in.
     // In principle the JIT should be able to do good liveness analysis to clean things up, but the
     // data structures involved here are so large we can't take the risk.
-    Args(ctok, tcConfig, tcImports, frameworkTcImports, tcGlobals, errorLogger, 
+    Args(ctok, tcConfig, tcImports, tcImports, tcGlobals, errorLogger, 
          generatedCcu, outfile, typedAssembly, topAttrs, pdbFile, assemblyName, 
          assemVerFromAttrib, signingInfo,exiter)
 
@@ -2016,7 +2012,7 @@ let main2a(Args (ctok, tcConfig, tcImports, frameworkTcImports: TcImports, tcGlo
         match tcConfig.metadataVersion with
         | Some v -> v
         | _ -> 
-            match frameworkTcImports.DllTable.TryFind tcConfig.primaryAssembly.Name with 
+            match frameworkTcImports.DllTable.TryFind (snd tcImports.PrimaryAssembly).Name with 
              | Some ib -> ib.RawMetadata.TryGetILModuleDef().Value.MetadataVersion 
              | _ -> ""
 
@@ -2104,7 +2100,7 @@ let main4 dynamicAssemblyCreator (Args (ctok, tcConfig,  tcImports: TcImports, t
     let pdbfile = pdbfile |> Option.map (tcConfig.MakePathAbsolute >> FileSystem.GetFullPathShim)
 
     let normalizeAssemblyRefs (aref: ILAssemblyRef) = 
-        match tcImports.TryFindDllInfo (ctok, Range.rangeStartup, aref.Name, lookupOnly=false) with 
+        match tcImports.TryFindDllInfo (aref.Name) with 
         | Some dllInfo ->
             match dllInfo.ILScopeRef with 
             | ILScopeRef.Assembly ref -> ref
