@@ -189,9 +189,10 @@ and IProjectReference =
     abstract TryGetLogicalTimeStamp: TimeStampCache * CompilationThreadToken -> System.DateTime option
 
 type AssemblyReference = 
-    | AssemblyReference of range * string  * IProjectReference option
+    | AssemblyReference of range * string * ILAssemblyRef * IProjectReference option
     member Range: range
     member Text: string
+    member AssemblyRef: ILAssemblyRef
     member ProjectReference: IProjectReference option
 
 type UnresolvedAssemblyReference = UnresolvedAssemblyReference of string * AssemblyReference list
@@ -403,7 +404,6 @@ type TcConfigBuilder =
 [<Sealed>]
 // Immutable TcConfig
 type TcConfig =
-    member primaryAssembly: (string * ILAssemblyRef)
     member noFeedback: bool
     member stackReserveSize: int32 option
     member implicitIncludeDir: string
@@ -516,7 +516,6 @@ type TcConfig =
 
 
     member ComputeLightSyntaxInitialStatus: string -> bool
-    member GetTargetFrameworkDirectories: unit -> string list
     
     /// Get the loaded sources that exist and issue a warning for the ones that don't
     member GetAvailableLoadedSources: unit -> (range*string) list
@@ -534,7 +533,7 @@ type TcConfig =
     member useSdkRefs: bool
     member langVersion: LanguageVersion
 
-    static member Create: TcConfigBuilder * validate: bool -> TcConfig
+    static member Create: TcConfigBuilder -> TcConfig
 
 /// Represents a computation to return a TcConfig. Normally this is just a constant immutable TcConfig,
 /// but for F# Interactive it may be based on an underlying mutable TcConfigBuilder.
@@ -592,9 +591,9 @@ type TcImports =
     member GetCcusInDeclOrder: unit -> CcuThunk list
     /// This excludes any framework imports (which may be shared between multiple builds)
     member GetCcusExcludingBase: unit -> CcuThunk list 
-    member FindDllInfo: CompilationThreadToken * range * string -> ImportedBinary
-    member TryFindDllInfo: CompilationThreadToken * range * string * lookupOnly: bool -> option<ImportedBinary>
-    member FindCcuFromAssemblyRef: CompilationThreadToken * range * ILAssemblyRef -> CcuResolutionResult
+    member FindDllInfo: range * string -> ImportedBinary
+    member TryFindDllInfo: string -> option<ImportedBinary>
+    member FindCcuFromAssemblyRef: ILAssemblyRef -> CcuThunk
 #if !NO_EXTENSIONTYPING
     member ProviderGeneratedTypeRoots: ProviderGeneratedType list
 #endif
@@ -602,7 +601,7 @@ type TcImports =
 
 #if !NO_EXTENSIONTYPING
     /// Try to find a provider-generated assembly
-    member TryFindProviderGeneratedAssemblyByName: CompilationThreadToken * assemblyName:string -> System.Reflection.Assembly option
+    member TryFindProviderGeneratedAssemblyByName: assemblyName:string -> System.Reflection.Assembly option
 #endif
     /// Report unresolved references that also weren't consumed by any type providers.
     member ReportUnresolvedAssemblyReferences: UnresolvedAssemblyReference list -> unit
@@ -640,7 +639,7 @@ val WriteOptimizationData: TcGlobals * filename: string * inMem: bool * CcuThunk
 
 /// Process #r in F# Interactive.
 /// Adds the reference to the tcImports and add the ccu to the type checking environment.
-val RequireDLL: CompilationThreadToken * TcImports * TcEnv * thisAssemblyName: string * referenceRange: range * file: string * assemblyReferenceAdded: (string -> unit) -> TcEnv * (ImportedBinary list * ImportedAssembly list)
+val RequireDLL: CompilationThreadToken * TcImports * TcEnv * thisAssemblyName: string * referenceRange: range * references: AssemblyReference list * assemblyReferenceAdded: (string -> unit) -> TcEnv * (ImportedBinary list * ImportedAssembly list)
 
 /// Processing # commands
 val ProcessMetaCommandsFromInput: 
@@ -778,8 +777,8 @@ type LoadClosure =
     //
     /// A temporary TcConfig is created along the way, is why this routine takes so many arguments. We want to be sure to use exactly the
     /// same arguments as the rest of the application.
-    static member ComputeClosureOfScriptText: CompilationThreadToken * legacyReferenceResolver: ReferenceResolver.Resolver * defaultFSharpBinariesDir: string * filename: string * sourceText: ISourceText * implicitDefines:CodeContext * useSimpleResolution: bool * useFsiAuxLib: bool * useSdkRefs: bool * lexResourceManager: Lexhelp.LexResourceManager * applyCompilerOptions: (TcConfigBuilder -> unit) * assumeDotNetFramework: bool * tryGetMetadataSnapshot: ILReaderTryGetMetadataSnapshot * reduceMemoryUsage: ReduceMemoryFlag -> LoadClosure
+    static member ComputeClosureOfScriptText: legacyReferenceResolver: ReferenceResolver.Resolver * defaultFSharpBinariesDir: string * filename: string * sourceText: ISourceText * implicitDefines:CodeContext * useSimpleResolution: bool * useFsiAuxLib: bool * useSdkRefs: bool * lexResourceManager: Lexhelp.LexResourceManager * applyCompilerOptions: (TcConfigBuilder -> unit) * assumeDotNetFramework: bool * tryGetMetadataSnapshot: ILReaderTryGetMetadataSnapshot * reduceMemoryUsage: ReduceMemoryFlag -> LoadClosure
 
     /// Analyze a set of script files and find the closure of their references. The resulting references are then added to the given TcConfig.
     /// Used from fsi.fs and fsc.fs, for #load and command line. 
-    static member ComputeClosureOfScriptFiles: CompilationThreadToken * tcConfig:TcConfig * (string * range) list * implicitDefines:CodeContext * lexResourceManager: Lexhelp.LexResourceManager -> LoadClosure
+    static member ComputeClosureOfScriptFiles: tcConfig:TcConfig * (string * range) list * implicitDefines:CodeContext * lexResourceManager: Lexhelp.LexResourceManager -> LoadClosure
