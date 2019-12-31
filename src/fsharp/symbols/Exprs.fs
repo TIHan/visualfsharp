@@ -1042,7 +1042,6 @@ module FSharpExprConvert =
                 | _ ->
                 let isCtor = (ilMethRef.Name = ".ctor")
                 let isStatic = isCtor || ilMethRef.CallingConv.IsStatic
-                let scoref = ilMethRef.DeclaringTypeRef.Scope
                 let typars1 = tcref.Typars m
                 let typars2 = [ 1 .. ilMethRef.GenericArity ] |> List.map (fun _ -> NewRigidTypar "T" m)
                 let tinst1 = typars1 |> generalizeTypars
@@ -1050,9 +1049,9 @@ module FSharpExprConvert =
                 // TODO: this will not work for curried methods in F# classes.
                 // This is difficult to solve as the information in the ILMethodRef
                 // is not sufficient to resolve to a symbol unambiguously in these cases.
-                let argtys = [ ilMethRef.ArgTypes |> List.map (ImportILTypeFromMetadata cenv.amap m scoref tinst1 tinst2) ]
+                let argtys = [ ilMethRef.ArgTypes |> List.map (ImportILTypeFromMetadata cenv.amap m tinst1 tinst2) ]
                 let rty = 
-                    match ImportReturnTypeFromMetadata cenv.amap m ilMethRef.ReturnType emptyILCustomAttrs scoref tinst1 tinst2 with 
+                    match ImportReturnTypeFromMetadata cenv.amap m ilMethRef.ReturnType emptyILCustomAttrs tinst1 tinst2 with 
                     | None -> if isCtor then  enclosingType else cenv.g.unit_ty
                     | Some ty -> ty
 

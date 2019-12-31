@@ -21,17 +21,6 @@ open FSharp.Compiler.ExtensionTyping
 #endif
 
 //-------------------------------------------------------------------------
-// From IL types to F# types
-//-------------------------------------------------------------------------
-
-/// Import an IL type as an F# type. importInst gives the context for interpreting type variables.
-let ImportILType scoref amap m importInst ilty =
-    ilty |> rescopeILType scoref |>  Import.ImportILType amap m importInst
-
-let CanImportILType scoref amap m ilty =
-    ilty |> rescopeILType scoref |>  Import.CanImportILType amap m
-
-//-------------------------------------------------------------------------
 // Fold the hierarchy.
 //  REVIEW: this code generalizes the iteration used below for member lookup.
 //-------------------------------------------------------------------------
@@ -58,11 +47,11 @@ let GetSuperTypeOfType g amap m ty =
         | None -> None
         | Some super -> Some(Import.ImportProvidedType amap m super)
 #endif
-    | ILTypeMetadata (TILObjectReprData(scoref, _, tdef)) ->
+    | ILTypeMetadata (TILObjectReprData(_, _, tdef)) ->
         let tinst = argsOfAppTy g ty
         match tdef.Extends with
         | None -> None
-        | Some ilty -> Some (ImportILType scoref amap m tinst ilty)
+        | Some ilty -> Some (Import.ImportILType amap m tinst ilty)
 
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
         if isFSharpObjModelTy g ty || isExnDeclTy g ty then
@@ -119,7 +108,7 @@ let rec GetImmediateInterfacesOfType skipUnref g amap m ty =
                     [ for ity in info.ProvidedType.PApplyArray((fun st -> st.GetInterfaces()), "GetInterfaces", m) do
                           yield Import.ImportProvidedType amap m ity ]
 #endif
-                | ILTypeMetadata (TILObjectReprData(scoref, _, tdef)) ->
+                | ILTypeMetadata (TILObjectReprData(_, _, tdef)) ->
 
                     // ImportILType may fail for an interface if the assembly load set is incomplete and the interface
                     // comes from another assembly. In this case we simply skip the interface:
@@ -129,8 +118,8 @@ let rec GetImmediateInterfacesOfType skipUnref g amap m ty =
                     // doesn't apply: e.g. for mscorlib interfaces like IComparable, but we can always
                     // assume those are present.
                     tdef.Implements |> List.choose (fun ity ->
-                         if skipUnref = SkipUnrefInterfaces.No || CanImportILType scoref amap m ity then
-                             Some (ImportILType scoref amap m tinst ity)
+                         if skipUnref = SkipUnrefInterfaces.No || Import.CanImportILType amap m ity then
+                             Some (Import.ImportILType amap m tinst ity)
                          else None)
 
                 | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
@@ -273,12 +262,12 @@ let ExistsHeadTypeInEntireHierarchy g amap m typeToSearchFrom tcrefToLookFor =
 
 
 /// Read an Abstract IL type from metadata and convert to an F# type.
-let ImportILTypeFromMetadata amap m scoref tinst minst ilty =
-    ImportILType scoref amap m (tinst@minst) ilty
+let ImportILTypeFromMetadata amap m tinst minst ilty =
+    Import.ImportILType amap m (tinst@minst) ilty
 
 /// Read an Abstract IL type from metadata, including any attributes that may affect the type itself, and convert to an F# type.
-let ImportILTypeFromMetadataWithAttributes amap m scoref tinst minst ilty cattrs =
-    let ty = ImportILType scoref amap m (tinst@minst) ilty
+let ImportILTypeFromMetadataWithAttributes amap m tinst minst ilty cattrs =
+    let ty = Import.ImportILType amap m (tinst@minst) ilty
     // If the type is a byref and one of attributes from a return or parameter has IsReadOnly, then it's a inref.
     if isByrefTy amap.g ty && TryFindILAttribute amap.g.attrib_IsReadOnlyAttribute cattrs then
         mkInByrefTy amap.g (destByrefTy amap.g ty)
@@ -286,15 +275,15 @@ let ImportILTypeFromMetadataWithAttributes amap m scoref tinst minst ilty cattrs
         ty
 
 /// Get the parameter type of an IL method.
-let ImportParameterTypeFromMetadata amap m ilty cattrs scoref tinst mist =
-    ImportILTypeFromMetadataWithAttributes amap m scoref tinst mist ilty cattrs
+let ImportParameterTypeFromMetadata amap m ilty cattrs tinst mist =
+    ImportILTypeFromMetadataWithAttributes amap m tinst mist ilty cattrs
 
 /// Get the return type of an IL method, taking into account instantiations for type, return attributes and method generic parameters, and
 /// translating 'void' to 'None'.
-let ImportReturnTypeFromMetadata amap m ilty cattrs scoref tinst minst =
+let ImportReturnTypeFromMetadata amap m ilty cattrs tinst minst =
     match ilty with
     | ILType.Void -> None
-    | retTy -> Some(ImportILTypeFromMetadataWithAttributes amap m scoref tinst minst retTy cattrs)
+    | retTy -> Some(ImportILTypeFromMetadataWithAttributes amap m tinst minst retTy cattrs)
 
 
 /// Copy constraints.  If the constraint comes from a type parameter associated
@@ -512,7 +501,7 @@ type OptionalArgInfo =
     /// Compute the OptionalArgInfo for an IL parameter
     ///
     /// This includes the Visual Basic rules for IDispatchConstant and IUnknownConstant and optional arguments.
-    static member FromILParameter g amap m ilScope ilTypeInst (ilParam: ILParameter) =
+    static member FromILParameter g amap m ilTypeInst (ilParam: ILParameter) =
         if ilParam.IsOptional then
             match ilParam.Default with
             | None ->
@@ -531,7 +520,7 @@ type OptionalArgInfo =
                             else MissingValue
                     else
                         DefaultValue
-                CallerSide (analyze (ImportILTypeFromMetadata amap m ilScope ilTypeInst [] ilParam.Type))
+                CallerSide (analyze (ImportILTypeFromMetadata amap m ilTypeInst [] ilParam.Type))
             | Some v ->
                 CallerSide (Constant v)
         else
@@ -811,19 +800,19 @@ type ILMethInfo =
     /// Get the argument types of the the IL method. If this is an C#-style extension method
     /// then drop the object argument.
     member x.GetParamTypes(amap, m, minst) =
-        x.ParamMetadata |> List.map (fun p -> ImportParameterTypeFromMetadata amap m p.Type p.CustomAttrs x.MetadataScope x.DeclaringTypeInst minst)
+        x.ParamMetadata |> List.map (fun p -> ImportParameterTypeFromMetadata amap m p.Type p.CustomAttrs x.DeclaringTypeInst minst)
 
     /// Get all the argument types of the IL method. Include the object argument even if this is
     /// an C#-style extension method.
     member x.GetRawArgTypes(amap, m, minst) =
-        x.RawMetadata.Parameters |> List.map (fun p -> ImportParameterTypeFromMetadata amap m p.Type p.CustomAttrs x.MetadataScope x.DeclaringTypeInst minst)
+        x.RawMetadata.Parameters |> List.map (fun p -> ImportParameterTypeFromMetadata amap m p.Type p.CustomAttrs x.DeclaringTypeInst minst)
 
     /// Get info about the arguments of the IL method. If this is an C#-style extension method then
     /// drop the object argument.
     ///
     /// Any type parameters of the enclosing type are instantiated in the type returned.
     member x.GetParamNamesAndTypes(amap, m, minst) =
-        x.ParamMetadata |> List.map (fun p -> ParamNameAndType(Option.map (mkSynId m) p.Name, ImportParameterTypeFromMetadata amap m p.Type p.CustomAttrs x.MetadataScope x.DeclaringTypeInst minst) )
+        x.ParamMetadata |> List.map (fun p -> ParamNameAndType(Option.map (mkSynId m) p.Name, ImportParameterTypeFromMetadata amap m p.Type p.CustomAttrs x.DeclaringTypeInst minst) )
 
     /// Get a reference to the method (dropping all generic instantiations), as an Abstract IL ILMethodRef.
     member x.ILMethodRef =
@@ -852,7 +841,7 @@ type ILMethInfo =
         // method instantiation.
         if x.IsILExtensionMethod then
             let p = x.RawMetadata.Parameters.Head
-            [ ImportParameterTypeFromMetadata amap m p.Type p.CustomAttrs x.MetadataScope x.DeclaringTypeInst minst ]
+            [ ImportParameterTypeFromMetadata amap m p.Type p.CustomAttrs x.DeclaringTypeInst minst ]
         else if x.IsInstance then
             [ x.ApparentEnclosingType ]
         else
@@ -860,7 +849,7 @@ type ILMethInfo =
 
     /// Get the compiled return type of the method, where 'void' is None.
     member x.GetCompiledReturnTy (amap, m, minst) =
-        ImportReturnTypeFromMetadata amap m x.RawMetadata.Return.Type x.RawMetadata.Return.CustomAttrs x.MetadataScope x.DeclaringTypeInst minst
+        ImportReturnTypeFromMetadata amap m x.RawMetadata.Return.Type x.RawMetadata.Return.CustomAttrs x.DeclaringTypeInst minst
 
     /// Get the F# view of the return type of the method, where 'void' is 'unit'.
     member x.GetFSharpReturnTy (amap, m, minst) =
@@ -1268,13 +1257,12 @@ type MethInfo =
     /// Build IL method infos.
     static member CreateILMeth (amap: Import.ImportMap, m, ty: TType, md: ILMethodDef) =
         let tinfo = ILTypeInfo.FromType amap.g ty
-        let mtps = Import.ImportILGenericParameters (fun () -> amap) m tinfo.ILScopeRef tinfo.TypeInstOfRawMetadata md.GenericParams
+        let mtps = Import.ImportILGenericParameters (fun () -> amap) m tinfo.TypeInstOfRawMetadata md.GenericParams
         ILMeth (amap.g, ILMethInfo(amap.g, ty, None, md, mtps), None)
 
     /// Build IL method infos for a C#-style extension method
     static member CreateILExtensionMeth (amap, m, apparentTy: TType, declaringTyconRef: TyconRef, extMethPri, md: ILMethodDef) =
-        let scoref =  declaringTyconRef.CompiledRepresentationForNamedType.Scope
-        let mtps = Import.ImportILGenericParameters (fun () -> amap) m scoref [] md.GenericParams
+        let mtps = Import.ImportILGenericParameters (fun () -> amap) m [] md.GenericParams
         ILMeth (amap.g, ILMethInfo(amap.g, apparentTy, Some declaringTyconRef, md, mtps), extMethPri)
 
     /// Tests whether two method infos have the same underlying definition.
@@ -1392,7 +1380,7 @@ type MethInfo =
                  let isOutArg = (p.IsOut && not p.IsIn)
                  let isInArg = (p.IsIn && not p.IsOut)
                  // Note: we get default argument values from VB and other .NET language metadata
-                 let optArgInfo =  OptionalArgInfo.FromILParameter g amap m ilMethInfo.MetadataScope ilMethInfo.DeclaringTypeInst p
+                 let optArgInfo =  OptionalArgInfo.FromILParameter g amap m ilMethInfo.DeclaringTypeInst p
 
                  let isCallerLineNumberArg = TryFindILAttribute g.attrib_CallerLineNumberAttribute p.CustomAttrs
                  let isCallerFilePathArg = TryFindILAttribute g.attrib_CallerFilePathAttribute p.CustomAttrs
@@ -1538,10 +1526,10 @@ type MethInfo =
                 match x with
                 | ILMeth(_, ilminfo, _) ->
                     let ftinfo = ILTypeInfo.FromType g (TType_app(tcref, formalEnclosingTyparTys))
-                    let formalRetTy = ImportReturnTypeFromMetadata amap m ilminfo.RawMetadata.Return.Type ilminfo.RawMetadata.Return.CustomAttrs ftinfo.ILScopeRef ftinfo.TypeInstOfRawMetadata formalMethTyparTys
+                    let formalRetTy = ImportReturnTypeFromMetadata amap m ilminfo.RawMetadata.Return.Type ilminfo.RawMetadata.Return.CustomAttrs ftinfo.TypeInstOfRawMetadata formalMethTyparTys
                     let formalParams =
                         [ [ for p in ilminfo.RawMetadata.Parameters do
-                                let paramType = ImportILTypeFromMetadata amap m ftinfo.ILScopeRef ftinfo.TypeInstOfRawMetadata formalMethTyparTys p.Type
+                                let paramType = ImportILTypeFromMetadata amap m ftinfo.TypeInstOfRawMetadata formalMethTyparTys p.Type
                                 yield TSlotParam(p.Name, paramType, p.IsIn, p.IsOut, p.IsOptional, []) ] ]
                     formalRetTy, formalParams
 #if !NO_EXTENSIONTYPING
@@ -1741,7 +1729,7 @@ type ILFieldInfo =
      /// Get the type of the field as an F# type
     member x.FieldType(amap, m) =
         match x with
-        | ILFieldInfo (tinfo, fdef) -> ImportILTypeFromMetadata amap m tinfo.ILScopeRef tinfo.TypeInstOfRawMetadata [] fdef.FieldType
+        | ILFieldInfo (tinfo, fdef) -> ImportILTypeFromMetadata amap m tinfo.TypeInstOfRawMetadata [] fdef.FieldType
 #if !NO_EXTENSIONTYPING
         | ProvidedField(amap, fi, m) -> Import.ImportProvidedType amap m (fi.PApply((fun fi -> fi.FieldType), m))
 #endif
@@ -1891,21 +1879,21 @@ type ILPropInfo =
     /// Any type parameters of the enclosing type are instantiated in the type returned.
     member x.GetParamNamesAndTypes(amap, m) =
         let (ILPropInfo (tinfo, pdef)) = x
-        pdef.Args |> List.map (fun ty -> ParamNameAndType(None, ImportILTypeFromMetadata amap m tinfo.ILScopeRef tinfo.TypeInstOfRawMetadata [] ty) )
+        pdef.Args |> List.map (fun ty -> ParamNameAndType(None, ImportILTypeFromMetadata amap m tinfo.TypeInstOfRawMetadata [] ty) )
 
     /// Get the types of the indexer arguments associated with the IL property.
     ///
     /// Any type parameters of the enclosing type are instantiated in the type returned.
     member x.GetParamTypes(amap, m) =
         let (ILPropInfo (tinfo, pdef)) = x
-        pdef.Args |> List.map (fun ty -> ImportILTypeFromMetadata amap m tinfo.ILScopeRef tinfo.TypeInstOfRawMetadata [] ty)
+        pdef.Args |> List.map (fun ty -> ImportILTypeFromMetadata amap m tinfo.TypeInstOfRawMetadata [] ty)
 
     /// Get the return type of the IL property.
     ///
     /// Any type parameters of the enclosing type are instantiated in the type returned.
     member x.GetPropertyType (amap, m) =
         let (ILPropInfo (tinfo, pdef)) = x
-        ImportILTypeFromMetadata amap m tinfo.ILScopeRef tinfo.TypeInstOfRawMetadata [] pdef.PropertyType
+        ImportILTypeFromMetadata amap m tinfo.TypeInstOfRawMetadata [] pdef.PropertyType
 
     override x.ToString() = x.ILTypeInfo.ToString() + "::" + x.PropertyName
 
@@ -2464,7 +2452,7 @@ type EventInfo =
             // Get the delegate type associated with an IL event, taking into account the instantiation of the
             // declaring type.
             if Option.isNone edef.EventType then error (nonStandardEventError x.EventName m)
-            ImportILTypeFromMetadata amap m tinfo.ILScopeRef tinfo.TypeInstOfRawMetadata [] edef.EventType.Value
+            ImportILTypeFromMetadata amap m tinfo.TypeInstOfRawMetadata [] edef.EventType.Value
 
         | FSEvent(g, p, _, _) ->
             FindDelegateTypeOfPropertyEvent g amap x.EventName m (p.GetPropertyType(amap, m))

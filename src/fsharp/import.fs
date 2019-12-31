@@ -400,7 +400,7 @@ let ImportProvidedMethodBaseAsILMethodRef (env: ImportMap) (m: range) (mbase: Ta
 /// 
 /// Fixup the constraints so that any references to the generic parameters
 /// in the constraints now refer to the new generic parameters.
-let ImportILGenericParameters amap m scoref tinst (gps: ILGenericParameterDefs) = 
+let ImportILGenericParameters amap m tinst (gps: ILGenericParameterDefs) = 
     match gps with 
     | [] -> []
     | _ -> 
@@ -410,7 +410,7 @@ let ImportILGenericParameters amap m scoref tinst (gps: ILGenericParameterDefs) 
         let tptys = tps |> List.map mkTyparTy
         let importInst = tinst@tptys
         (tps, gps) ||> List.iter2 (fun tp gp -> 
-            let constraints = gp.Constraints |> List.map (fun ilty -> TyparConstraint.CoercesTo(ImportILType amap m importInst (rescopeILType scoref ilty), m) )
+            let constraints = gp.Constraints |> List.map (fun ilty -> TyparConstraint.CoercesTo(ImportILType amap m importInst ilty, m) )
             let constraints = if gp.HasReferenceTypeConstraint then (TyparConstraint.IsReferenceType(m) :: constraints) else constraints
             let constraints = if gp.HasNotNullableValueTypeConstraint then (TyparConstraint.IsNonNullableStruct(m) :: constraints) else constraints
             let constraints = if gp.HasDefaultConstructorConstraint then (TyparConstraint.RequiresDefaultConstructor(m) :: constraints) else constraints
@@ -460,7 +460,7 @@ let rec ImportILTypeDef amap m scoref (cpath: CompilationPath) enc nm (tdef: ILT
         (nm, m) 
         // The read of the type parameters may fail to resolve types. We pick up a new range from the point where that read is forced
         // Make sure we reraise the original exception one occurs - see findOriginalException.
-        (LazyWithContext.Create((fun m -> ImportILGenericParameters amap m scoref [] tdef.GenericParams), ErrorLogger.findOriginalException))
+        (LazyWithContext.Create((fun m -> ImportILGenericParameters amap m [] tdef.GenericParams), ErrorLogger.findOriginalException))
         (scoref, enc, tdef) 
         (MaybeLazy.Lazy lazyModuleOrNamespaceTypeForNestedTypes)
        

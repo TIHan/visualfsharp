@@ -81,8 +81,8 @@ type AttribInfo =
     member x.TyconRef = 
          match x with 
          | FSAttribInfo(_g, Attrib(tcref, _, _, _, _, _, _)) -> tcref
-         | ILAttribInfo (g, amap, scoref, a, m) -> 
-             let ty = ImportILType scoref amap m [] a.Method.DeclaringType
+         | ILAttribInfo (g, amap, _, a, m) -> 
+             let ty = Import.ImportILType amap m [] a.Method.DeclaringType
              tcrefOfAppTy g ty
 
     member x.ConstructorArguments = 
@@ -93,10 +93,10 @@ type AttribInfo =
                     let ty = tyOfExpr g origExpr
                     let obj = evalFSharpAttribArg g evaluatedExpr
                     ty, obj) 
-         | ILAttribInfo (g, amap, scoref, cattr, m) -> 
+         | ILAttribInfo (g, amap, _, cattr, m) -> 
               let parms, _args = decodeILAttribData g.ilg cattr 
               [ for (argty, argval) in Seq.zip cattr.Method.FormalArgTypes parms ->
-                    let ty = ImportILType scoref amap m [] argty
+                    let ty = Import.ImportILType amap m [] argty
                     let obj = evalILAttribElem argval
                     ty, obj ]
 
@@ -108,10 +108,10 @@ type AttribInfo =
                     let ty = tyOfExpr g origExpr
                     let obj = evalFSharpAttribArg g evaluatedExpr
                     ty, nm, isField, obj) 
-         | ILAttribInfo (g, amap, scoref, cattr, m) -> 
+         | ILAttribInfo (g, amap, _, cattr, m) -> 
               let _parms, namedArgs = decodeILAttribData g.ilg cattr 
               [ for (nm, argty, isProp, argval) in namedArgs ->
-                    let ty = ImportILType scoref amap m [] argty
+                    let ty = Import.ImportILType amap m [] argty
                     let obj = evalILAttribElem argval
                     let isField = not isProp 
                     ty, nm, isField, obj ]

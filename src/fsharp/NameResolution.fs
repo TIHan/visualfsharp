@@ -462,12 +462,12 @@ let private GetCSharpStyleIndexedExtensionMembersForTyconRef (amap: Import.Impor
                  try
                     let rs =
                         match metadataOfTycon tcrefOfStaticClass.Deref, minfo with
-                        | ILTypeMetadata (TILObjectReprData(scoref, _, _)), ILMeth(_, ILMethInfo(_, _, _, ilMethod, _), _) ->
+                        | ILTypeMetadata (TILObjectReprData(_, _, _)), ILMeth(_, ILMethInfo(_, _, _, ilMethod, _), _) ->
                             match ilMethod.ParameterTypes with
                             | firstTy :: _ ->
                                 match firstTy with
                                 | ILType.Boxed  tspec | ILType.Value tspec ->
-                                    let tref = (tspec |> rescopeILTypeSpec scoref).TypeRef
+                                    let tref = tspec.TypeRef
                                     if Import.CanImportILTypeRef amap m tref then
                                         let tcref = tref |> Import.ImportILTypeRef amap m
                                         if isCompiledTupleTyconRef g tcref || tyconRefEq g tcref g.fastFunc_tcr then None
