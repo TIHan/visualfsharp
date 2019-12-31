@@ -261,7 +261,7 @@ module IncrementalBuild =
     let mutable injectCancellationFault = false
     let locallyInjectCancellationFault() = 
         injectCancellationFault <- true
-        { new IDisposable with member __.Dispose() =  injectCancellationFault <- false }
+        { new IDisposable with member _.Dispose() =  injectCancellationFault <- false }
 
 type SourceFile =
     {
@@ -279,17 +279,23 @@ type ParsedInfo =
     }
 
 type SourceTypeCheckState =
-    | NotParsed of SourceFile
-    | Parsed of SourceFile * ParsedInfo
-    | Checked of SourceFile * TypeCheckAccumulator * WeakReference<ParsedInfo>
+    | NotParsed of SourceFile * DateTime
+    | Parsed of SourceFile * ParsedInfo * DateTime
+    | Checked of SourceFile * TypeCheckAccumulator * WeakReference<ParsedInfo> * DateTime
 
     member x.SourceFile =
         match x with
-        | NotParsed sourceFile -> sourceFile
-        | Parsed (sourceFile, _) -> sourceFile
-        | Checked (sourceFile, _, _) -> sourceFile
+        | NotParsed (sourceFile, _) -> sourceFile
+        | Parsed (sourceFile, _, _) -> sourceFile
+        | Checked (sourceFile, _, _, _) -> sourceFile
 
     member x.FileName = x.SourceFile.FileName
+
+    member x.LastWriteTime =
+        match x with
+        | NotParsed (_, dt) -> dt
+        | Parsed (_, _, dt) -> dt
+        | Checked (_, _, _, dt) -> dt
 
 type TypeCheckOperation =
     | UseCache
@@ -309,6 +315,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 #if !NO_EXTENSIONTYPING
     let importsInvalidatedByTypeProvider = new Event<string>()
 #endif
+    let invalidated = new Event<unit>()
     let mutable currentTcImportsOpt = None
 
     // Check for the existence of loaded sources and prepend them to the sources list if present.
@@ -589,17 +596,17 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
     let getInitialTcAcc ctok =      
         cancellable {
             match initialTcAccCache with
-            | Some result -> return result
+            | Some result -> return (result, defaultTimeStamp)
             | _ ->
                 let! result = combineImportedAssembliesTask ctok
                 initialTcAccCache <- Some result
-                return result }
+                return (result, defaultTimeStamp) }
     
     let typeCheckCache =
         sourceFiles
         |> Array.ofList
         |> Array.map (fun (m, nm, isLastCompiland) -> 
-            NotParsed { FileName = nm; SourceRange = m; IsLastCompiland = isLastCompiland })
+            NotParsed ({ FileName = nm; SourceRange = m; IsLastCompiland = isLastCompiland }, File.GetLastWriteTimeUtc nm))
 
     let checkSlot slot =
         if slot < 0 || slot >= typeCheckCache.Length then
@@ -618,38 +625,38 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         checkSlot slot
 
         match typeCheckCache.[slot] with
-        | NotParsed sourceFile ->
+        | NotParsed(sourceFile, dt) ->
             cancellable {
-                typeCheckCache.[slot] <- Parsed(sourceFile, parse ctok sourceFile slot)
+                typeCheckCache.[slot] <- Parsed(sourceFile, parse ctok sourceFile slot, dt)
                 return! typeCheck ctok op slot }
-        | Parsed(sourceFile, ({ FileName = fileName; SourceRange = sourceRange; Input = input; Errors = errors } as parsedInfo)) ->
+        | Parsed(sourceFile, ({ FileName = fileName; SourceRange = sourceRange; Input = input; Errors = errors } as parsedInfo), dt) ->
             cancellable {
                 let! ct = Cancellable.token ()
-                let! priorTcAcc = priorTypeCheck ctok UseCache slot
+                let! priorTcAcc, _ = priorTypeCheck ctok UseCache slot
                 let tcAccTask = typeCheckTask ctok priorTcAcc (input, sourceRange, fileName, errors)
                 let tcAccOpt = Eventually.forceWhile ctok (fun () -> not ct.IsCancellationRequested) tcAccTask
                 match tcAccOpt with
                 | Some tcAcc ->
-                    typeCheckCache.[slot] <- Checked(sourceFile, tcAcc, WeakReference<_> parsedInfo)
-                    return tcAcc
+                    typeCheckCache.[slot] <- Checked(sourceFile, tcAcc, WeakReference<_> parsedInfo, dt)
+                    return (tcAcc, dt)
                 | _ ->
                     if ct.IsCancellationRequested then
                         return! Cancellable.canceled ()
                     else
                         return invalidOp "Type checking was not canceled." }
-        | Checked(sourceFile, tcAcc, weakInfo) ->
+        | Checked(sourceFile, tcAcc, weakInfo, dt) ->
             match op with
-            | UseCache -> Cancellable.ret tcAcc
+            | UseCache -> Cancellable.ret (tcAcc, dt)
             | ReTypeCheck ->
                 match weakInfo.TryGetTarget() with
                 | true, parsedInfo ->
                     match parsedInfo.Input with
                     | Some _ ->
-                        typeCheckCache.[slot] <- Parsed (sourceFile, parsedInfo)
+                        typeCheckCache.[slot] <- Parsed (sourceFile, parsedInfo, dt)
                     | _ ->
-                        typeCheckCache.[slot] <- NotParsed sourceFile
+                        typeCheckCache.[slot] <- NotParsed (sourceFile, dt)
                 | _ ->
-                    typeCheckCache.[slot] <- NotParsed sourceFile
+                    typeCheckCache.[slot] <- NotParsed (sourceFile, dt)
 
                 typeCheck ctok UseCache slot
 
@@ -664,7 +671,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                 let slot = slot - 1
                 checkSlot slot
                 match typeCheckCache.[slot] with
-                | Checked (_, tcAcc, _) -> return tcAcc
+                | Checked (_, tcAcc, _, dt) -> return (tcAcc, dt)
                 | _ ->
                     // Find the first slot that has not been checked.
                     let startingSlot = typeCheckCache |> Array.findIndex (function Checked _ -> false | _ -> true)
@@ -693,7 +700,8 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         checkSlot slot
 
         for i = slot to typeCheckCache.Length - 1 do
-            typeCheckCache.[i] <- NotParsed typeCheckCache.[i].SourceFile
+            let sourceFile = typeCheckCache.[i].SourceFile
+            typeCheckCache.[i] <- NotParsed (sourceFile, FileSystem.GetLastWriteTimeShim sourceFile.FileName)
 
     let invalidateBuild () =
         initialTcAccCache <- None
@@ -710,12 +718,12 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         checkSlot slot
 
         match typeCheckCache.[slot] with
-        | Parsed(_, parsedInfo) -> parsedInfo
-        | NotParsed sourceFile ->
+        | Parsed(_, parsedInfo, _) -> parsedInfo
+        | NotParsed(sourceFile, dt) ->
             let parsedInfo = parse ctok sourceFile slot
-            typeCheckCache.[slot] <- Parsed(sourceFile, parse ctok sourceFile slot)
+            typeCheckCache.[slot] <- Parsed(sourceFile, parse ctok sourceFile slot, dt)
             parsedInfo
-        | Checked(sourceFile, _, weakInfo) ->
+        | Checked(sourceFile, _, weakInfo, _) ->
             match weakInfo.TryGetTarget() with
             | true, parsedInfo -> parsedInfo
             | _ -> 
@@ -723,41 +731,71 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                 weakInfo.SetTarget parsedInfo
                 parsedInfo
 
-    let sourceFileTimeStamps =
+    let sourceFileWatchers =
         sourceFiles
-        |> Array.ofList
-        |> Array.map (fun (_, nm, _) -> (nm, DateTime()))
+        |> List.map (fun (_, nm, _) ->
+            let watcher = new FileSystemWatcher()
+            watcher.Path <- Path.GetDirectoryName nm
+            watcher.Filter <- Path.GetFileName nm
+            watcher.NotifyFilter <- NotifyFilters.LastWrite
 
-    /// Checks source file timestamps.
-    /// Source files can be invalidated by this call, which will cause re-type-checking.
-    let checkSourceFileTimeStamps (cache: TimeStampCache) =
-        sourceFileTimeStamps
-        |> Array.iteri (fun slot (fileName, currentTimeStamp) ->
-            let newTimeStamp = cache.GetFileTimeStamp fileName
-            if newTimeStamp <> currentTimeStamp then
-                invalidateSlot slot
-                sourceFileTimeStamps.[slot] <- (fileName, newTimeStamp))
+            watcher.Changed.Add(fun args ->
+                if (args.ChangeType &&& WatcherChangeTypes.Changed) = WatcherChangeTypes.Changed then
+                    getSlot nm
+                    |> invalidateSlot)
+
+            watcher.Created.Add(fun _ -> invalidated.Trigger())
+            watcher.Deleted.Add(fun _ -> invalidated.Trigger())
+            watcher.Renamed.Add(fun _ -> invalidated.Trigger())
+
+            watcher.EnableRaisingEvents <- true
+            watcher)
 
     let referenceAssemblyTimeStamps =
         nonFrameworkAssemblyInputs
         |> Array.ofList
-        |> Array.map (fun (_, getTimeStamp) -> (getTimeStamp, DateTime()))
+        |> Array.map (fun fileName -> FileSystem.GetLastWriteTimeShim fileName)
 
-    /// Checks reference assembly timestamps.
-    /// Build can be invalidated by this call.
-    let checkReferenceAssemblyTimeStamps ctok (cache: TimeStampCache) =
-        referenceAssemblyTimeStamps
-        |> Array.iteri (fun i (getTimeStamp, currentTimeStamp) ->
-            let newTimeStamp = getTimeStamp cache ctok
-            if newTimeStamp <> currentTimeStamp then
-                invalidateBuild ()
-                referenceAssemblyTimeStamps.[i] <- (getTimeStamp, newTimeStamp))
+    let referenceAssemblyWatchers =
+        nonFrameworkAssemblyInputs
+        |> List.mapi (fun i fileName ->
+            let watcher = new FileSystemWatcher()
+            watcher.Path <- Path.GetDirectoryName fileName
+            watcher.Filter <- Path.GetFileName fileName
+            watcher.NotifyFilter <- NotifyFilters.LastWrite
 
-    /// Checks source files and reference assembly timestamps.
-    /// Source files and/or build can be invalidated by this call.
-    let checkTimeStamps ctok cache =
-        checkSourceFileTimeStamps cache
-        checkReferenceAssemblyTimeStamps ctok cache
+            watcher.Changed.Add(fun args ->
+                if (args.ChangeType &&& WatcherChangeTypes.Changed) = WatcherChangeTypes.Changed then
+                    let timeStamp = FileSystem.GetLastWriteTimeShim fileName
+                    let currentTimeStamp = referenceAssemblyTimeStamps.[i]
+                    if timeStamp <> currentTimeStamp then
+                        referenceAssemblyTimeStamps.[i] <- currentTimeStamp
+                        invalidateBuild())
+
+            watcher.Created.Add(fun _ -> invalidated.Trigger())
+            watcher.Deleted.Add(fun _ -> invalidated.Trigger())
+            watcher.Renamed.Add(fun _ -> invalidated.Trigger())
+
+            watcher.EnableRaisingEvents <- true
+            watcher)
+
+    let disposeWatchers () =
+        sourceFileWatchers
+        |> List.iter (fun x -> try x.Dispose() finally ())
+
+        referenceAssemblyWatchers
+        |> List.iter (fun x -> try x.Dispose() finally ())
+
+    let getBuildTimeStamp() =
+        let t1 =
+            typeCheckCache
+            |> Array.map (fun x -> x.LastWriteTime)
+            |> Array.max
+        if referenceAssemblyTimeStamps.Length > 0 then
+            let t2 = referenceAssemblyTimeStamps |> Array.max
+            max t1 t2
+        else
+            t1
 
     let tryCreatePartialCheckResultsBeforeSlot slot =
         match slot, initialTcAccCache with
@@ -768,12 +806,14 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
             let slot = slot - 1
             checkSlot slot
             match typeCheckCache.[slot] with
-            | Checked(_, tcAcc, _) ->
-                Some(PartialCheckResults.Create(tcAcc, snd sourceFileTimeStamps.[slot]))
+            | Checked(_, tcAcc, _, dt) ->
+                Some(PartialCheckResults.Create(tcAcc, dt))
             | _ -> 
                 None
 
     do IncrementalBuilderEventTesting.MRU.Add(IncrementalBuilderEventTesting.IBECreated)
+    do importsInvalidatedByTypeProvider.Publish.Add (fun _ -> disposeWatchers ())
+    do invalidated.Publish.Add (fun () -> disposeWatchers ())
 
     member _.TcConfig = tcConfig
 
@@ -785,9 +825,10 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
     member _.ProjectChecked = projectChecked.Publish
 
-#if !NO_EXTENSIONTYPING
-    member _.ImportsInvalidatedByTypeProvider = importsInvalidatedByTypeProvider.Publish
-#endif
+    member _.Invalidated = 
+        importsInvalidatedByTypeProvider.Publish
+        |> Event.map(fun _ -> ())
+        |> Event.merge invalidated.Publish
 
     member _.TryGetCurrentTcImports () = currentTcImportsOpt
 
@@ -797,9 +838,6 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
     member _.Step (ctok: CompilationThreadToken) =  
       cancellable {
-        let cache = TimeStampCache defaultTimeStamp // One per step
-        checkTimeStamps ctok cache
-
         match! step ctok with
         | None ->
             projectChecked.Trigger()
@@ -818,18 +856,15 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         
     member _.GetCheckResultsBeforeSlotInProject (ctok: CompilationThreadToken, slot) = 
       cancellable {
-        let cache = TimeStampCache defaultTimeStamp
-        checkTimeStamps ctok cache
-
         match tryCreatePartialCheckResultsBeforeSlot slot with
         | Some results -> return results
         | _ ->
-            let! tcAcc = priorTypeCheck ctok UseCache slot
+            let! tcAcc, dt = priorTypeCheck ctok UseCache slot
             match slot with
             | 0 -> 
-                return PartialCheckResults.Create(tcAcc, defaultTimeStamp)
+                return PartialCheckResults.Create(tcAcc, dt)
             | _ ->
-                return PartialCheckResults.Create(tcAcc, snd sourceFileTimeStamps.[slot - 1]) }
+                return PartialCheckResults.Create(tcAcc, dt) }
 
     member builder.GetCheckResultsBeforeFileInProject (ctok: CompilationThreadToken, fileName) = 
         let slot = getSlot fileName
@@ -843,38 +878,31 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         builder.GetCheckResultsBeforeSlotInProject(ctok, builder.SlotCount) 
 
     member builder.GetCheckResultsAndImplementationsForProject(ctok: CompilationThreadToken) = 
-      cancellable {
-        let cache = TimeStampCache defaultTimeStamp       
-        let timeStamp = builder.GetLogicalTimeStampForProject(cache, ctok)
+      cancellable {    
+        let timeStamp = getBuildTimeStamp ()
         let! multipleTcAcc = 
             cancellable {
                 for i = 0 to builder.SlotCount do
                     yield! priorTypeCheck ctok UseCache i }
+        let multipleTcAcc =
+            multipleTcAcc
+            |> List.map (fun (tcAcc, _) -> tcAcc)
 
         let! ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt, tcAcc = finalizeTypeCheckTask ctok (multipleTcAcc |> Array.ofList)
         return PartialCheckResults.Create(tcAcc, timeStamp), ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt }
-        
-    member _.GetLogicalTimeStampForProject(cache, ctok: CompilationThreadToken) = 
-        checkTimeStamps ctok cache
-        let (_, t1) = sourceFileTimeStamps |> Array.maxBy (fun (_, dt) -> dt)
-        if referenceAssemblyTimeStamps.Length > 0 then
-            let (_, t2) = referenceAssemblyTimeStamps |> Array.maxBy (fun (_, dt) -> dt)
-            max t1 t2
-        else
-            t1
       
     member _.GetParseResultsForFile (ctok: CompilationThreadToken, fileName) =
       cancellable {
-        let cache = TimeStampCache defaultTimeStamp 
-        checkSourceFileTimeStamps cache
-
         let parsedInfo =
             getSlot fileName
             |> getParseResults ctok
 
         return (parsedInfo.Input, parsedInfo.SourceRange, parsedInfo.FileName, parsedInfo.Errors) }
 
-    member _.SourceFiles  = sourceFiles  |> List.map (fun (_, f, _) -> f)
+    member _.SourceFiles  = sourceFiles |> List.map (fun (_, f, _) -> f)
+
+    override _.Finalize() =
+        disposeWatchers ()
 
     /// CreateIncrementalBuilder (for background type checking). Note that fsc.fs also
     /// creates an incremental builder used by the command line compiler.
@@ -996,10 +1024,11 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
                 [ for r in nonFrameworkResolutions do
                     let fileName = r.resolvedPath
-                    yield (Choice1Of2 fileName, (fun (cache: TimeStampCache) _ctok -> cache.GetFileTimeStamp fileName))  
-
-                  for pr in projectReferences  do
-                    yield Choice2Of2 pr, (fun (cache: TimeStampCache) ctok -> cache.GetProjectReferenceTimeStamp (pr, ctok)) ]
+                    yield fileName ]
+                |> List.filter (fun x -> 
+                    projectReferences 
+                    |> List.exists (fun y -> String.Equals (x, y.FileName, StringComparison.OrdinalIgnoreCase))
+                    |> not)
             
             let builder = 
                 new IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInputs, nonFrameworkResolutions, unresolvedReferences, 

@@ -101,10 +101,8 @@ type internal IncrementalBuilder =
       /// overall analysis results for the project will be quick.
       member ProjectChecked : IEvent<unit>
 
-#if !NO_EXTENSIONTYPING
-      /// Raised when a type provider invalidates the build.
-      member ImportsInvalidatedByTypeProvider : IEvent<string>
-#endif
+      /// Raised when the build is completely invalidated.
+      member Invalidated : IEvent<unit>
 
       /// Tries to get the current successful TcImports. This is only used in testing. Do not use it for other stuff.
       member TryGetCurrentTcImports : unit -> TcImports option
@@ -152,9 +150,6 @@ type internal IncrementalBuilder =
       ///
       // TODO: make this an Eventually (which can be scheduled) or an Async (which can be cancelled)
       member GetCheckResultsAndImplementationsForProject : CompilationThreadToken -> Cancellable<PartialCheckResults * IL.ILAssemblyRef * IRawFSharpAssemblyData option * TypedImplFile list option>
-
-      /// Get the logical time stamp that is associated with the output of the project if it were gully built immediately
-      member GetLogicalTimeStampForProject: TimeStampCache * CompilationThreadToken -> DateTime
 
       /// Await the untyped parse results for a particular slot in the vector of parse results.
       ///

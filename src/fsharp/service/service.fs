@@ -296,8 +296,6 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                             let! r = self.ParseAndCheckProjectImpl(opts, ctok, userOpName + ".CheckReferencedProject("+nm+")")
                             return r.RawFSharpAssemblyData 
                           }
-                        member x.TryGetLogicalTimeStamp(cache, ctok) = 
-                            self.TryGetLogicalTimeStampForProject(cache, ctok, opts, userOpName + ".TimeStampReferencedProject("+nm+")")
                         member x.FileName = nm } ]
 
         let loadClosure = scriptClosureCacheLock.AcquireLock (fun ltok -> scriptClosureCache.TryGet (ltok, options))
@@ -312,12 +310,10 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
         | None -> ()
         | Some builder -> 
 
-#if !NO_EXTENSIONTYPING
             // Register the behaviour that responds to CCUs being invalidated because of type
             // provider Invalidate events. This invalidates the configuration in the build.
-            builder.ImportsInvalidatedByTypeProvider.Add (fun _ -> 
+            builder.Invalidated.Add (fun () -> 
                 self.InvalidateConfiguration(options, None, userOpName))
-#endif
 
             // Register the callback called just before a file is typechecked by the background builder (without recording
             // errors or intellisense information).
@@ -727,16 +723,6 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                                                    tcProj.TcSymbolUses, tcProj.TopAttribs, tcAssemblyDataOpt, ilAssemRef, 
                                                    tcProj.TcEnvAtEnd.AccessRights, tcAssemblyExprOpt, Array.ofList tcProj.TcDependencyFiles))
       }
-
-    /// Get the timestamp that would be on the output if fully built immediately
-    member private __.TryGetLogicalTimeStampForProject(cache, ctok, options, userOpName: string) =
-
-        // NOTE: This creation of the background builder is currently run as uncancellable.  Creating background builders is generally
-        // cheap though the timestamp computations look suspicious for transitive project references.
-        let builderOpt,_creationErrors = getOrCreateBuilder (ctok, options, userOpName + ".TryGetLogicalTimeStampForProject") |> Cancellable.runWithoutCancellation
-        match builderOpt with 
-        | None -> None
-        | Some builder -> Some (builder.GetLogicalTimeStampForProject(cache, ctok))
 
     /// Parse and typecheck the whole project.
     member bc.ParseAndCheckProject(options, userOpName) =

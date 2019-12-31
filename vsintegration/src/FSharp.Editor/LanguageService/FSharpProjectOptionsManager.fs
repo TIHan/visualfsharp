@@ -62,7 +62,12 @@ module private FSharpProjectOptionsHelpers =
             let doesProjectIdDiffer = p1.ProjectId <> p2.ProjectId
             let p1 = oldProject.Solution.GetProject(p1.ProjectId)
             let p2 = newProject.Solution.GetProject(p2.ProjectId)
-            doesProjectIdDiffer || p1.Version <> p2.Version
+            doesProjectIdDiffer ||
+            (
+                let v1 = p1.GetDependentVersionAsync().Result
+                let v2 = p2.GetDependentVersionAsync().Result
+                v1 <> v2
+            )
         )
 
     let isProjectInvalidated (oldProject: Project) (newProject: Project) (settings: EditorOptions) =
