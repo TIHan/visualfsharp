@@ -2762,6 +2762,7 @@ let rescopeILScopeRef scoref scoref1 =
     | ILScopeRef.Local, _ -> scoref1
     | _, ILScopeRef.Module _ -> scoref
     | ILScopeRef.Module _, _ -> scoref1
+    | _, ILScopeRef.PrimaryAssembly -> scoref
     | _ -> scoref1
 
 let rescopeILTypeRef scoref (tref1: ILTypeRef) =
@@ -2827,6 +2828,129 @@ let rescopeILFieldRef scoref x =
     { DeclaringTypeRef = rescopeILTypeRef scoref x.DeclaringTypeRef
       Name= x.Name
       Type= rescopeILType scoref x.Type }
+
+let areReferencesEqualList (xs1: 'T list) (xs2: 'T list) =
+    (xs1, xs2) ||> List.forall2 (fun ty1 ty2 -> ty1 === ty2)
+
+let areReferencesEqualArray (xs1: 'T []) (xs2: 'T []) =
+    (xs1, xs2) ||> Array.forall2 (fun ty1 ty2 -> ty1 === ty2)
+
+let retargetILTypeRef (ilg: ILGlobals) (tref: ILTypeRef) =
+    match tref.Scope with
+    | ILScopeRef.PrimaryAssembly ->
+        ILTypeRef.Create(ilg.primaryAssemblyScopeRef, tref.Enclosing, tref.Name)
+    | _ ->
+        tref
+
+let rec retargetILTypeSpec (ilg: ILGlobals) (tspec: ILTypeSpec) =
+    let tref1 = tspec.TypeRef
+    let tref2 = tspec.TypeRef |> retargetILTypeRef ilg
+    
+    let genericArgs1 = tspec.GenericArgs
+    let genericArgs2 = tspec.GenericArgs |> List.map (retargetILType ilg)
+
+    if tref1 === tref2 && areReferencesEqualList genericArgs1 genericArgs2 then
+        tspec
+    else
+        ILTypeSpec.Create(tref2, genericArgs2)
+
+and retargetILType (ilg: ILGlobals) (ty: ILType) =
+    if ty.IsNominal then
+        let tspec1 = ty.TypeSpec
+        let tspec2 = ty.TypeSpec |> retargetILTypeSpec ilg
+
+        if tspec1 === tspec2 then
+            ty
+        else
+            mkILTy ty.Boxity tspec2
+    else
+        ty
+
+let retargetILMethodRef (ilg: ILGlobals) (mref: ILMethodRef) =
+    let argTypes1 = mref.ArgTypes
+    let argTypes2 = mref.ArgTypes |> List.map (retargetILType ilg)
+    let declaringTypeRef1 = mref.DeclaringTypeRef
+    let declaringTypeRef2 = mref.DeclaringTypeRef |> retargetILTypeRef ilg
+    let returnType1 = mref.ReturnType
+    let returnType2 = mref.ReturnType |> retargetILType ilg
+
+    if areReferencesEqualList argTypes1 argTypes2 && declaringTypeRef1 === declaringTypeRef2 && returnType1 === returnType2 then
+        mref
+    else
+        ILMethodRef.Create(declaringTypeRef2, mref.CallingConv, mref.Name, mref.GenericArity, argTypes2, returnType2)
+
+let retargetILMethodSpec (ilg: ILGlobals) (mspec: ILMethodSpec) =
+    let declaringType1 = mspec.DeclaringType
+    let declaringType2 = mspec.DeclaringType |> retargetILType ilg
+    let mref1 = mspec.MethodRef
+    let mref2 = mspec.MethodRef |> retargetILMethodRef ilg
+    let genericArgs1 = mspec.GenericArgs
+    let genericArgs2 = mspec.GenericArgs |> List.map (retargetILType ilg)
+    
+    if declaringType1 === declaringType2 && mref1 === mref2 && areReferencesEqualList genericArgs1 genericArgs2 then
+        mspec
+    else
+        ILMethodSpec.Create(declaringType2, mref2, genericArgs2)
+
+let rec retargetILAttribElem (ilg: ILGlobals) (attrElem: ILAttribElem) =
+    match attrElem with
+    | ILAttribElem.Type (Some ty1) ->
+        let ty2 = ty1 |> retargetILType ilg
+        if ty1 === ty2 then
+            attrElem
+        else
+            ILAttribElem.Type (Some ty2)
+    | ILAttribElem.TypeRef (Some tref1) ->
+        let tref2 = tref1 |> retargetILTypeRef ilg
+        if tref1 === tref2 then
+            attrElem
+        else
+            ILAttribElem.TypeRef (Some tref2)
+    | ILAttribElem.Array (ty1, attrElems1) ->
+        let ty2 = ty1 |> retargetILType ilg
+        let attrElems2 = attrElems1 |> List.map (retargetILAttribElem ilg)
+        if ty1 === ty2 && areReferencesEqualList attrElems1 attrElems2 then
+            attrElem
+        else
+            ILAttribElem.Array(ty2, attrElems2)
+    | _ ->
+        attrElem
+
+let retargetILAttributeNamedArg (ilg: ILGlobals) (namedArg: (string * ILType * bool * ILAttribElem)) =
+    let (nm, ty1, cond, element1) = namedArg
+    let ty2 = ty1 |> retargetILType ilg
+    let element2 = element1 |> retargetILAttribElem ilg
+
+    if ty1 === ty2 && element1 === element2 then
+        namedArg
+    else
+        (nm, ty2, cond, element2)
+
+let retargetILAttribute (ilg: ILGlobals) (attr: ILAttribute) =
+    match attr with
+    | ILAttribute.Encoded (mspec1, data, elements1) ->
+        let mspec2 = mspec1 |> retargetILMethodSpec ilg
+        let elements2 = elements1 |> List.map (retargetILAttribElem ilg)
+
+        if mspec1 === mspec2 && areReferencesEqualList elements1 elements2 then
+            attr
+        else
+            ILAttribute.Encoded (mspec2, data, elements2)
+
+    | ILAttribute.Decoded (mspec1, fixedArgs1, namedArgs1) ->
+        let mspec2 = mspec1 |> retargetILMethodSpec ilg
+        let fixedArgs2 = fixedArgs1 |> List.map (retargetILAttribElem ilg)
+        let namedArgs2 = namedArgs1 |> List.map (retargetILAttributeNamedArg ilg)
+
+        if mspec1 === mspec2 && areReferencesEqualList fixedArgs1 fixedArgs2 && areReferencesEqualList namedArgs1 namedArgs2 then
+            attr
+        else
+            ILAttribute.Decoded (mspec2, fixedArgs2, namedArgs2)
+
+let retargetILMethodDef (ilg: ILGlobals) (mdef: ILMethodDef) =
+    let customAttrs1 = mdef.CustomAttrs.AsArray
+    let customAttrs2 = mdef.CustomAttrs.AsArray |> Array.map (retargetILAttribute ilg)
+    mdef.
 
 // --------------------------------------------------------------------
 // Instantiate polymorphism in types
