@@ -928,7 +928,8 @@ type ILMetadataReader =
     securityDeclsReader_TypeDef: ILSecurityDeclsStored
     securityDeclsReader_MethodDef: ILSecurityDeclsStored
     securityDeclsReader_Assembly: ILSecurityDeclsStored
-    typeDefReader: ILTypeDefStored }
+    typeDefReader: ILTypeDefStored
+    mutable lazyAssemblyRef: ILAssemblyRef option }
    
 
 let seekReadUInt16Adv mdv (addr: byref<int>) =  
@@ -1419,9 +1420,17 @@ let rec seekReadModule (ctxt: ILMetadataReader) canReduceMemory (pectxtEager: PE
     let ilModuleName = readStringHeap ctxt nameIdx
     let nativeResources = readNativeResources pectxtEager
 
-    { Manifest =
-         if ctxt.getNumRows TableNames.Assembly > 0 then Some (seekReadAssemblyManifest ctxt pectxtEager 1) 
-         else None
+    let manifestOpt =
+        if ctxt.getNumRows TableNames.Assembly > 0 then Some (seekReadAssemblyManifest ctxt pectxtEager 1) 
+        else None
+
+    let assemblyRefOpt =
+        manifestOpt
+        |> Option.map mkRefToILAssembly
+
+    ctxt.lazyAssemblyRef <- assemblyRefOpt
+
+    { Manifest = manifestOpt
       CustomAttrsStored = ctxt.customAttrsReader_Module
       MetadataIndex = idx
       Name = ilModuleName
@@ -1682,7 +1691,11 @@ and seekReadTypeDefAsTypeRef (ctxt: ILMetadataReader) idx =
          tref.Enclosing@[tref.Name]
      let (_, nameIdx, namespaceIdx, _, _, _) = seekReadTypeDefRow ctxt idx
      let nm = readBlobHeapAsTypeName ctxt (nameIdx, namespaceIdx)
-     ILTypeRef.Create(scope=ILScopeRef.Local, enclosing=enc, name = nm )
+     let scope =
+         match ctxt.lazyAssemblyRef with
+         | None -> ILScopeRef.Local
+         | Some aref -> ILScopeRef.Assembly aref
+     ILTypeRef.Create(scope=scope, enclosing=enc, name = nm )
 
 and seekReadTypeRef (ctxt: ILMetadataReader) idx = ctxt.seekReadTypeRef idx
 and seekReadTypeRefUncached ctxtH idx =
@@ -1763,7 +1776,12 @@ and seekReadImplAsScopeRef (ctxt: ILMetadataReader) mdv (TaggedIndex(tag, idx) )
 
 and seekReadTypeRefScope (ctxt: ILMetadataReader) mdv (TaggedIndex(tag, idx) ) =
     match tag with 
-    | tag when tag = rs_Module -> ILScopeRef.Local, []
+    | tag when tag = rs_Module ->
+        let scope =
+            match ctxt.lazyAssemblyRef with
+            | None -> ILScopeRef.Local
+            | Some aref -> ILScopeRef.Assembly aref
+        scope, []
     | tag when tag = rs_ModuleRef -> ILScopeRef.Module (seekReadModuleRef ctxt mdv idx), []
     | tag when tag = rs_AssemblyRef -> ILScopeRef.Assembly (seekReadAssemblyRef ctxt idx), []
     | tag when tag = rs_TypeRef -> 
@@ -3494,7 +3512,8 @@ let openMetadataReader (fileName, mdfile: BinaryFile, metadataPhysLoc, peinfo, p
           stringsBigness=stringsBigness
           guidsBigness=guidsBigness
           blobsBigness=blobsBigness
-          tableBigness=tableBigness } 
+          tableBigness=tableBigness
+          lazyAssemblyRef = None } 
     ctxtH := Some ctxt
      
     let ilModule = seekReadModule ctxt reduceMemoryUsage pectxtEager pevEager peinfo (System.Text.Encoding.UTF8.GetString (ilMetadataVersion, 0, ilMetadataVersion.Length)) 1

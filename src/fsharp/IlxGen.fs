@@ -1395,7 +1395,8 @@ type AssemblyBuilder(cenv: cenv, anonTypeTable: AnonTypeGenerationTable) as mgbu
 
         let ilTy = mkILNamedTy (if isStruct then ILBoxity.AsValue else ILBoxity.AsObject) ilTypeRef (List.map snd propTys)
 
-        if ilTypeRef.Scope.IsLocalRef then
+        // Is the scope local to the ccu
+        if ilTypeRef.Scope = cenv.viewCcu.ILScopeRef then
 
             let flds = [ for (i, nm) in Array.indexed nms -> (nm, nm + "@", ILType.TypeVar (uint16 i)) ]
 

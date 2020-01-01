@@ -5380,7 +5380,8 @@ let GetInitialTcState(m, ccuName, tcConfig: TcConfig, tcGlobals, tcImports: TcIm
     ignore tcImports
 
     // Create a ccu to hold all the results of compilation 
-    let ccuType = NewCcuContents ILScopeRef.Local m ccuName (NewEmptyModuleOrNamespaceType Namespace)
+    let scoref = ILScopeRef.Assembly (mkSimpleAssemblyRef ccuName)
+    let ccuType = NewCcuContents scoref m ccuName (NewEmptyModuleOrNamespaceType Namespace)
 
     let ccuData: CcuData = 
         { IsFSharp=true
@@ -5395,7 +5396,7 @@ let GetInitialTcState(m, ccuName, tcConfig: TcConfig, tcGlobals, tcImports: TcIm
           Stamp = newStamp()
           QualifiedName= None
           SourceCodeDirectory = tcConfig.implicitIncludeDir 
-          ILScopeRef=ILScopeRef.Local
+          ILScopeRef=scoref
           Contents=ccuType
           MemberSignatureEquality= (Tastops.typeEquivAux EraseAll tcGlobals)
           TypeForwarders=Map.empty }
