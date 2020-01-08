@@ -284,6 +284,37 @@ type public FSharpChecker =
     member GetBackgroundCheckResultsForFileInProject : filename : string * options : FSharpProjectOptions * ?userOpName: string -> Async<FSharpParseFileResults * FSharpCheckFileResults>
 
     /// <summary>
+    /// <para>Optimized find references for a given symbol in a file of project.</para>
+    /// <para>All files are read from the FileSystem API, including the file being checked.</para>
+    /// </summary>
+    ///
+    /// <param name="filename">The filename for the file.</param>
+    /// <param name="options">The options for the project or script, used to determine active --define conditionals and other options relevant to parsing.</param>
+    /// <param name="symbol">The symbol to find all uses in the file.</param>
+    /// <param name="userOpName">An optional string used for tracing compiler operations associated with this request.</param>
+    member FindBackgroundReferencesInFile : filename : string * options : FSharpProjectOptions * symbol: FSharpSymbol * ?userOpName: string -> Async<range seq>
+
+    /// <summary>
+    /// <para>Try to get a most recent semantic classification for a file.</para>
+    /// <para>All files are read from the FileSystem API, including the file being checked.</para>
+    /// </summary>
+    ///
+    /// <param name="filename">The filename for the file.</param>
+    /// <param name="options">The options for the project or script, used to determine active --define conditionals and other options relevant to parsing.</param>
+    /// <param name="userOpName">An optional string used for tracing compiler operations associated with this request.</param>
+    member TryGetBackgroundRecentSemanticClassificationForFile : filename : string * options : FSharpProjectOptions * ?userOpName: string -> ((range * SemanticClassificationType) []) option
+
+    /// <summary>
+    /// <para>Get semantic classification for a file.</para>
+    /// <para>All files are read from the FileSystem API, including the file being checked.</para>
+    /// </summary>
+    ///
+    /// <param name="filename">The filename for the file.</param>
+    /// <param name="options">The options for the project or script, used to determine active --define conditionals and other options relevant to parsing.</param>
+    /// <param name="userOpName">An optional string used for tracing compiler operations associated with this request.</param>
+    member GetBackgroundSemanticClassificationForFile : filename : string * options : FSharpProjectOptions * ?userOpName: string -> Async<(range * SemanticClassificationType) []>
+
+    /// <summary>
     /// Compile using the given flags.  Source files names are resolved via the FileSystem API.
     /// The output file must be given by a -o flag.
     /// The first argument is ignored and can just be "fsc.exe".

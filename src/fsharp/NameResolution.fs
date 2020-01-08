@@ -1702,6 +1702,8 @@ type TcSymbolUses(g, capturedNameResolutions: ResizeArray<CapturedNameResolution
 
     member this.GetFormatSpecifierLocationsAndArity() = formatSpecifierLocations
 
+    static member Empty = TcSymbolUses(Unchecked.defaultof<_>, ResizeArray(), [||])
+
 /// An accumulator for the results being emitted into the tcSink.
 type TcResultsSinkImpl(g, ?sourceText: ISourceText) =
     let capturedEnvs = ResizeArray<_>()
@@ -1749,6 +1751,18 @@ type TcResultsSinkImpl(g, ?sourceText: ISourceText) =
 
     member this.GetOpenDeclarations() =
         capturedOpenDeclarations |> Seq.distinctBy (fun x -> x.Range, x.AppliedScope, x.IsOwnNamespace) |> Seq.toArray
+
+    member this.FindItemUses(item: Item) =
+        capturedNameResolutions
+        |> Seq.choose (fun cnr ->
+            if ItemsAreEffectivelyEqual g cnr.Item item then
+                Some cnr.Range
+            else
+                None)
+        |> Seq.cache
+
+    member this.GetFormatSpecifierLocations() =
+        capturedFormatSpecifierLocations.ToArray()
 
     interface ITypecheckResultsSink with
         member sink.NotifyEnvWithScope(m, nenv, ad) =

@@ -326,6 +326,9 @@ type internal TcSymbolUses =
     /// Get the locations of all the printf format specifiers in the file
     member GetFormatSpecifierLocationsAndArity : unit -> (range * int)[]
 
+    /// Represents the empty set of symbol uses
+    static member Empty : TcSymbolUses
+
 /// Represents open declaration statement.
 type internal OpenDeclaration =
     { /// Long identifier as it's presented in source code.
@@ -391,6 +394,12 @@ type internal TcResultsSinkImpl =
 
     /// Get all open declarations reported to the sink
     member GetOpenDeclarations : unit -> OpenDeclaration[]
+
+    /// Find all ranges given an item
+    member FindItemUses : Item -> range seq
+
+    /// Get the format specifier locations
+    member GetFormatSpecifierLocations : unit -> (range * int)[]
 
     interface ITypecheckResultsSink
 

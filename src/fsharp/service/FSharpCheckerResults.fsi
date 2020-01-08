@@ -56,24 +56,6 @@ type public FSharpProjectContext =
     /// Get the accessibility rights for this project context w.r.t. InternalsVisibleTo attributes granting access to other assemblies
     member AccessibilityRights : FSharpAccessibilityRights
 
-[<RequireQualifiedAccess>]
-type public SemanticClassificationType =
-    | ReferenceType
-    | ValueType
-    | UnionCase
-    | Function
-    | Property
-    | MutableVar
-    | Module
-    | Printf
-    | ComputationExpression
-    | IntrinsicFunction
-    | Enumeration
-    | Interface
-    | TypeArgument
-    | Operator
-    | Disposable
-
 /// Options used to determine active --define conditionals and other options relevant to parsing files in a project
 type public FSharpParsingOptions =
     { 

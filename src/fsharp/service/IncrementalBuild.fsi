@@ -1,5 +1,41 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
+namespace FSharp.Compiler.SourceCodeServices
+
+[<RequireQualifiedAccess>]
+type SemanticClassificationType =
+    | ReferenceType
+    | ValueType
+    | UnionCase
+    | Function
+    | Property
+    | MutableVar
+    | Module
+    | Printf
+    | ComputationExpression
+    | IntrinsicFunction
+    | Enumeration
+    | Interface
+    | TypeArgument
+    | Operator
+    | Disposable
+
+[<AutoOpen>]
+module internal TcResolutionsExtensions =
+
+    open FSharp.Compiler
+    open FSharp.Compiler.Range
+    open FSharp.Compiler.Tastops
+    open FSharp.Compiler.TcGlobals
+    open FSharp.Compiler.NameResolution
+    open FSharp.Compiler.AccessibilityLogic
+
+    val (|CNR|) : CapturedNameResolution -> pos * Item * ItemOccurence * DisplayEnv * NameResolutionEnv * AccessorDomain * range
+
+    type TcResolutions with
+
+        member GetSemanticClassification: g: TcGlobals * amap: Import.ImportMap * formatSpecifierLocations: (range * int) [] * range: range option -> (range * SemanticClassificationType) []
+
 namespace FSharp.Compiler
 
 open System
@@ -160,6 +196,13 @@ type internal IncrementalBuilder =
       ///
       /// This may be a marginally long-running operation (parses are relatively quick, only one file needs to be parsed)
       member GetParseResultsForFile : CompilationThreadToken * filename:string -> Cancellable<Ast.ParsedInput option * Range.range * string * (PhasedDiagnostic * FSharpErrorSeverity)[]>
+
+      /// Optimized find references for the given symbol in a file.
+      /// Returns a list of ranges where the symbol is used and full semantic classification for the file.
+      member FindReferencesInFile : CompilationThreadToken * filename:string * FSharpSymbol -> Cancellable<(range seq * (range * SemanticClassificationType) [])>
+
+      /// Returns full semantic classification for the file.
+      member GetSemanticClassificationForFile : CompilationThreadToken * filename:string -> Cancellable<(range * SemanticClassificationType) []>
 
       static member TryCreateBackgroundBuilderForProjectOptions : CompilationThreadToken * ReferenceResolver.Resolver * defaultFSharpBinariesDir: string * FrameworkImportsCache * scriptClosureOptions:LoadClosure option * sourceFiles:string list * commandLineArgs:string list * projectReferences: IProjectReference list * projectDirectory:string * useScriptResolutionRules:bool * keepAssemblyContents: bool * keepAllBackgroundResolutions: bool * maxTimeShareMilliseconds: int64 * tryGetMetadataSnapshot: ILBinaryReader.ILReaderTryGetMetadataSnapshot * suggestNamesForErrors: bool -> Cancellable<IncrementalBuilder option * FSharpErrorInfo[]>
 
