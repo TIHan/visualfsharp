@@ -48,7 +48,7 @@ module internal SymbolHelpers =
                         do! onFound symbolUse
                 | _ -> ()
             })
-        |> Async.Parallel
+        |> Async.Sequential
 
     let getSymbolUsesInSolution (symbol: FSharpSymbol, declLoc: SymbolDeclarationLocation, checkFileResults: FSharpCheckFileResults,
                                  projectInfoManager: FSharpProjectOptionsManager, checker: FSharpChecker, solution: Solution, userOpName) =
