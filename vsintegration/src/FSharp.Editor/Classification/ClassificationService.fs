@@ -31,6 +31,18 @@ type internal FSharpClassificationService
     ) =
     static let userOpName = "SemanticColorization"
 
+    static let addSemanticClassification classificationData sourceText (result: List<ClassifiedSpan>) (targetSpan: TextSpan) =
+        for struct(range, classificationType) in classificationData do
+            match RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, range) with
+            | None -> ()
+            | Some span -> 
+                let span = 
+                    match classificationType with
+                    | SemanticClassificationType.Printf -> span
+                    | _ -> Tokenizer.fixupSpan(sourceText, span)
+                if targetSpan.Contains span then
+                    result.Add(ClassifiedSpan(span, FSharpClassificationTypes.getClassificationTypeName(classificationType)))
+
     interface IFSharpClassificationService with
         // Do not perform classification if we don't have project options (#defines matter)
         member __.AddLexicalClassifications(_: SourceText, _: TextSpan, _: List<ClassifiedSpan>, _: CancellationToken) = ()
@@ -45,30 +57,22 @@ type internal FSharpClassificationService
             } |> RoslynHelpers.StartAsyncUnitAsTask cancellationToken
 
         member __.AddSemanticClassificationsAsync(document: Document, textSpan: TextSpan, result: List<ClassifiedSpan>, cancellationToken: CancellationToken) =
-            if not (document.Project.Solution.Workspace.IsDocumentOpen document.Id) then
-                System.Threading.Tasks.Task.CompletedTask
-            else
-                asyncMaybe {
-                    use _logBlock = Logger.LogBlock(LogEditorFunctionId.Classification_Semantic)
+            asyncMaybe {
+                use _logBlock = Logger.LogBlock(LogEditorFunctionId.Classification_Semantic)
 
-                    let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document, cancellationToken)
-                    let! sourceText = document.GetTextAsync(cancellationToken)
+                let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document, cancellationToken)
+                let! sourceText = document.GetTextAsync(cancellationToken)
+                if not (document.Project.Solution.Workspace.IsDocumentOpen document.Id) then
+                    let! classificationData = checkerProvider.Checker.TryGetBackgroundRecentSemanticClassificationForFile(document.FilePath, projectOptions, userOpName=userOpName)
+                    addSemanticClassification classificationData sourceText result textSpan
+                else
                     let! _, _, checkResults = checkerProvider.Checker.ParseAndCheckDocument(document, projectOptions, sourceText = sourceText, allowStaleResults = false, userOpName=userOpName) 
                     // it's crucial to not return duplicated or overlapping `ClassifiedSpan`s because Find Usages service crashes.
                     let targetRange = RoslynHelpers.TextSpanToFSharpRange(document.FilePath, textSpan, sourceText)
-                    let classificationData = checkResults.GetSemanticClassification (Some targetRange) |> Array.distinctBy fst
-                
-                    for (range, classificationType) in classificationData do
-                        match RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, range) with
-                        | None -> ()
-                        | Some span -> 
-                            let span = 
-                                match classificationType with
-                                | SemanticClassificationType.Printf -> span
-                                | _ -> Tokenizer.fixupSpan(sourceText, span)
-                            result.Add(ClassifiedSpan(span, FSharpClassificationTypes.getClassificationTypeName(classificationType)))
-                } 
-                |> Async.Ignore |> RoslynHelpers.StartAsyncUnitAsTask cancellationToken
+                    let classificationData = checkResults.GetSemanticClassification (Some targetRange)             
+                    addSemanticClassification classificationData sourceText result textSpan
+            } 
+            |> Async.Ignore |> RoslynHelpers.StartAsyncUnitAsTask cancellationToken
 
         // Do not perform classification if we don't have project options (#defines matter)
         member __.AdjustStaleClassification(_: SourceText, classifiedSpan: ClassifiedSpan) : ClassifiedSpan = classifiedSpan

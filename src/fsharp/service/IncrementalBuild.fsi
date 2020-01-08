@@ -34,7 +34,7 @@ module internal TcResolutionsExtensions =
 
     type TcResolutions with
 
-        member GetSemanticClassification: g: TcGlobals * amap: Import.ImportMap * formatSpecifierLocations: (range * int) [] * range: range option -> (range * SemanticClassificationType) []
+        member GetSemanticClassification: g: TcGlobals * amap: Import.ImportMap * formatSpecifierLocations: (range * int) [] * range: range option -> struct(range * SemanticClassificationType) []
 
 namespace FSharp.Compiler
 
@@ -199,10 +199,10 @@ type internal IncrementalBuilder =
 
       /// Optimized find references for the given symbol in a file.
       /// Returns a list of ranges where the symbol is used and full semantic classification for the file.
-      member FindReferencesInFile : CompilationThreadToken * filename:string * FSharpSymbol -> Cancellable<(range seq * (range * SemanticClassificationType) [])>
+      member FindReferencesInFile : CompilationThreadToken * filename:string * FSharpSymbol -> Cancellable<(range seq * struct(range * SemanticClassificationType) [])>
 
       /// Returns full semantic classification for the file.
-      member GetSemanticClassificationForFile : CompilationThreadToken * filename:string -> Cancellable<(range * SemanticClassificationType) []>
+      member GetSemanticClassificationForFile : CompilationThreadToken * filename:string -> Cancellable<struct(range * SemanticClassificationType) []>
 
       static member TryCreateBackgroundBuilderForProjectOptions : CompilationThreadToken * ReferenceResolver.Resolver * defaultFSharpBinariesDir: string * FrameworkImportsCache * scriptClosureOptions:LoadClosure option * sourceFiles:string list * commandLineArgs:string list * projectReferences: IProjectReference list * projectDirectory:string * useScriptResolutionRules:bool * keepAssemblyContents: bool * keepAllBackgroundResolutions: bool * maxTimeShareMilliseconds: int64 * tryGetMetadataSnapshot: ILBinaryReader.ILReaderTryGetMetadataSnapshot * suggestNamesForErrors: bool -> Cancellable<IncrementalBuilder option * FSharpErrorInfo[]>
 

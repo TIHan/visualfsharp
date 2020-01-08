@@ -90,14 +90,13 @@ type internal FSharpFindUsagesService
                 do! context.OnDefinitionFoundAsync(definitionItem) |> Async.AwaitTask |> liftAsync
 
             let onFound =
-                fun (symbolUse: FSharpSymbolUse) ->
+                fun (symbolUse: range) ->
                     async {
                         match declarationRange with
-                        | Some declRange when declRange = symbolUse.RangeAlternate -> ()
+                        | Some declRange when FSharp.Compiler.Range.equals declRange symbolUse -> ()
                         | _ ->
-                            // report a reference if we're interested in all _or_ if we're looking at an implementation
-                            if allReferences || symbolUse.IsFromDispatchSlotImplementation then
-                                let! referenceDocSpans = rangeToDocumentSpans(document.Project.Solution, symbolUse.RangeAlternate)
+                            if allReferences then
+                                let! referenceDocSpans = rangeToDocumentSpans(document.Project.Solution, symbolUse)
                                 match referenceDocSpans with
                                 | [] -> ()
                                 | _ ->
@@ -110,7 +109,7 @@ type internal FSharpFindUsagesService
             | Some SymbolDeclarationLocation.CurrentDocument ->
                 let! symbolUses = checkFileResults.GetUsesOfSymbolInFile(symbolUse.Symbol) |> liftAsync
                 for symbolUse in symbolUses do
-                    do! onFound symbolUse |> liftAsync
+                    do! onFound symbolUse.RangeAlternate |> liftAsync
             | scope ->
                 let projectsToCheck =
                     match scope with

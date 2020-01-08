@@ -393,8 +393,8 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
 
     let backgroundClassificationCacheLock = Lock<ClassificationCacheLockToken>()
     let backgroundClassificationCache = 
-        MruCache<ClassificationCacheLockToken,string * FSharpProjectOptions, (range * SemanticClassificationType)[]>
-            (keepStrongly=Environment.ProcessorCount,
+        MruCache<ClassificationCacheLockToken,string * FSharpProjectOptions, struct(range * SemanticClassificationType)[]>
+            (keepStrongly=Environment.ProcessorCount * 2,
              areSame=AreSameForChecking2,
              areSimilar=AreSubsumable2)
 

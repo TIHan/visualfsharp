@@ -23,6 +23,7 @@ type SemanticClassificationType =
 [<AutoOpen>]
 module TcResolutionsExtensions =
     open System.Diagnostics
+    open System.Collections.Generic
 
     open FSharp.Core.Printf
     open FSharp.Compiler
@@ -44,7 +45,7 @@ module TcResolutionsExtensions =
 
     type TcResolutions with
 
-        member sResolutions.GetSemanticClassification(g: TcGlobals, amap: Import.ImportMap, formatSpecifierLocations: (range * int) [], range: range option) : (range * SemanticClassificationType) [] =
+        member sResolutions.GetSemanticClassification(g: TcGlobals, amap: Import.ImportMap, formatSpecifierLocations: (range * int) [], range: range option) : struct(range * SemanticClassificationType) [] =
               ErrorScope.Protect Range.range0 
                (fun () -> 
                 let (|LegitTypeOccurence|_|) = function
@@ -104,12 +105,16 @@ module TcResolutionsExtensions =
                     (rfinfo.RecdField.IsMutable && rfinfo.LiteralValue.IsNone)
                     || Tastops.isRefCellTy g rfinfo.RecdField.FormalType
 
+                let duplicates = HashSet<range>({ new IEqualityComparer<range> with 
+                                                      member _.Equals(x1, x2) = Range.equals x1 x2 
+                                                      member _.GetHashCode o = o.GetHashCode() })
+
                 resolutions
                 |> Seq.choose (fun cnr ->
                     match cnr with
                     // 'seq' in 'seq { ... }' gets colored as keywords
                     | CNR(_, (Item.Value vref), ItemOccurence.Use, _, _, _, m) when valRefEq g g.seq_vref vref ->
-                        Some (m, SemanticClassificationType.ComputationExpression)
+                        Some struct(m, SemanticClassificationType.ComputationExpression)
                     | CNR(_, (Item.Value vref), _, _, _, _, m) when isValRefMutable vref ->
                         Some (m, SemanticClassificationType.MutableVar)
                     | CNR(_, Item.Value KeywordIntrinsicValue, ItemOccurence.Use, _, _, _, m) ->
@@ -165,8 +170,9 @@ module TcResolutionsExtensions =
                     | CNR(_, (Item.ActivePatternCase _ | Item.UnionCase _ | Item.ActivePatternResult _), _, _, _, _, m) ->
                         Some (m, SemanticClassificationType.UnionCase)
                     | _ -> None)
+                |> Seq.filter (fun struct(m, _) -> duplicates.Add m)
                 |> Seq.toArray
-                |> Array.append (formatSpecifierLocations |> Array.map (fun m -> fst m, SemanticClassificationType.Printf))
+                |> Array.append (formatSpecifierLocations |> Array.map (fun (m, _) -> struct(m, SemanticClassificationType.Printf)))
                ) 
                (fun msg -> 
                    Trace.TraceInformation(sprintf "FCS: recovering from error in GetSemanticClassification: '%s'" msg)
@@ -1334,6 +1340,23 @@ type PartialCheckResults =
           LatestImplementationFile = tcAcc.latestImplFile 
           LatestCcuSigForFile = tcAcc.latestCcuSigForFile }
 
+type TypeCheckAccumulator with
+
+    static member CreateDummy(result: PartialCheckResults) =
+        { tcState = result.TcState
+          tcImports = result.TcImports
+          tcGlobals = result.TcGlobals
+          tcConfig = result.TcConfig
+          tcEnvAtEndOfFile = result.TcEnvAtEnd
+          tcResolutionsRev = []
+          tcSymbolUsesRev = []
+          tcOpenDeclarationsRev = []
+          topAttribs = result.TopAttribs
+          latestImplFile = None
+          latestCcuSigForFile = result.LatestCcuSigForFile
+          tcDependencyFiles = result.TcDependencyFiles
+          tcModuleNamesDict = result.ModuleNamesDict
+          tcErrorsRev = result.TcErrorsRev }
 
 [<AutoOpen>]
 module Utilities = 

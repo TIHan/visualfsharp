@@ -1753,12 +1753,16 @@ type TcResultsSinkImpl(g, ?sourceText: ISourceText) =
         capturedOpenDeclarations |> Seq.distinctBy (fun x -> x.Range, x.AppliedScope, x.IsOwnNamespace) |> Seq.toArray
 
     member this.FindItemUses(item: Item) =
+        let duplicates = HashSet<range>({ new IEqualityComparer<range> with 
+                                              member _.Equals(x1, x2) = Range.equals x1 x2 
+                                              member _.GetHashCode o = o.GetHashCode() })
         capturedNameResolutions
         |> Seq.choose (fun cnr ->
             if ItemsAreEffectivelyEqual g cnr.Item item then
                 Some cnr.Range
             else
                 None)
+        |> Seq.filter duplicates.Add
         |> Seq.cache
 
     member this.GetFormatSpecifierLocations() =

@@ -1242,7 +1242,7 @@ type internal TypeCheckInfo
     member __.GetFormatSpecifierLocationsAndArity() = 
          sSymbolUses.GetFormatSpecifierLocationsAndArity()
 
-    member __.GetSemanticClassification(range: range option) : (range * SemanticClassificationType) [] =
+    member __.GetSemanticClassification(range: range option) : struct(range * SemanticClassificationType) [] =
         sResolutions.GetSemanticClassification(g, amap, sSymbolUses.GetFormatSpecifierLocationsAndArity(), range)
 
     /// The resolutions in the file
