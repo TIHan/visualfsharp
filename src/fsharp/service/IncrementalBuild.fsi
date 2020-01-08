@@ -108,7 +108,9 @@ type internal PartialCheckResults =
       /// Represents latest inferred signature contents.
       LatestCcuSigForFile: ModuleOrNamespaceType option
       
-      SemanticClassifications: struct(range * SemanticClassificationType) [] }
+      SemanticClassifications: struct(range * SemanticClassificationType) []
+      
+      SymbolKeys: struct(range * string) [] }
 
     member TcErrors: (PhasedDiagnostic * FSharpErrorSeverity)[]
 

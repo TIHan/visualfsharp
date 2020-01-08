@@ -2,6 +2,204 @@
 
 namespace FSharp.Compiler.SourceCodeServices
 
+open FSharp.Compiler
+open FSharp.Compiler.Tast
+open FSharp.Compiler.NameResolution
+
+type FSharpSymbolKeyBuilder () =
+
+    let builder = System.Text.StringBuilder(64)
+
+    let writeChar (c: char) =
+        builder.Append c |> ignore
+
+    let writeString (str: string) =
+        builder.Append str |> ignore
+
+    let writeInt32 (i: int) =
+        builder.Append i |> ignore
+
+    let writeStamp (stamp: Stamp) =
+        builder.Append stamp |> ignore
+
+    let writeRange (r: Range.range) =
+        builder.Append r.FileIndex |> ignore
+        builder.Append r.Start.Encoding |> ignore
+        builder.Append r.End.Encoding |> ignore
+
+    let writeEntityRef (eref: EntityRef) =
+        let r = eref.DefinitionRange
+        if Range.equals Range.range0 r then
+            writeChar 'E'
+            writeString eref.CompiledName
+            writeChar '#'
+            eref.CompilationPath.MangledPath
+            |> List.iter (fun str -> writeString str)
+        else
+            builder.Append 'e' |> ignore
+            builder.Append r.FileIndex |> ignore
+            builder.Append r.Start.Encoding |> ignore
+            builder.Append r.End.Encoding |> ignore
+
+    let rec writeType (ty: TType) =
+        match ty with
+        | TType_forall (tps, ty) -> 
+            writeString "#o#"
+            tps |> List.iter writeTypar
+            writeType ty
+        | TType_app (tcref, _) -> 
+            writeEntityRef tcref
+        | TType_tuple (_, tinst) ->
+            tinst |> List.iter writeType
+        | TType_anon (anonInfo, tinst) -> 
+            writeString "#a#"
+            writeString anonInfo.ILTypeRef.BasicQualifiedName
+            tinst |> List.iter writeType
+        | TType_fun (d, r) ->
+            writeString "#f#"
+            writeType d
+            writeType r
+        | TType_measure ms -> 
+            writeMeasure ms
+        | TType_var tp ->
+            writeTypar tp
+        | TType_ucase (uc, _) ->
+            writeString "#uc#"
+            writeRange uc.DefinitionRange
+
+    and writeMeasure (ms: Measure) =
+        writeString "#m#"
+        match ms with
+        | Measure.Var typar -> writeTypar typar
+        | Measure.Con tcref -> writeEntityRef tcref
+        | Measure.Prod(ms1, ms2) ->
+            writeMeasure ms1
+            writeMeasure ms2
+        | Measure.Inv ms ->
+            writeString "#inv#"
+            writeMeasure ms
+        | Measure.One ->
+            writeString "#1"
+        | Measure.RationalPower _ ->
+            writeString "#power#"
+
+    and writeTypar (typar: Typar) =
+        match typar.Solution with
+        | Some ty -> writeType ty
+        | _ ->
+            writeString "#t#"
+            writeStamp typar.Stamp
+
+    let writeValRef (vref: ValRef) =
+        let r = vref.DefinitionRange
+        if Range.equals Range.range0 r then
+            writeChar 'V'
+            writeString vref.LogicalName
+            writeChar '#'
+            match vref.DeclaringEntity with
+            | ParentNone -> writeChar 'p'
+            | Parent eref -> 
+                writeChar 'P'
+                writeEntityRef eref
+        else
+            builder.Append 'v' |> ignore
+            builder.Append r.FileIndex |> ignore
+            builder.Append r.Start.Encoding |> ignore
+            builder.Append r.End.Encoding |> ignore
+
+    member _.WriteItem (item: Item) =
+        match item with
+        | Item.Value vref -> 
+            writeValRef vref
+
+        | Item.UnionCase(info, _) -> 
+            writeEntityRef info.TyconRef
+            builder.Append info.UnionCaseRef.CaseName |> ignore
+            
+        | Item.ActivePatternResult(info, _, _, _) ->
+            let r = info.Range
+            if Range.equals Range.range0 r then
+                writeString "X#"
+                info.ActiveTagsWithRanges
+                |> List.iter (fun (nm, r) ->
+                    writeString nm
+                    writeRange r)
+            else
+                writeString "x#"
+                writeRange r
+
+        | Item.ActivePatternCase elemRef ->
+            writeString "apc#"
+            writeValRef elemRef.ActivePatternVal
+            elemRef.ActivePatternInfo.ActiveTagsWithRanges
+            |> List.iter (fun (nm, r) ->
+                writeString nm
+                writeRange r)
+
+        | Item.ExnCase tcref ->
+            writeString "exn#"
+            writeEntityRef tcref
+
+        | Item.RecdField info ->
+            writeString "rf#"
+            writeEntityRef info.TyconRef
+            writeType info.FieldType
+
+        | Item.AnonRecdField(info, tys, i, _) ->
+            writeString "an#"
+            writeString info.ILTypeRef.BasicQualifiedName
+            tys |> List.iter writeType
+            writeChar '#'
+            writeInt32 i
+
+        | Item.NewDef ident ->
+            writeString "nd#"
+            writeString ident.idText
+
+        | Item.ILField info ->
+            writeString "ilf#"
+            writeString info.ILTypeRef.BasicQualifiedName
+            writeString info.FieldName
+
+        | Item.Event info ->
+            writeString "evt#"
+            writeString info.EventName
+            writeEntityRef info.DeclaringTyconRef
+
+        | Item.Property(nm, _) ->
+            writeString "pro#"
+            writeString nm
+
+        | Item.TypeVar(_, typar) ->
+            writeTypar typar
+
+        | Item.Types(_, [ty]) ->
+            writeType ty
+
+        | Item.UnqualifiedType [tcref] ->
+            writeEntityRef tcref
+
+        | Item.MethodGroup _ -> ()
+        | Item.CtorGroup _ -> ()
+        | Item.FakeInterfaceCtor _ -> ()
+        | Item.DelegateCtor _ -> ()
+        | Item.Types _ -> ()
+        | Item.CustomOperation _ -> ()
+        | Item.CustomBuilder _ -> ()
+        | Item.ModuleOrNamespaces _ -> ()
+        | Item.ImplicitOp _ -> ()
+        | Item.ArgName _ -> ()
+        | Item.SetterArg _ -> ()
+        | Item.UnqualifiedType _ -> ()
+
+    member this.GetAndReset() =
+        if builder.Length > 0 then
+            let key = builder.ToString()
+            builder.Clear() |> ignore
+            key
+        else
+            ""
+
 [<RequireQualifiedAccess>]
 type SemanticClassificationType =
     | ReferenceType
@@ -1227,7 +1425,8 @@ type TypeCheckAccumulator =
       /// Accumulated errors, last file first
       tcErrorsRev:(PhasedDiagnostic * FSharpErrorSeverity)[] list
       
-      tcClassifications: struct(range * SemanticClassificationType)[] }
+      tcClassifications: struct(range * SemanticClassificationType)[]
+      tcSymbolKeys: struct(range * string)[] }
 
       
 /// Global service state
@@ -1322,7 +1521,9 @@ type PartialCheckResults =
 
       LatestCcuSigForFile: ModuleOrNamespaceType option
       
-      SemanticClassifications: struct(range * SemanticClassificationType) [] }
+      SemanticClassifications: struct(range * SemanticClassificationType) []
+      
+      SymbolKeys: struct(range * string) [] }
 
     member x.TcErrors  = Array.concat (List.rev x.TcErrorsRev)
     member x.TcSymbolUses  = List.rev x.TcSymbolUsesRev
@@ -1343,7 +1544,8 @@ type PartialCheckResults =
           TimeStamp = timestamp 
           LatestImplementationFile = tcAcc.latestImplFile 
           LatestCcuSigForFile = tcAcc.latestCcuSigForFile
-          SemanticClassifications = tcAcc.tcClassifications }
+          SemanticClassifications = tcAcc.tcClassifications
+          SymbolKeys = tcAcc.tcSymbolKeys }
 
 type TypeCheckAccumulator with
 
@@ -1362,7 +1564,8 @@ type TypeCheckAccumulator with
           tcDependencyFiles = result.TcDependencyFiles
           tcModuleNamesDict = result.ModuleNamesDict
           tcErrorsRev = result.TcErrorsRev
-          tcClassifications = [||] }
+          tcClassifications = [||]
+          tcSymbolKeys = [||] }
 
 [<AutoOpen>]
 module Utilities = 
@@ -1553,13 +1756,15 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
               tcDependencyFiles=basicDependencies
               tcErrorsRev = [ initialErrors ] 
               tcModuleNamesDict = Map.empty
-              tcClassifications = [||] }   
+              tcClassifications = [||]
+              tcSymbolKeys = [||] }   
         return tcAcc }
 
     let areFileNamesEqual (filename1: string) (filename2: string) =
         String.Compare(filename1, filename2, StringComparison.CurrentCultureIgnoreCase)=0
                 || String.Compare(FileSystem.GetFullPathShim filename1, FileSystem.GetFullPathShim filename2, StringComparison.CurrentCultureIgnoreCase)=0
                 
+    let symbolBuilder = FSharpSymbolKeyBuilder()
     let mutable findSymbol: (FSharpSymbol * string) option = None
     let mutable findSymbolResults: (range seq) option = None
     /// This is a build task function that gets placed into the build rules as the computation for a Vector.ScanLeft
@@ -1604,6 +1809,14 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
                     RequireCompilationThread ctok // Note: events get raised on the CompilationThread
 
+                    let symbolKeys =
+                        sink.GetResolutions().CapturedNameResolutions
+                        |> Seq.map (fun cnr -> 
+                            symbolBuilder.WriteItem cnr.Item
+                            let key = symbolBuilder.GetAndReset()
+                            struct(cnr.Range, key))
+                        |> Array.ofSeq
+
                     fileChecked.Trigger filename
                     let newErrors = Array.append parseErrors (capturingErrorLogger.GetErrors())
                     return {tcAcc with tcState=tcState 
@@ -1617,7 +1830,8 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                                        tcErrorsRev = newErrors :: tcAcc.tcErrorsRev 
                                        tcModuleNamesDict = moduleNamesDict
                                        tcDependencyFiles = filename :: tcAcc.tcDependencyFiles
-                                       tcClassifications = sink.GetResolutions().GetSemanticClassification(tcAcc.tcGlobals, tcAcc.tcImports.GetImportMap(), sink.GetFormatSpecifierLocations(), None) } 
+                                       tcClassifications = sink.GetResolutions().GetSemanticClassification(tcAcc.tcGlobals, tcAcc.tcImports.GetImportMap(), sink.GetFormatSpecifierLocations(), None)
+                                       tcSymbolKeys = symbolKeys } 
                 }
                     
             // Run part of the Eventually<_> computation until a timeout is reached. If not complete, 
@@ -1902,33 +2116,45 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         return ParseTask ctok results
       }
 
-    member builder.FindReferencesInFile (ctok: CompilationThreadToken, filename, symbol) =
+    member builder.FindReferencesInFile (ctok: CompilationThreadToken, filename, symbol: FSharpSymbol) =
         cancellable {
-            let! ct = Cancellable.token ()
+         //   captureResolutions <- true
+            symbolBuilder.WriteItem symbol.Item
+            let key1 = symbolBuilder.GetAndReset()
+            let! checkResults = builder.GetCheckResultsAfterFileInProject (ctok, filename)
+            return 
+                checkResults.SymbolKeys 
+                |> Array.choose (fun struct(m, key2) ->
+                    if key1 = key2 then
+                        Some m
+                    else
+                        None) :> range seq }
+        //cancellable {
+        //    let! ct = Cancellable.token ()
 
-          //  captureResolutions <- true
-            findSymbol <- Some(symbol, filename)
-            let checkResults = builder.GetCheckResultsAfterFileInProject (ctok, filename) |> Cancellable.run ct
-            findSymbol <- None
-          //  captureResolutions <- false
+        //  //  captureResolutions <- true
+        //    findSymbol <- Some(symbol, filename)
+        //    let checkResults = builder.GetCheckResultsAfterFileInProject (ctok, filename) |> Cancellable.run ct
+        //    findSymbol <- None
+        //  //  captureResolutions <- false
 
-            let finalResults =
-                match checkResults with
-                | ValueOrCancelled.Value _ ->
-                    let results =
-                        match findSymbolResults with
-                        | Some itemUses ->           
-                            itemUses
-                        | _ -> 
-                            Seq.empty
+        //    let finalResults =
+        //        match checkResults with
+        //        | ValueOrCancelled.Value _ ->
+        //            let results =
+        //                match findSymbolResults with
+        //                | Some itemUses ->           
+        //                    itemUses
+        //                | _ -> 
+        //                    Seq.empty
 
-                    Cancellable.ret results
-                | _ ->
-                    Cancellable.canceled()
+        //            Cancellable.ret results
+        //        | _ ->
+        //            Cancellable.canceled()
 
-            findSymbolResults <- None
-          //  captureResolutionsResult <- None
-            return! finalResults }
+        //    findSymbolResults <- None
+        //  //  captureResolutionsResult <- None
+        //    return! finalResults }
 
     member builder.GetSemanticClassificationForFile (ctok: CompilationThreadToken, filename) =
         cancellable {
