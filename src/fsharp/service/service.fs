@@ -391,13 +391,6 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
                 hash
                 (fun (f1, o1, v1) (f2, o2, v2) -> f1 = f2 && v1 = v2 && FSharpProjectOptions.AreSameForChecking(o1, o2)))
 
-    let backgroundClassificationCacheLock = Lock<ClassificationCacheLockToken>()
-    let backgroundClassificationCache = 
-        MruCache<ClassificationCacheLockToken,string * FSharpProjectOptions, struct(range * SemanticClassificationType)[]>
-            (keepStrongly=Environment.ProcessorCount * 2,
-             areSame=AreSameForChecking2,
-             areSimilar=AreSubsumable2)
-
     static let mutable foregroundParseCount = 0
 
     static let mutable foregroundTypeCheckCount = 0
@@ -713,14 +706,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             match builderOpt with
             | None -> return Seq.empty
             | Some builder -> 
-                let! (symbolUses, classifications) = builder.FindReferencesInFile(ctok, filename, symbol)
-
-                backgroundClassificationCacheLock.AcquireLock (fun ltok -> backgroundClassificationCache.Set(ltok,(filename,options),classifications))
-
-                return symbolUses })
-
-    member __.TryGetRecentSemanticClassificationForFile(filename: string, options: FSharpProjectOptions, _userOpName: string) =
-        backgroundClassificationCacheLock.AcquireLock (fun ltok -> backgroundClassificationCache.TryGet(ltok,(filename,options)))
+                return! builder.FindReferencesInFile(ctok, filename, symbol) })
 
     member __.GetSemanticClassificationForFile(filename: string, options: FSharpProjectOptions, userOpName: string) =
         reactor.EnqueueAndAwaitOpAsync(userOpName, "GetSemanticClassificationForFile", filename, fun ctok -> 
@@ -731,7 +717,7 @@ type BackgroundCompiler(legacyReferenceResolver, projectCacheSize, keepAssemblyC
             | Some builder -> 
                 let! classifications = builder.GetSemanticClassificationForFile(ctok, filename)
 
-                backgroundClassificationCacheLock.AcquireLock (fun ltok -> backgroundClassificationCache.Set(ltok,(filename,options),classifications))
+               // backgroundClassificationCacheLock.AcquireLock (fun ltok -> backgroundClassificationCache.Set(ltok,(filename,options),classifications))
 
                 return classifications })
 
@@ -1178,11 +1164,6 @@ type FSharpChecker(legacyReferenceResolver,
         let userOpName = defaultArg userOpName "Unknown"
         ic.CheckMaxMemoryReached()
         backgroundCompiler.FindReferencesInFile(filename, options, symbol, userOpName)
-
-    member ic.TryGetBackgroundRecentSemanticClassificationForFile(filename:string, options: FSharpProjectOptions, ?userOpName) =
-        let userOpName = defaultArg userOpName "Unknown"
-        ic.CheckMaxMemoryReached()
-        backgroundCompiler.TryGetRecentSemanticClassificationForFile(filename, options, userOpName)
 
     member ic.GetBackgroundSemanticClassificationForFile(filename:string, options: FSharpProjectOptions, ?userOpName) =
         let userOpName = defaultArg userOpName "Unknown"

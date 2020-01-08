@@ -106,7 +106,9 @@ type internal PartialCheckResults =
       LatestImplementationFile: TypedImplFile option 
       
       /// Represents latest inferred signature contents.
-      LatestCcuSigForFile: ModuleOrNamespaceType option}
+      LatestCcuSigForFile: ModuleOrNamespaceType option
+      
+      SemanticClassifications: struct(range * SemanticClassificationType) [] }
 
     member TcErrors: (PhasedDiagnostic * FSharpErrorSeverity)[]
 
@@ -199,7 +201,7 @@ type internal IncrementalBuilder =
 
       /// Optimized find references for the given symbol in a file.
       /// Returns a list of ranges where the symbol is used and full semantic classification for the file.
-      member FindReferencesInFile : CompilationThreadToken * filename:string * FSharpSymbol -> Cancellable<(range seq * struct(range * SemanticClassificationType) [])>
+      member FindReferencesInFile : CompilationThreadToken * filename:string * FSharpSymbol -> Cancellable<range seq>
 
       /// Returns full semantic classification for the file.
       member GetSemanticClassificationForFile : CompilationThreadToken * filename:string -> Cancellable<struct(range * SemanticClassificationType) []>

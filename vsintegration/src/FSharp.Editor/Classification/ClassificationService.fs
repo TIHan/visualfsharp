@@ -63,7 +63,7 @@ type internal FSharpClassificationService
                 let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document, cancellationToken)
                 let! sourceText = document.GetTextAsync(cancellationToken)
                 if not (document.Project.Solution.Workspace.IsDocumentOpen document.Id) then
-                    let! classificationData = checkerProvider.Checker.TryGetBackgroundRecentSemanticClassificationForFile(document.FilePath, projectOptions, userOpName=userOpName)
+                    let! classificationData = checkerProvider.Checker.GetBackgroundSemanticClassificationForFile(document.FilePath, projectOptions, userOpName=userOpName) |> liftAsync
                     addSemanticClassification classificationData sourceText result textSpan
                 else
                     let! _, _, checkResults = checkerProvider.Checker.ParseAndCheckDocument(document, projectOptions, sourceText = sourceText, allowStaleResults = false, userOpName=userOpName) 

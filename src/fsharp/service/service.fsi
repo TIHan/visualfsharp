@@ -295,16 +295,6 @@ type public FSharpChecker =
     member FindBackgroundReferencesInFile : filename : string * options : FSharpProjectOptions * symbol: FSharpSymbol * ?userOpName: string -> Async<range seq>
 
     /// <summary>
-    /// <para>Try to get a most recent semantic classification for a file.</para>
-    /// <para>All files are read from the FileSystem API, including the file being checked.</para>
-    /// </summary>
-    ///
-    /// <param name="filename">The filename for the file.</param>
-    /// <param name="options">The options for the project or script, used to determine active --define conditionals and other options relevant to parsing.</param>
-    /// <param name="userOpName">An optional string used for tracing compiler operations associated with this request.</param>
-    member TryGetBackgroundRecentSemanticClassificationForFile : filename : string * options : FSharpProjectOptions * ?userOpName: string -> (struct(range * SemanticClassificationType) []) option
-
-    /// <summary>
     /// <para>Get semantic classification for a file.</para>
     /// <para>All files are read from the FileSystem API, including the file being checked.</para>
     /// </summary>

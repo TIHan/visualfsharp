@@ -1225,7 +1225,9 @@ type TypeCheckAccumulator =
       tcModuleNamesDict: ModuleNamesDict
 
       /// Accumulated errors, last file first
-      tcErrorsRev:(PhasedDiagnostic * FSharpErrorSeverity)[] list }
+      tcErrorsRev:(PhasedDiagnostic * FSharpErrorSeverity)[] list
+      
+      tcClassifications: struct(range * SemanticClassificationType)[] }
 
       
 /// Global service state
@@ -1318,7 +1320,9 @@ type PartialCheckResults =
 
       LatestImplementationFile: TypedImplFile option 
 
-      LatestCcuSigForFile: ModuleOrNamespaceType option }
+      LatestCcuSigForFile: ModuleOrNamespaceType option
+      
+      SemanticClassifications: struct(range * SemanticClassificationType) [] }
 
     member x.TcErrors  = Array.concat (List.rev x.TcErrorsRev)
     member x.TcSymbolUses  = List.rev x.TcSymbolUsesRev
@@ -1338,7 +1342,8 @@ type PartialCheckResults =
           ModuleNamesDict = tcAcc.tcModuleNamesDict
           TimeStamp = timestamp 
           LatestImplementationFile = tcAcc.latestImplFile 
-          LatestCcuSigForFile = tcAcc.latestCcuSigForFile }
+          LatestCcuSigForFile = tcAcc.latestCcuSigForFile
+          SemanticClassifications = tcAcc.tcClassifications }
 
 type TypeCheckAccumulator with
 
@@ -1356,7 +1361,8 @@ type TypeCheckAccumulator with
           latestCcuSigForFile = result.LatestCcuSigForFile
           tcDependencyFiles = result.TcDependencyFiles
           tcModuleNamesDict = result.ModuleNamesDict
-          tcErrorsRev = result.TcErrorsRev }
+          tcErrorsRev = result.TcErrorsRev
+          tcClassifications = [||] }
 
 [<AutoOpen>]
 module Utilities = 
@@ -1546,15 +1552,13 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
               latestCcuSigForFile=None
               tcDependencyFiles=basicDependencies
               tcErrorsRev = [ initialErrors ] 
-              tcModuleNamesDict = Map.empty }   
+              tcModuleNamesDict = Map.empty
+              tcClassifications = [||] }   
         return tcAcc }
 
     let areFileNamesEqual (filename1: string) (filename2: string) =
         String.Compare(filename1, filename2, StringComparison.CurrentCultureIgnoreCase)=0
                 || String.Compare(FileSystem.GetFullPathShim filename1, FileSystem.GetFullPathShim filename2, StringComparison.CurrentCultureIgnoreCase)=0
-
-    let mutable captureResolutions = false
-    let mutable captureResolutionsResult: (TcResolutions * (range * int) []) option = None
                 
     let mutable findSymbol: (FSharpSymbol * string) option = None
     let mutable findSymbolResults: (range seq) option = None
@@ -1591,9 +1595,6 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                     let tcResolutions = if keepAllBackgroundResolutions then sink.GetResolutions() else TcResolutions.Empty
                     let tcEnvAtEndOfFile = (if keepAllBackgroundResolutions then tcEnvAtEndOfFile else tcState.TcEnvFromImpls)
                     let tcSymbolUses = if keepAllBackgroundResolutions then sink.GetSymbolUses() else TcSymbolUses.Empty
-
-                    if captureResolutions then
-                        captureResolutionsResult <- Some(sink.GetResolutions(), sink.GetFormatSpecifierLocations())
                     
                     match findSymbol with
                     | Some(symbol, filenameToSearch) when areFileNamesEqual filenameToSearch filename ->
@@ -1615,7 +1616,8 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                                        tcOpenDeclarationsRev = sink.GetOpenDeclarations() :: tcAcc.tcOpenDeclarationsRev
                                        tcErrorsRev = newErrors :: tcAcc.tcErrorsRev 
                                        tcModuleNamesDict = moduleNamesDict
-                                       tcDependencyFiles = filename :: tcAcc.tcDependencyFiles } 
+                                       tcDependencyFiles = filename :: tcAcc.tcDependencyFiles
+                                       tcClassifications = sink.GetResolutions().GetSemanticClassification(tcAcc.tcGlobals, tcAcc.tcImports.GetImportMap(), sink.GetFormatSpecifierLocations(), None) } 
                 }
                     
             // Run part of the Eventually<_> computation until a timeout is reached. If not complete, 
@@ -1904,47 +1906,47 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
         cancellable {
             let! ct = Cancellable.token ()
 
-            captureResolutions <- true
+          //  captureResolutions <- true
             findSymbol <- Some(symbol, filename)
             let checkResults = builder.GetCheckResultsAfterFileInProject (ctok, filename) |> Cancellable.run ct
             findSymbol <- None
-            captureResolutions <- false
+          //  captureResolutions <- false
 
             let finalResults =
                 match checkResults with
-                | ValueOrCancelled.Value checkResults ->
+                | ValueOrCancelled.Value _ ->
                     let results =
-                        match findSymbolResults, captureResolutionsResult with
-                        | Some itemUses, Some(sResolutions, formatSpecifierLocations) ->
-                            let classifications = sResolutions.GetSemanticClassification(checkResults.TcGlobals, checkResults.TcImports.GetImportMap(), formatSpecifierLocations, None)               
-                            itemUses, classifications
+                        match findSymbolResults with
+                        | Some itemUses ->           
+                            itemUses
                         | _ -> 
-                            Seq.empty, [||]
+                            Seq.empty
 
                     Cancellable.ret results
                 | _ ->
                     Cancellable.canceled()
 
             findSymbolResults <- None
-            captureResolutionsResult <- None
+          //  captureResolutionsResult <- None
             return! finalResults }
 
     member builder.GetSemanticClassificationForFile (ctok: CompilationThreadToken, filename) =
         cancellable {
-            captureResolutions <- true
+         //   captureResolutions <- true
             let! checkResults = builder.GetCheckResultsAfterFileInProject (ctok, filename)
-            captureResolutions <- false
+            return checkResults.SemanticClassifications }
+        //    captureResolutions <- false
 
-            let results =
-                match captureResolutionsResult with
-                | Some(sResolutions, formatSpecifierLocations) ->
-                    sResolutions.GetSemanticClassification(checkResults.TcGlobals, checkResults.TcImports.GetImportMap(), formatSpecifierLocations, None)               
-                | _ -> 
-                    [||]
+            //let results =
+            //    match captureResolutionsResult with
+            //    | Some(sResolutions, formatSpecifierLocations) ->
+            //        sResolutions.GetSemanticClassification(checkResults.TcGlobals, checkResults.TcImports.GetImportMap(), formatSpecifierLocations, None)               
+            //    | _ -> 
+            //        [||]
 
-            captureResolutionsResult <- None
+            //captureResolutionsResult <- None
 
-            return results }
+            //return results }
 
     member __.SourceFiles  = sourceFiles  |> List.map (fun (_, f, _) -> f)
 
