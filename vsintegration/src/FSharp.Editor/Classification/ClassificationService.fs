@@ -20,7 +20,11 @@ open Microsoft.CodeAnalysis.ExternalAccess.FSharp.Classification
 // IVT, we'll maintain the status quo.
 #nowarn "44"
 
+open System.Runtime.Caching
 open FSharp.Compiler.SourceCodeServices
+
+type SemanticClassificationData = (struct(FSharp.Compiler.Range.range * SemanticClassificationType)[])
+type SemanticClassificationCacheValue = (VersionStamp * struct(FSharp.Compiler.Range.range * SemanticClassificationType)[])
 
 [<Export(typeof<IFSharpClassificationService>)>]
 type internal FSharpClassificationService
@@ -43,6 +47,36 @@ type internal FSharpClassificationService
                 if targetSpan.Contains span then
                     result.Add(ClassifiedSpan(span, FSharpClassificationTypes.getClassificationTypeName(classificationType)))
 
+    static let toLookup (data: SemanticClassificationData) =
+        let lookup = System.Collections.Generic.Dictionary()
+        for i = 0 to data.Length - 1 do
+            let (struct(r, _) as dataItem) = data.[i]
+            lookup.[r.StartLine] <- dataItem
+        System.Collections.ObjectModel.ReadOnlyDictionary lookup
+
+    let semanticClassificationCache = new MemoryCache("semantic-classification")
+
+    let cacheSemanticClassification (document: Document) (semanticClassification: SemanticClassificationCacheValue) =
+        let policy = CacheItemPolicy()
+        policy.Priority <- CacheItemPriority.Default
+        policy.SlidingExpiration <- TimeSpan.FromSeconds 10.
+        semanticClassificationCache.Set(document.Id.ToString(), semanticClassification, policy)
+
+    let tryGetCachedSemanticClassification (document: Document) = async {
+        let! ct = Async.CancellationToken
+        let! currentVersion = document.GetTextVersionAsync ct |> Async.AwaitTask
+
+        match semanticClassificationCache.Get(document.Id.Id.ToString()) with
+        | null -> return None
+        | :? SemanticClassificationCacheValue as semanticClassification ->
+            match semanticClassification with
+            | (version, _) when currentVersion = version ->
+                return Some semanticClassification
+            | _ ->
+                return None
+        | _ ->
+            return None }
+
     interface IFSharpClassificationService with
         // Do not perform classification if we don't have project options (#defines matter)
         member __.AddLexicalClassifications(_: SourceText, _: TextSpan, _: List<ClassifiedSpan>, _: CancellationToken) = ()
@@ -58,13 +92,19 @@ type internal FSharpClassificationService
 
         member __.AddSemanticClassificationsAsync(document: Document, textSpan: TextSpan, result: List<ClassifiedSpan>, cancellationToken: CancellationToken) =
             asyncMaybe {
-                use _logBlock = Logger.LogBlock(LogEditorFunctionId.Classification_Semantic)
+                use _logBlock = Logger.LogBlock(LogEditorFunctionId.Classification_Semantic) 
 
                 let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document, cancellationToken)
                 let! sourceText = document.GetTextAsync(cancellationToken)
+                let! currentVersion = document.GetTextVersionAsync(cancellationToken)
                 if not (document.Project.Solution.Workspace.IsDocumentOpen document.Id) then
-                    let! classificationData = checkerProvider.Checker.GetBackgroundSemanticClassificationForFile(document.FilePath, projectOptions, userOpName=userOpName) |> liftAsync
-                    addSemanticClassification classificationData sourceText result textSpan
+                    match! tryGetCachedSemanticClassification document |> liftAsync with
+                    | Some(_, classificationData) ->
+                        addSemanticClassification classificationData sourceText result textSpan
+                    | _ ->
+                        let! classificationData = checkerProvider.Checker.GetBackgroundSemanticClassificationForFile(document.FilePath, projectOptions, userOpName=userOpName) |> liftAsync
+                        cacheSemanticClassification document (currentVersion, classificationData)
+                        addSemanticClassification classificationData sourceText result textSpan
                 else
                     let! _, _, checkResults = checkerProvider.Checker.ParseAndCheckDocument(document, projectOptions, sourceText = sourceText, allowStaleResults = false, userOpName=userOpName) 
                     // it's crucial to not return duplicated or overlapping `ClassifiedSpan`s because Find Usages service crashes.
