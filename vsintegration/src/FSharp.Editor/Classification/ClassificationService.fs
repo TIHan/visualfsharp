@@ -68,7 +68,7 @@ type internal FSharpClassificationService
             items.Add dataItem
         System.Collections.ObjectModel.ReadOnlyDictionary lookup
 
-    let semanticClassificationCache = new MemoryCache("semantic-classification")
+    let semanticClassificationCache = MemoryCache.Default
 
     let cacheSemanticClassification (document: Document) (semanticClassification: SemanticClassificationCacheValue) =
         let policy = CacheItemPolicy()
