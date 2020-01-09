@@ -24,7 +24,8 @@ open System.Runtime.Caching
 open FSharp.Compiler.SourceCodeServices
 
 type SemanticClassificationData = (struct(FSharp.Compiler.Range.range * SemanticClassificationType)[])
-type SemanticClassificationCacheValue = (VersionStamp * struct(FSharp.Compiler.Range.range * SemanticClassificationType)[])
+type SemanticClassificationLookup = IReadOnlyDictionary<int, ResizeArray<struct(FSharp.Compiler.Range.range * SemanticClassificationType)>>
+type SemanticClassificationCacheValue = (VersionStamp * SemanticClassificationLookup)
 
 [<Export(typeof<IFSharpClassificationService>)>]
 type internal FSharpClassificationService
@@ -35,23 +36,36 @@ type internal FSharpClassificationService
     ) =
     static let userOpName = "SemanticColorization"
 
-    static let addSemanticClassification classificationData sourceText (result: List<ClassifiedSpan>) (targetSpan: TextSpan) =
-        for struct(range, classificationType) in classificationData do
-            match RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, range) with
-            | None -> ()
-            | Some span -> 
-                let span = 
-                    match classificationType with
-                    | SemanticClassificationType.Printf -> span
-                    | _ -> Tokenizer.fixupSpan(sourceText, span)
-                if targetSpan.Contains span then
-                    result.Add(ClassifiedSpan(span, FSharpClassificationTypes.getClassificationTypeName(classificationType)))
+    static let addSemanticClassification (lookup: SemanticClassificationLookup) sourceText (result: List<ClassifiedSpan>) (targetSpan: TextSpan) =
+        let r = RoslynHelpers.TextSpanToFSharpRange("", targetSpan, sourceText)
+        for i = r.StartLine to r.EndLine do
+            match lookup.TryGetValue i with
+            | true, items ->
+                for struct(range, classificationType) in items do
+                    match RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, range) with
+                    | None -> ()
+                    | Some span -> 
+                        let span = 
+                            match classificationType with
+                            | SemanticClassificationType.Printf -> span
+                            | _ -> Tokenizer.fixupSpan(sourceText, span)
+                        if targetSpan.Contains span then
+                            result.Add(ClassifiedSpan(span, FSharpClassificationTypes.getClassificationTypeName(classificationType)))
+            | _ ->
+                ()
 
     static let toLookup (data: SemanticClassificationData) =
-        let lookup = System.Collections.Generic.Dictionary()
+        let lookup = System.Collections.Generic.Dictionary<int, ResizeArray<struct(FSharp.Compiler.Range.range * SemanticClassificationType)>>()
         for i = 0 to data.Length - 1 do
             let (struct(r, _) as dataItem) = data.[i]
-            lookup.[r.StartLine] <- dataItem
+            let items =
+                match lookup.TryGetValue r.StartLine with
+                | true, items -> items
+                | _ ->
+                    let items = ResizeArray()
+                    lookup.[r.StartLine] <- items
+                    items
+            items.Add dataItem
         System.Collections.ObjectModel.ReadOnlyDictionary lookup
 
     let semanticClassificationCache = new MemoryCache("semantic-classification")
@@ -103,13 +117,15 @@ type internal FSharpClassificationService
                         addSemanticClassification classificationData sourceText result textSpan
                     | _ ->
                         let! classificationData = checkerProvider.Checker.GetBackgroundSemanticClassificationForFile(document.FilePath, projectOptions, userOpName=userOpName) |> liftAsync
+                        let classificationData = toLookup classificationData
                         cacheSemanticClassification document (currentVersion, classificationData)
                         addSemanticClassification classificationData sourceText result textSpan
                 else
                     let! _, _, checkResults = checkerProvider.Checker.ParseAndCheckDocument(document, projectOptions, sourceText = sourceText, allowStaleResults = false, userOpName=userOpName) 
                     // it's crucial to not return duplicated or overlapping `ClassifiedSpan`s because Find Usages service crashes.
                     let targetRange = RoslynHelpers.TextSpanToFSharpRange(document.FilePath, textSpan, sourceText)
-                    let classificationData = checkResults.GetSemanticClassification (Some targetRange)             
+                    let classificationData = checkResults.GetSemanticClassification (Some targetRange)
+                    let classificationData = toLookup classificationData
                     addSemanticClassification classificationData sourceText result textSpan
             } 
             |> Async.Ignore |> RoslynHelpers.StartAsyncUnitAsTask cancellationToken
