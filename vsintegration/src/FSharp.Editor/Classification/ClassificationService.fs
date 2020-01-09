@@ -25,7 +25,34 @@ open FSharp.Compiler.SourceCodeServices
 
 type SemanticClassificationData = (struct(FSharp.Compiler.Range.range * SemanticClassificationType)[])
 type SemanticClassificationLookup = IReadOnlyDictionary<int, ResizeArray<struct(FSharp.Compiler.Range.range * SemanticClassificationType)>>
-type SemanticClassificationCacheValue = (VersionStamp * SemanticClassificationLookup)
+
+[<Sealed>]
+type DocumentCache<'Value when 'Value : not struct>() =
+    let cache = new MemoryCache("fsharp-cache")
+    let policy = CacheItemPolicy(SlidingExpiration = TimeSpan.FromSeconds 10.)
+
+    member _.TryGetValueAsync(doc: Document) = async {
+        let! ct = Async.CancellationToken
+        let! currentVersion = doc.GetTextVersionAsync ct |> Async.AwaitTask
+
+        match cache.Get(doc.Id.ToString()) with
+        | null -> return ValueNone
+        | :? (Microsoft.CodeAnalysis.VersionStamp * 'Value) as value -> 
+            if fst value = currentVersion then
+                return ValueSome(snd value)
+            else
+                return ValueNone
+        | _ -> 
+            return ValueNone }
+
+    member _.SetAsync(doc: Document, value: 'Value) = async {
+            let! ct = Async.CancellationToken
+            let! currentVersion = doc.GetTextVersionAsync ct |> Async.AwaitTask
+            cache.Set(doc.Id.ToString(), (currentVersion, value), policy) }
+
+    interface IDisposable with
+
+        member _.Dispose() = cache.Dispose()
 
 [<Export(typeof<IFSharpClassificationService>)>]
 type internal FSharpClassificationService
@@ -54,6 +81,8 @@ type internal FSharpClassificationService
             | _ ->
                 ()
 
+    let syntacticClassificationCache = new DocumentCache<List<ClassifiedSpan>>()
+
     static let toLookup (data: SemanticClassificationData) =
         let lookup = System.Collections.Generic.Dictionary<int, ResizeArray<struct(FSharp.Compiler.Range.range * SemanticClassificationType)>>()
         for i = 0 to data.Length - 1 do
@@ -68,28 +97,7 @@ type internal FSharpClassificationService
             items.Add dataItem
         System.Collections.ObjectModel.ReadOnlyDictionary lookup
 
-    let semanticClassificationCache = MemoryCache.Default
-
-    let cacheSemanticClassification (document: Document) (semanticClassification: SemanticClassificationCacheValue) =
-        let policy = CacheItemPolicy()
-        policy.Priority <- CacheItemPriority.Default
-        policy.SlidingExpiration <- TimeSpan.FromSeconds 10.
-        semanticClassificationCache.Set(document.Id.ToString(), semanticClassification, policy)
-
-    let tryGetCachedSemanticClassification (document: Document) = async {
-        let! ct = Async.CancellationToken
-        let! currentVersion = document.GetTextVersionAsync ct |> Async.AwaitTask
-
-        match semanticClassificationCache.Get(document.Id.Id.ToString()) with
-        | null -> return None
-        | :? SemanticClassificationCacheValue as semanticClassification ->
-            match semanticClassification with
-            | (version, _) when currentVersion = version ->
-                return Some semanticClassification
-            | _ ->
-                return None
-        | _ ->
-            return None }
+    let semanticClassificationCache = new DocumentCache<SemanticClassificationLookup>()
 
     interface IFSharpClassificationService with
         // Do not perform classification if we don't have project options (#defines matter)
@@ -99,9 +107,17 @@ type internal FSharpClassificationService
             async {
                 use _logBlock = Logger.LogBlock(LogEditorFunctionId.Classification_Syntactic)
 
-                let defines = projectInfoManager.GetCompilationDefinesForEditingDocument(document)  
-                let! sourceText = document.GetTextAsync(cancellationToken)  |> Async.AwaitTask
-                result.AddRange(Tokenizer.getClassifiedSpans(document.Id, sourceText, textSpan, Some(document.FilePath), defines, cancellationToken))
+                if not (document.Project.Solution.Workspace.IsDocumentOpen document.Id) then
+                    ()
+                else
+               /// match! syntacticClassificationCache.TryGetValueAsync document with
+               // | ValueSome classifiedSpans -> result.AddRange classifiedSpans
+               // | _ ->
+                    let defines = projectInfoManager.GetCompilationDefinesForEditingDocument(document)  
+                    let! sourceText = document.GetTextAsync(cancellationToken)  |> Async.AwaitTask
+                    let classifiedSpans = Tokenizer.getClassifiedSpans(document.Id, sourceText, textSpan, Some(document.FilePath), defines, cancellationToken)
+                    do! syntacticClassificationCache.SetAsync(document, classifiedSpans)
+                    result.AddRange classifiedSpans
             } |> RoslynHelpers.StartAsyncUnitAsTask cancellationToken
 
         member __.AddSemanticClassificationsAsync(document: Document, textSpan: TextSpan, result: List<ClassifiedSpan>, cancellationToken: CancellationToken) =
@@ -110,15 +126,14 @@ type internal FSharpClassificationService
 
                 let! _, _, projectOptions = projectInfoManager.TryGetOptionsForDocumentOrProject(document, cancellationToken)
                 let! sourceText = document.GetTextAsync(cancellationToken)
-                let! currentVersion = document.GetTextVersionAsync(cancellationToken)
                 if not (document.Project.Solution.Workspace.IsDocumentOpen document.Id) then
-                    match! tryGetCachedSemanticClassification document |> liftAsync with
-                    | Some(_, classificationData) ->
+                    match! semanticClassificationCache.TryGetValueAsync document |> liftAsync with
+                    | ValueSome classificationData ->
                         addSemanticClassification classificationData sourceText result textSpan
                     | _ ->
                         let! classificationData = checkerProvider.Checker.GetBackgroundSemanticClassificationForFile(document.FilePath, projectOptions, userOpName=userOpName) |> liftAsync
                         let classificationData = toLookup classificationData
-                        cacheSemanticClassification document (currentVersion, classificationData)
+                        do! semanticClassificationCache.SetAsync(document, classificationData) |> liftAsync
                         addSemanticClassification classificationData sourceText result textSpan
                 else
                     let! _, _, checkResults = checkerProvider.Checker.ParseAndCheckDocument(document, projectOptions, sourceText = sourceText, allowStaleResults = false, userOpName=userOpName) 
