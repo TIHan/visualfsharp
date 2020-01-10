@@ -6,6 +6,205 @@ open System
 open FSharp.Compiler.AbstractIL.Internal.Library
 open FSharp.Compiler.SourceCodeServices
 
+module QuickLex =
+
+    open System.Threading
+    open FSharp.Compiler.UnicodeLexing
+    open FSharp.Compiler.Ast
+    open FSharp.Compiler.Text
+    open FSharp.Compiler.Features
+    open FSharp.Compiler.Parser
+    open FSharp.Compiler.Lexhelp
+    open Internal.Utilities
+
+    [<Flags>]
+    type LexerFlags =
+        | None                          = 0x00000
+        | Default                       = 0x11010
+        | LightSyntaxOff                = 0x00001
+        | Compiling                     = 0x00010 
+        | CompilingFSharpCore           = 0x00110
+        | SkipTrivia                    = 0x01000
+        | UseLexFilter                  = 0x10000
+
+    [<Struct;RequireQualifiedAccess>]
+    type TokenKind =
+        | Text
+        | Keyword
+        | Identifier
+        | StringLiteral
+        | NumericLiteral
+        | Comment
+
+        static member FromParserToken(token: token) =
+            match token with
+            | Parser.token.ABSTRACT
+            | Parser.token.AND
+            | Parser.token.AS
+            | Parser.token.ASSERT
+            | Parser.token.BASE
+            | Parser.token.BEGIN
+            | Parser.token.CLASS
+            | Parser.token.DEFAULT
+            | Parser.token.DELEGATE
+            | Parser.token.DO
+            | Parser.token.DONE
+            | Parser.token.DOWNCAST
+            | Parser.token.DOWNTO
+            | Parser.token.ELIF
+            | Parser.token.ELSE
+            | Parser.token.END
+            | Parser.token.EXCEPTION
+            | Parser.token.EXTERN
+            | Parser.token.FALSE
+            | Parser.token.FINALLY
+            | Parser.token.FIXED
+            | Parser.token.FOR
+            | Parser.token.FUN
+            | Parser.token.FUNCTION
+            | Parser.token.GLOBAL
+            | Parser.token.IF
+            | Parser.token.IN
+            | Parser.token.INHERIT
+            | Parser.token.INLINE
+            | Parser.token.INTERFACE
+            | Parser.token.INTERNAL
+            | Parser.token.LAZY
+            | Parser.token.LET _ // "let" and "use"
+            | Parser.token.DO_BANG //  "let!", "use!" and "do!"
+            | Parser.token.MATCH
+            | Parser.token.MATCH_BANG
+            | Parser.token.MEMBER
+            | Parser.token.MODULE
+            | Parser.token.MUTABLE
+             
+            | Parser.token.NAMESPACE
+            | Parser.token.NEW
+            // | Parser.token.NOT // Not actually a keyword. However, not struct in combination is used as a generic parameter constraint.
+            | Parser.token.NULL
+            | Parser.token.OF
+            | Parser.token.OPEN
+            | Parser.token.OR
+            | Parser.token.OVERRIDE
+            | Parser.token.PRIVATE
+            | Parser.token.PUBLIC
+            | Parser.token.REC
+            | Parser.token.YIELD _ // "yield" and "return"
+            | Parser.token.YIELD_BANG _ // "yield!" and "return!"
+            | Parser.token.STATIC
+            | Parser.token.STRUCT
+            | Parser.token.THEN
+            | Parser.token.TO
+            | Parser.token.TRUE
+            | Parser.token.TRY
+            | Parser.token.TYPE
+            | Parser.token.UPCAST
+            | Parser.token.VAL
+            | Parser.token.VOID
+            | Parser.token.WHEN
+            | Parser.token.WHILE
+            | Parser.token.WITH
+
+            // * Reserved - from OCAML *
+            | Parser.token.ASR
+            | Parser.token.INFIX_STAR_STAR_OP "asr"
+            | Parser.token.INFIX_STAR_DIV_MOD_OP "land"
+            | Parser.token.INFIX_STAR_DIV_MOD_OP "lor"
+            | Parser.token.INFIX_STAR_STAR_OP "lsl"
+            | Parser.token.INFIX_STAR_STAR_OP "lsr"
+            | Parser.token.INFIX_STAR_DIV_MOD_OP "lxor"
+            | Parser.token.INFIX_STAR_DIV_MOD_OP "mod"
+            | Parser.token.SIG
+
+            // * Reserved - for future *
+            // atomic
+            // break
+            // checked
+            // component
+            // const
+            // constraint
+            // constructor
+            // continue
+            // eager
+            // event
+            // external
+            // functor
+            // include
+            // method
+            // mixin
+            // object
+            // parallel
+            // process
+            // protected
+            // pure
+            // sealed
+            // tailcall
+            // trait
+            // virtual
+            // volatile
+            | Parser.token.RESERVED
+            | Parser.token.KEYWORD_STRING _ -> TokenKind.Keyword
+            | Parser.token.IDENT _ -> TokenKind.Identifier
+            | Parser.token.STRING_TEXT _ -> TokenKind.StringLiteral
+            | Parser.token.UINT8 _
+            | Parser.token.INT16 _
+            | Parser.token.INT32 _
+            | Parser.token.INT64 _
+            | Parser.token.BIGNUM _ -> TokenKind.NumericLiteral
+            | Parser.token.COMMENT _ -> TokenKind.Comment
+            | Parser.token.LINE_COMMENT _ -> TokenKind.Comment
+            | _ -> TokenKind.Text
+
+    let lex (text: ISourceText) (filePath: string) conditionalCompilationDefines (flags: LexerFlags) supportsFeature errorLogger lexCallback pathMap (ct: CancellationToken) =
+        let canSkipTrivia = (flags &&& LexerFlags.SkipTrivia) = LexerFlags.SkipTrivia
+        let isLightSyntaxOn = (flags &&& LexerFlags.LightSyntaxOff) <> LexerFlags.LightSyntaxOff
+        let isCompiling = (flags &&& LexerFlags.Compiling) = LexerFlags.Compiling
+        let isCompilingFSharpCore = (flags &&& LexerFlags.CompilingFSharpCore) = LexerFlags.CompilingFSharpCore
+        let canUseLexFilter = (flags &&& LexerFlags.UseLexFilter) = LexerFlags.UseLexFilter
+
+        let lexbuf = UnicodeLexing.SourceTextAsLexbuf(supportsFeature, text)
+        let lightSyntaxStatus = LightSyntaxStatus(isLightSyntaxOn, true) 
+        let lexargs = mkLexargs (filePath, conditionalCompilationDefines, lightSyntaxStatus, Lexhelp.LexResourceManager (), [], errorLogger, pathMap)
+        let lexargs = { lexargs with applyLineDirectives = not isCompiling }
+
+        let getNextToken =
+            let lexer = Lexer.token lexargs canSkipTrivia
+
+            if canUseLexFilter then
+                fun lexbuf ->
+                    let tokenizer = LexFilter.LexFilter(lexargs.lightSyntaxStatus, isCompilingFSharpCore, lexer, lexbuf)
+                    tokenizer.Lexer lexbuf
+            else
+                lexer
+
+        usingLexbufForParsing (lexbuf, filePath) (fun lexbuf -> 
+            lexCallback lexbuf (fun lexbuf -> ct.ThrowIfCancellationRequested (); getNextToken lexbuf))
+
+    [<AbstractClass;Sealed>]
+    type Lexer =
+
+        static member Lex(text: ISourceText, onToken, ?filePath, ?conditionalCompilationDefines, ?flags, ?pathMap, ?ct) =
+            let flags = defaultArg flags LexerFlags.Default
+            let filePath = defaultArg filePath String.Empty
+            let conditionalCompilationDefines = defaultArg conditionalCompilationDefines []
+            let pathMap = defaultArg pathMap Map.Empty
+            let ct = defaultArg ct CancellationToken.None
+
+            let dummyLanguageVersion = LanguageVersion "preview"
+            let errorLogger = CompilationErrorLogger("Lexer", ErrorLogger.FSharpErrorSeverityOptions.Default)
+            let pathMap =
+                (PathMap.empty, pathMap)
+                ||> Seq.fold (fun state pair -> state |> PathMap.addMapping pair.Key pair.Value)
+
+            let lexCallback =
+                fun (lexbuf: Lexbuf) getNextToken ->
+                    while not lexbuf.IsPastEndOfStream do
+                        let tokenKind = getNextToken lexbuf |> TokenKind.FromParserToken
+                        let m = lexbuf.LexemeRange
+                        onToken tokenKind m
+
+            lex text filePath conditionalCompilationDefines flags dummyLanguageVersion.SupportsFeature errorLogger lexCallback pathMap ct
+
 /// Qualified long name.
 type PartialLongName =
     { /// Qualifying idents, prior to the last dot, not including the last part.

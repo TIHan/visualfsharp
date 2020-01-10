@@ -5,6 +5,36 @@ namespace FSharp.Compiler
 open System
 open FSharp.Compiler.SourceCodeServices
 
+module public QuickLex =
+
+    open System.Threading
+    open FSharp.Compiler.Text
+    open FSharp.Compiler.Range
+
+    [<Flags>]
+    type LexerFlags =
+        | None                          = 0x00000
+        | Default                       = 0x11010
+        | LightSyntaxOff                = 0x00001
+        | Compiling                     = 0x00010 
+        | CompilingFSharpCore           = 0x00110
+        | SkipTrivia                    = 0x01000
+        | UseLexFilter                  = 0x10000
+
+    [<Struct;RequireQualifiedAccess>]
+    type TokenKind =
+        | Text
+        | Keyword
+        | Identifier
+        | StringLiteral
+        | NumericLiteral
+        | Comment
+
+    [<AbstractClass;Sealed>]
+    type Lexer =
+
+        static member Lex: ISourceText * onToken: (TokenKind -> range -> unit) * ?filePath: string * ?conditionalCompilationDefines: string list * ?flags: LexerFlags * ?pathMap: Map<string, string> * ?ct: CancellationToken -> unit
+
 /// Qualified long name.
 type public PartialLongName =
     { /// Qualifying idents, prior to the last dot, not including the last part.
