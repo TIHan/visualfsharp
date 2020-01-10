@@ -112,9 +112,10 @@ type internal FSharpClassificationService
 
         let onToken = 
             fun kind (m: FSharp.Compiler.Range.range) -> 
-                for i = m.StartLine to m.EndLine do
-                    let data = getLineData i
-                    data.Add(struct(kind, m))
+                if m.StartLine <> m.EndLine then
+                    for i = m.StartLine to m.EndLine do
+                        let data = getLineData i
+                        data.Add(struct(kind, m))
         Lexer.Lex(text.ToFSharpSourceText(), onToken, flags=LexerFlags.SkipTrivia, ct=ct)
         System.Collections.ObjectModel.ReadOnlyDictionary lookup
 
@@ -141,8 +142,9 @@ type internal FSharpClassificationService
             | _ ->  
                 ()
 
-    static let _syntacticTable = ConditionalWeakTable<SourceText, Lazy<SyntacticClassificationLookup>>()
-    static let _semanticTable = ConditionalWeakTable<SourceText, AsyncLazy<SemanticClassificationLookup>>()
+   // static let syntacticTable = ConditionalWeakTable<SourceText, Lazy<SyntacticClassificationLookup>>()
+   // static let _semanticTable = ConditionalWeakTable<SourceText, AsyncLazy<SemanticClassificationLookup>>()
+    let _syntacticClassificationCache = new DocumentCache<SyntacticClassificationLookup>()
     let semanticClassificationCache = new DocumentCache<SemanticClassificationLookup>()
 
     interface IFSharpClassificationService with
@@ -155,9 +157,30 @@ type internal FSharpClassificationService
 
                 let! sourceText = document.GetTextAsync(cancellationToken)  |> Async.AwaitTask
                 if not (document.Project.Solution.Workspace.IsDocumentOpen document.Id) then
-                    ()
-                   // let lookup = syntacticTable.GetValue(sourceText, fun _ -> lazy (createSyntacticLookup sourceText cancellationToken :> IReadOnlyDictionary<_, _>)).Value
-                   // addSyntacticClassification lookup sourceText textSpan result
+                    let onToken = 
+                        fun kind (m: FSharp.Compiler.Range.range) -> 
+                            match RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, m) with
+                            | Some span -> 
+                                let typeName =
+                                    match kind with
+                                    | TokenKind.Keyword -> ClassificationTypeNames.Keyword
+                                    | TokenKind.Identifier -> ClassificationTypeNames.Identifier
+                                    | TokenKind.Text -> ClassificationTypeNames.Text
+                                    | TokenKind.StringLiteral -> ClassificationTypeNames.StringLiteral
+                                    | TokenKind.NumericLiteral -> ClassificationTypeNames.NumericLiteral
+                                    | TokenKind.Comment -> ClassificationTypeNames.Comment
+                                ClassifiedSpan(TextSpan(textSpan.Start + span.Start, span.Length), typeName)
+                                |> result.Add
+                            | _ ->
+                                ()
+                    Lexer.Lex(sourceText.GetSubText(textSpan).ToFSharpSourceText(), onToken, flags=LexerFlags.SkipTrivia, ct=cancellationToken)
+                    //match! syntacticClassificationCache.TryGetValueAsync document with
+                    //| ValueSome classificationData ->
+                    //    addSyntacticClassification classificationData sourceText textSpan result
+                    //| _ ->
+                    //    let lookup = createSyntacticLookup sourceText cancellationToken :> IReadOnlyDictionary<_, _>
+                  //  let lookup = syntacticTable.GetValue(sourceText, fun _ -> lazy (createSyntacticLookup sourceText cancellationToken :> IReadOnlyDictionary<_, _>)).Value
+                      //  addSyntacticClassification lookup sourceText textSpan result
 
                 else
                     let defines = projectInfoManager.GetCompilationDefinesForEditingDocument(document)  
