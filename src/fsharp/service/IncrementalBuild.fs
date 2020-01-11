@@ -10,7 +10,9 @@ open System.Reflection.Metadata
 open FSharp.NativeInterop
 open FSharp.Compiler
 open FSharp.Compiler.Tast
+open FSharp.Compiler.Infos
 open FSharp.Compiler.NameResolution
+open FSharp.Compiler.AbstractIL.IL
 
 #nowarn "9"
 
@@ -80,6 +82,12 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
     let writeChar (c: char) =
         b.WriteUInt16(uint16 c)
 
+    let writeUInt16 (i: uint16) =
+        b.WriteUInt16 i
+
+    let writeInt32 (i: int) =
+        b.WriteInt32 i
+
     let writeString (str: string) =
         b.WriteUTF16 str
 
@@ -92,6 +100,19 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
         writeString eref.CompiledName
         eref.CompilationPath.MangledPath
         |> List.iter (fun str -> writeString str)
+
+    let writeILType (ilty: ILType) =
+        match ilty with
+        | ILType.TypeVar n -> writeString "!"; writeUInt16 n
+        | ILType.Modified (_, _ty1, ty2) -> writeString ty2.BasicQualifiedName
+        | ILType.Array (ILArrayShape s, ty) -> 
+            writeString ty.BasicQualifiedName
+            writeString "[" 
+            writeInt32 (s.Length-1)
+            writeString "]"
+        | ILType.Value tr | ILType.Boxed tr -> writeInt32 (tr.TypeRef.GetHashCode())
+        | ILType.Void -> writeString "void"
+        | _ -> writeString String.Empty
 
     let rec writeType (ty: TType) =
         match ty with
@@ -114,7 +135,6 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
             writeString "#M#"
             writeMeasure ms
         | TType_var tp ->
-            writeString "#P#"
             writeTypar tp
         | TType_ucase (uc, _) ->
             match uc with
@@ -153,10 +173,19 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
             writeChar (char (typar.Stamp >>> 48))
 
     let writeValRef (vref: ValRef) =
-        writeString vref.LogicalName
-        match vref.DeclaringEntity with
-        | ParentNone -> writeChar '%'
-        | Parent eref -> writeEntityRef eref
+        match vref.MemberInfo with
+        | Some memberInfo ->
+            writeString "m$"
+            writeEntityRef memberInfo.ApparentEnclosingEntity
+            writeString vref.LogicalName
+            writeType vref.Type
+        | _ ->
+            writeString "v$"
+            writeString vref.LogicalName
+            writeType vref.Type
+            match vref.DeclaringEntity with
+            | ParentNone -> writeChar '%'
+            | Parent eref -> writeEntityRef eref
 
     member _.Write (m: Range.range, item: Item) =
         writeRange m
@@ -167,8 +196,15 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
 
         match item with
         | Item.Value vref ->
-            writeString "v$"
-            writeValRef vref
+            match vref.MemberInfo with
+            | Some memberInfo ->
+                writeString "m$"
+                writeEntityRef memberInfo.ApparentEnclosingEntity
+                writeString vref.LogicalName
+                writeType vref.Type
+            | _ ->
+                writeString "v$"
+                writeValRef vref
 
         | Item.UnionCase(info, _) -> 
             writeString "u$"
@@ -235,19 +271,37 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
         | Item.UnqualifiedType [tcref] ->
             writeEntityRef tcref
 
-        | Item.MethodGroup(_, [info], _) ->
-            writeString "m$"
-            writeEntityRef info.DeclaringTyconRef
-            writeString info.LogicalName
+        | Item.MethodGroup(_, [info], _) 
+        | Item.CtorGroup(_, [info]) ->
+            match info with
+            | FSMeth(_, _, vref, _) ->
+                writeValRef vref
+            | ILMeth(_, info, _) ->
+                info.ILMethodRef.ArgTypes
+                |> List.iter writeILType
+                writeILType info.ILMethodRef.ReturnType
+                writeString info.ILName
+                writeType info.ApparentEnclosingType
+            | _ ->
+                writeString "m$"
+                writeEntityRef info.DeclaringTyconRef
+                writeString info.LogicalName
 
         | Item.ModuleOrNamespaces [x] ->
             writeString "o$"
-            writeString x.DemangledModuleOrNamespaceName
+            x.CompilationPath.DemangledPath
+            |> List.iter (fun x -> 
+                writeString x
+                writeString ".")
+            writeString x.LogicalName
+
+        | Item.DelegateCtor ty ->
+            writeString "g$"
+            writeType ty
 
         | Item.MethodGroup _ -> ()
         | Item.CtorGroup _ -> ()
         | Item.FakeInterfaceCtor _ -> ()
-        | Item.DelegateCtor _ -> ()
         | Item.Types _ -> ()
         | Item.CustomOperation _ -> ()
         | Item.CustomBuilder _ -> ()
