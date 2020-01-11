@@ -23,8 +23,10 @@ type FSharpSymbolKeyReader(mmf: MemoryMappedFile, length, hold: IDisposable) =
             invalidOp "FSharpSymbolKeyReader already disposed"
 
 
+    let viewAccessor = mmf.CreateViewAccessor()
+
     // This has to be mutable because BlobReader is a struct and we have to mutate its contents.
-    let mutable reader = BlobReader(mmf.SafeMemoryMappedFileHandle.DangerousGetHandle() |> NativePtr.ofNativeInt, int length)
+    let mutable reader = BlobReader(viewAccessor.SafeMemoryMappedViewHandle.DangerousGetHandle() |> NativePtr.ofNativeInt, int length)
 
     let readRange () =
         let code1 = reader.ReadInt64()
@@ -68,6 +70,7 @@ type FSharpSymbolKeyReader(mmf: MemoryMappedFile, length, hold: IDisposable) =
 
         member _.Dispose() =
             isDisposed <- true
+            viewAccessor.Dispose()
             hold.Dispose()
 
 and [<Sealed>] FSharpSymbolKeyBuilder() =
@@ -92,12 +95,9 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
 
     let rec writeType (ty: TType) =
         match ty with
-        | TType_forall (tps, ty) -> 
-            writeString "#O#"
-            tps |> List.iter writeTypar
+        | TType_forall (_, ty) ->
             writeType ty
         | TType_app (tcref, _) ->
-            writeString "#A#"
             writeEntityRef tcref
         | TType_tuple (_, tinst) ->
             writeString "#T#"
@@ -161,8 +161,9 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
     member _.Write (m: Range.range, item: Item) =
         writeRange m
 
-        b.WriteInt32 0
-        let mutable fixup = BlobWriter(b.GetBlobs().Current)
+        let fixup = b.ReserveBytes 4 |> BlobWriter
+
+        let preCount = b.Count
 
         match item with
         | Item.Value vref ->
@@ -229,11 +230,9 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
             writeTypar typar
 
         | Item.Types(_, [ty]) ->
-            writeString "s$"
             writeType ty
 
         | Item.UnqualifiedType [tcref] ->
-            writeString "q$"
             writeEntityRef tcref
 
         | Item.MethodGroup(_, [info], _) ->
@@ -258,8 +257,9 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
         | Item.SetterArg _ -> ()
         | Item.UnqualifiedType _ -> ()
 
-        fixup.Offset <- fixup.Offset - 4
-        fixup.WriteInt32(b.Count - 16 (* range *) - 4 (* key size *))
+        let postCount = b.Count
+
+        fixup.WriteInt32(postCount - preCount)
 
     member this.TryBuildAndReset() =
         if b.Count > 0 then
