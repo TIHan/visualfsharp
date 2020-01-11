@@ -52,6 +52,8 @@ val commandLineArgsFileName: string
 [<Struct; CustomEquality; NoComparison>]
 type range =
 
+    internal new : code1: int64 * code2: int64 -> range
+
     /// The start line of the range
     member StartLine : int
 
@@ -92,6 +94,10 @@ type range =
 
     /// Convert a range to string
     member ToShortString : unit -> string
+
+    member internal Code1 : int64
+
+    member internal Code2 : int64
 
     /// The range where all values are zero
     static member Zero : range

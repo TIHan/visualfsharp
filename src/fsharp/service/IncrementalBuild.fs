@@ -2,182 +2,248 @@
 
 namespace FSharp.Compiler.SourceCodeServices
 
+open System
+open System.Text
+open System.IO
+open System.IO.MemoryMappedFiles
+open System.Reflection.Metadata
+open FSharp.NativeInterop
 open FSharp.Compiler
 open FSharp.Compiler.Tast
 open FSharp.Compiler.NameResolution
 
-type FSharpSymbolKeyBuilder () =
+#nowarn "9"
 
-    let builder = System.Text.StringBuilder(64)
+[<Sealed>]
+type FSharpSymbolKeyReader(mmf: MemoryMappedFile, length, hold: IDisposable) =
+
+    let mutable isDisposed = false
+    let checkDispose() =
+        if isDisposed then
+            invalidOp "FSharpSymbolKeyReader already disposed"
+
+
+    // This has to be mutable because BlobReader is a struct and we have to mutate its contents.
+    let mutable reader = BlobReader(mmf.SafeMemoryMappedFileHandle.DangerousGetHandle() |> NativePtr.ofNativeInt, int length)
+
+    let readRange () =
+        let code1 = reader.ReadInt64()
+        let code2 = reader.ReadInt64()
+        Range.range(code1, code2)
+
+    let readKeyString () =
+        let size = reader.ReadInt32()
+        reader.ReadUTF16 size
+
+    member private _.Hold = hold
+
+    member _.ReadSingleKey() =
+        checkDispose ()
+
+        struct(readRange (), readKeyString ())
+
+    member _.FindAll(item: Item) =
+        checkDispose ()
+
+        let builder = FSharpSymbolKeyBuilder()
+        builder.Write(Range.range0, item)
+        match builder.TryBuildAndReset() with
+        | None -> Seq.empty
+        | Some(singleReader : FSharpSymbolKeyReader) ->
+            let struct(_, keyString1) = singleReader.ReadSingleKey()
+            (singleReader :> IDisposable).Dispose()
+
+            let results = ResizeArray()
+
+            reader.Offset <- 0
+            while reader.Offset < reader.Length do
+                let m = readRange()
+                let keyString2 = readKeyString()
+                if keyString1 = keyString2 then
+                    results.Add m
+
+            results :> Range.range seq
+
+    interface IDisposable with
+
+        member _.Dispose() =
+            isDisposed <- true
+            hold.Dispose()
+
+and [<Sealed>] FSharpSymbolKeyBuilder() =
+
+    let b = BlobBuilder()
 
     let writeChar (c: char) =
-        builder.Append c |> ignore
+        b.WriteUInt16(uint16 c)
 
     let writeString (str: string) =
-        builder.Append str |> ignore
+        b.WriteUTF16 str
 
-    let writeInt32 (i: int) =
-        builder.Append i |> ignore
-
-    let writeStamp (stamp: Stamp) =
-        builder.Append stamp |> ignore
-
-    let writeRange (r: Range.range) =
-        builder.Append r.FileIndex |> ignore
-        builder.Append r.Start.Encoding |> ignore
-        builder.Append r.End.Encoding |> ignore
+    let writeRange (m: Range.range) =
+        b.WriteInt64 m.Code1
+        b.WriteInt64 m.Code2
 
     let writeEntityRef (eref: EntityRef) =
-        let r = eref.DefinitionRange
-        if Range.equals Range.range0 r then
-            writeChar 'E'
-            writeString eref.CompiledName
-            writeChar '#'
-            eref.CompilationPath.MangledPath
-            |> List.iter (fun str -> writeString str)
-        else
-            builder.Append 'e' |> ignore
-            builder.Append r.FileIndex |> ignore
-            builder.Append r.Start.Encoding |> ignore
-            builder.Append r.End.Encoding |> ignore
+        writeString "#E#"
+        writeString eref.CompiledName
+        eref.CompilationPath.MangledPath
+        |> List.iter (fun str -> writeString str)
 
     let rec writeType (ty: TType) =
         match ty with
         | TType_forall (tps, ty) -> 
-            writeString "#o#"
+            writeString "#O#"
             tps |> List.iter writeTypar
             writeType ty
-        | TType_app (tcref, _) -> 
+        | TType_app (tcref, _) ->
+            writeString "#A#"
             writeEntityRef tcref
         | TType_tuple (_, tinst) ->
+            writeString "#T#"
             tinst |> List.iter writeType
-        | TType_anon (anonInfo, tinst) -> 
-            writeString "#a#"
+        | TType_anon (anonInfo, tinst) ->
+            writeString "#N#"
             writeString anonInfo.ILTypeRef.BasicQualifiedName
             tinst |> List.iter writeType
         | TType_fun (d, r) ->
-            writeString "#f#"
+            writeString "#F#"
             writeType d
             writeType r
         | TType_measure ms -> 
+            writeString "#M#"
             writeMeasure ms
         | TType_var tp ->
+            writeString "#P#"
             writeTypar tp
         | TType_ucase (uc, _) ->
-            writeString "#uc#"
-            writeRange uc.DefinitionRange
+            match uc with
+            | UnionCaseRef.UCRef(tcref, nm) ->
+                writeString "#U#"
+                writeEntityRef tcref
+                writeString nm
 
     and writeMeasure (ms: Measure) =
-        writeString "#m#"
         match ms with
-        | Measure.Var typar -> writeTypar typar
-        | Measure.Con tcref -> writeEntityRef tcref
+        | Measure.Var typar -> 
+            writeString "#p#"
+            writeTypar typar
+        | Measure.Con tcref -> 
+            writeString "#c#"
+            writeEntityRef tcref
         | Measure.Prod(ms1, ms2) ->
+            writeString "#r#"
             writeMeasure ms1
             writeMeasure ms2
         | Measure.Inv ms ->
-            writeString "#inv#"
+            writeString "#i#"
             writeMeasure ms
         | Measure.One ->
-            writeString "#1"
+            writeString "#1#"
         | Measure.RationalPower _ ->
-            writeString "#power#"
+            writeString "#z#"
 
     and writeTypar (typar: Typar) =
         match typar.Solution with
         | Some ty -> writeType ty
         | _ ->
-            writeString "#t#"
-            writeStamp typar.Stamp
+            writeChar (char  typar.Stamp)
+            writeChar (char (typar.Stamp >>> 16))
+            writeChar (char (typar.Stamp >>> 32))
+            writeChar (char (typar.Stamp >>> 48))
 
     let writeValRef (vref: ValRef) =
-        let r = vref.DefinitionRange
-        if Range.equals Range.range0 r then
-            writeChar 'V'
-            writeString vref.LogicalName
-            writeChar '#'
-            match vref.DeclaringEntity with
-            | ParentNone -> writeChar 'p'
-            | Parent eref -> 
-                writeChar 'P'
-                writeEntityRef eref
-        else
-            builder.Append 'v' |> ignore
-            builder.Append r.FileIndex |> ignore
-            builder.Append r.Start.Encoding |> ignore
-            builder.Append r.End.Encoding |> ignore
+        writeString vref.LogicalName
+        match vref.DeclaringEntity with
+        | ParentNone -> writeChar '%'
+        | Parent eref -> writeEntityRef eref
 
-    member _.WriteItem (item: Item) =
+    member _.Write (m: Range.range, item: Item) =
+        writeRange m
+
+        b.WriteInt32 0
+        let mutable fixup = BlobWriter(b.GetBlobs().Current)
+
         match item with
-        | Item.Value vref -> 
+        | Item.Value vref ->
+            writeString "v$"
             writeValRef vref
 
         | Item.UnionCase(info, _) -> 
+            writeString "u$"
             writeEntityRef info.TyconRef
-            builder.Append info.UnionCaseRef.CaseName |> ignore
             
-        | Item.ActivePatternResult(info, _, _, _) ->
-            let r = info.Range
-            if Range.equals Range.range0 r then
-                writeString "X#"
-                info.ActiveTagsWithRanges
-                |> List.iter (fun (nm, r) ->
-                    writeString nm
-                    writeRange r)
-            else
-                writeString "x#"
-                writeRange r
+        | Item.ActivePatternResult(info, ty, _, _) ->
+            writeString "r$"
+            info.ActiveTagsWithRanges
+            |> List.iter (fun (nm, _) ->
+                writeString nm)
+            writeType ty
 
         | Item.ActivePatternCase elemRef ->
-            writeString "apc#"
+            writeString "c$"
             writeValRef elemRef.ActivePatternVal
             elemRef.ActivePatternInfo.ActiveTagsWithRanges
-            |> List.iter (fun (nm, r) ->
-                writeString nm
-                writeRange r)
+            |> List.iter (fun (nm, _) ->
+                writeString nm)
 
         | Item.ExnCase tcref ->
-            writeString "exn#"
+            writeString "e$"
             writeEntityRef tcref
 
         | Item.RecdField info ->
-            writeString "rf#"
+            writeString "d$"
             writeEntityRef info.TyconRef
             writeType info.FieldType
 
         | Item.AnonRecdField(info, tys, i, _) ->
-            writeString "an#"
+            writeString "a$"
             writeString info.ILTypeRef.BasicQualifiedName
             tys |> List.iter writeType
-            writeChar '#'
-            writeInt32 i
+            writeChar (char i)
+            writeChar (char (i >>> 16))
 
         | Item.NewDef ident ->
-            writeString "nd#"
+            writeString "n$"
             writeString ident.idText
 
         | Item.ILField info ->
-            writeString "ilf#"
+            writeString "l$"
             writeString info.ILTypeRef.BasicQualifiedName
             writeString info.FieldName
 
         | Item.Event info ->
-            writeString "evt#"
+            writeString "t$"
             writeString info.EventName
             writeEntityRef info.DeclaringTyconRef
 
-        | Item.Property(nm, _) ->
-            writeString "pro#"
+        | Item.Property(nm, infos) ->
+            writeString "p$"
             writeString nm
+            infos
+            |> List.iter (fun info -> writeEntityRef info.DeclaringTyconRef)
 
-        | Item.TypeVar(_, typar) ->
+        | Item.TypeVar(nm, typar) ->
+            writeString "y$"
+            writeString nm
             writeTypar typar
 
         | Item.Types(_, [ty]) ->
+            writeString "s$"
             writeType ty
 
         | Item.UnqualifiedType [tcref] ->
+            writeString "q$"
             writeEntityRef tcref
+
+        | Item.MethodGroup(_, [info], _) ->
+            writeString "m$"
+            writeEntityRef info.DeclaringTyconRef
+            writeString info.LogicalName
+
+        | Item.ModuleOrNamespaces [x] ->
+            writeString "o$"
+            writeString x.DemangledModuleOrNamespaceName
 
         | Item.MethodGroup _ -> ()
         | Item.CtorGroup _ -> ()
@@ -192,13 +258,38 @@ type FSharpSymbolKeyBuilder () =
         | Item.SetterArg _ -> ()
         | Item.UnqualifiedType _ -> ()
 
-    member this.GetAndReset() =
-        if builder.Length > 0 then
-            let key = builder.ToString()
-            builder.Clear() |> ignore
-            key
+        fixup.Offset <- fixup.Offset - 4
+        fixup.WriteInt32(b.Count - 16 (* range *) - 4 (* key size *))
+
+    member this.TryBuildAndReset() =
+        if b.Count > 0 then
+            let length = int64 b.Count
+            let mmf = 
+                let mmf =
+                    MemoryMappedFile.CreateNew(
+                        null, 
+                        length, 
+                        MemoryMappedFileAccess.ReadWrite, 
+                        MemoryMappedFileOptions.None, 
+                        HandleInheritability.None)
+                use stream = mmf.CreateViewStream(0L, length, MemoryMappedFileAccess.ReadWrite)
+                b.WriteContentTo stream
+                mmf
+
+            b.Clear()
+
+            let safeHolder =
+                { new obj() with
+                    override x.Finalize() =
+                        (x :?> IDisposable).Dispose()
+                  interface IDisposable with
+                    member x.Dispose() =
+                        GC.SuppressFinalize x
+                        mmf.Dispose() }
+
+            Some(new FSharpSymbolKeyReader(mmf, length, safeHolder))       
         else
-            ""
+            None
 
 [<RequireQualifiedAccess>]
 type SemanticClassificationType =
@@ -1426,7 +1517,7 @@ type TypeCheckAccumulator =
       tcErrorsRev:(PhasedDiagnostic * FSharpErrorSeverity)[] list
       
       tcClassifications: struct(range * SemanticClassificationType)[]
-      tcSymbolKeys: struct(range * string)[] }
+      tcSymbolKeys: FSharpSymbolKeyReader option }
 
       
 /// Global service state
@@ -1523,7 +1614,7 @@ type PartialCheckResults =
       
       SemanticClassifications: struct(range * SemanticClassificationType) []
       
-      SymbolKeys: struct(range * string) [] }
+      SymbolKeys: FSharpSymbolKeyReader option }
 
     member x.TcErrors  = Array.concat (List.rev x.TcErrorsRev)
     member x.TcSymbolUses  = List.rev x.TcSymbolUsesRev
@@ -1565,7 +1656,7 @@ type TypeCheckAccumulator with
           tcModuleNamesDict = result.ModuleNamesDict
           tcErrorsRev = result.TcErrorsRev
           tcClassifications = [||]
-          tcSymbolKeys = [||] }
+          tcSymbolKeys = None }
 
 [<AutoOpen>]
 module Utilities = 
@@ -1757,7 +1848,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
               tcErrorsRev = [ initialErrors ] 
               tcModuleNamesDict = Map.empty
               tcClassifications = [||]
-              tcSymbolKeys = [||] }   
+              tcSymbolKeys = None }   
         return tcAcc }
 
     let areFileNamesEqual (filename1: string) (filename2: string) =
@@ -1809,13 +1900,9 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
                     RequireCompilationThread ctok // Note: events get raised on the CompilationThread
 
-                    let symbolKeys =
-                        sink.GetResolutions().CapturedNameResolutions
-                        |> Seq.map (fun cnr -> 
-                            symbolBuilder.WriteItem cnr.Item
-                            let key = symbolBuilder.GetAndReset()
-                            struct(cnr.Range, key))
-                        |> Array.ofSeq
+                    // Build symbol keys
+                    sink.GetResolutions().CapturedNameResolutions
+                    |> Seq.iter (fun cnr -> symbolBuilder.Write(cnr.Range, cnr.Item))
 
                     fileChecked.Trigger filename
                     let newErrors = Array.append parseErrors (capturingErrorLogger.GetErrors())
@@ -1831,7 +1918,7 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                                        tcModuleNamesDict = moduleNamesDict
                                        tcDependencyFiles = filename :: tcAcc.tcDependencyFiles
                                        tcClassifications = sink.GetResolutions().GetSemanticClassification(tcAcc.tcGlobals, tcAcc.tcImports.GetImportMap(), sink.GetFormatSpecifierLocations(), None)
-                                       tcSymbolKeys = symbolKeys } 
+                                       tcSymbolKeys = symbolBuilder.TryBuildAndReset() } 
                 }
                     
             // Run part of the Eventually<_> computation until a timeout is reached. If not complete, 
@@ -2118,17 +2205,12 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
 
     member builder.FindReferencesInFile (ctok: CompilationThreadToken, filename, symbol: FSharpSymbol) =
         cancellable {
-         //   captureResolutions <- true
-            symbolBuilder.WriteItem symbol.Item
-            let key1 = symbolBuilder.GetAndReset()
             let! checkResults = builder.GetCheckResultsAfterFileInProject (ctok, filename)
             return 
-                checkResults.SymbolKeys 
-                |> Array.choose (fun struct(m, key2) ->
-                    if key1 = key2 then
-                        Some m
-                    else
-                        None) :> range seq }
+                (match checkResults.SymbolKeys with
+                    | None -> Seq.empty
+                    | Some reader ->
+                        reader.FindAll(symbol.Item)) }
         //cancellable {
         //    let! ct = Cancellable.token ()
 

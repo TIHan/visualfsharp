@@ -2,6 +2,13 @@
 
 namespace FSharp.Compiler.SourceCodeServices
 
+[<Sealed>]
+type internal FSharpSymbolKeyReader =
+
+    member FindAll: FSharp.Compiler.NameResolution.Item -> FSharp.Compiler.Range.range seq
+
+    interface System.IDisposable
+
 [<RequireQualifiedAccess>]
 type SemanticClassificationType =
     | ReferenceType
@@ -110,7 +117,7 @@ type internal PartialCheckResults =
       
       SemanticClassifications: struct(range * SemanticClassificationType) []
       
-      SymbolKeys: struct(range * string) [] }
+      SymbolKeys: FSharpSymbolKeyReader option }
 
     member TcErrors: (PhasedDiagnostic * FSharpErrorSeverity)[]
 
