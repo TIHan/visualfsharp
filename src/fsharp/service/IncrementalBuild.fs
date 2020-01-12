@@ -88,6 +88,9 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
     let writeInt32 (i: int) =
         b.WriteInt32 i
 
+    let writeInt64 (i: int64) =
+        b.WriteInt64 i
+
     let writeString (str: string) =
         b.WriteUTF16 str
 
@@ -101,18 +104,38 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
         eref.CompilationPath.MangledPath
         |> List.iter (fun str -> writeString str)
 
-    let writeILType (ilty: ILType) =
+    let rec writeILType (ilty: ILType) =
         match ilty with
         | ILType.TypeVar n -> writeString "!"; writeUInt16 n
-        | ILType.Modified (_, _ty1, ty2) -> writeString ty2.BasicQualifiedName
+        | ILType.Modified (_, _, ty2) -> writeILType ty2
         | ILType.Array (ILArrayShape s, ty) -> 
-            writeString ty.BasicQualifiedName
+            writeILType ty
             writeString "[" 
             writeInt32 (s.Length-1)
             writeString "]"
-        | ILType.Value tr | ILType.Boxed tr -> writeInt32 (tr.TypeRef.GetHashCode())
-        | ILType.Void -> writeString "void"
-        | _ -> writeString String.Empty
+        | ILType.Value tr 
+        | ILType.Boxed tr -> 
+            tr.TypeRef.Enclosing
+            |> List.iter (fun x ->
+                writeString x
+                writeChar '.')
+            writeChar '.'
+            writeString tr.TypeRef.Name
+        | ILType.Void -> 
+            writeString "void"
+        | ILType.Ptr ty -> 
+            writeString "ptr<"
+            writeILType ty
+            writeChar '>'
+        | ILType.Byref ty ->
+            writeString "byref<"
+            writeILType ty
+            writeChar '>'
+        | ILType.FunctionPointer mref ->
+            mref.ArgTypes
+            |> List.iter (fun x ->
+                writeILType x)
+            writeILType mref.ReturnType
 
     let rec writeType (ty: TType) =
         match ty with
@@ -166,11 +189,7 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
     and writeTypar (typar: Typar) =
         match typar.Solution with
         | Some ty -> writeType ty
-        | _ ->
-            writeChar (char  typar.Stamp)
-            writeChar (char (typar.Stamp >>> 16))
-            writeChar (char (typar.Stamp >>> 32))
-            writeChar (char (typar.Stamp >>> 48))
+        | _ -> writeInt64 typar.Stamp
 
     let writeValRef (vref: ValRef) =
         match vref.MemberInfo with
@@ -221,8 +240,7 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
             writeString "c$"
             writeValRef elemRef.ActivePatternVal
             elemRef.ActivePatternInfo.ActiveTagsWithRanges
-            |> List.iter (fun (nm, _) ->
-                writeString nm)
+            |> List.iter (fun (nm, _) -> writeString nm)
 
         | Item.ExnCase tcref ->
             writeString "e$"
@@ -237,8 +255,7 @@ and [<Sealed>] FSharpSymbolKeyBuilder() =
             writeString "a$"
             writeString info.ILTypeRef.BasicQualifiedName
             tys |> List.iter writeType
-            writeChar (char i)
-            writeChar (char (i >>> 16))
+            writeInt32 i
 
         | Item.NewDef ident ->
             writeString "n$"
