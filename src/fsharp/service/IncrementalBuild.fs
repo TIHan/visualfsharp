@@ -7,6 +7,7 @@ open System.Text
 open System.IO
 open System.IO.MemoryMappedFiles
 open System.Reflection.Metadata
+open System.Collections.Immutable
 open FSharp.NativeInterop
 open FSharp.Compiler
 open FSharp.Compiler.Tast
@@ -469,70 +470,73 @@ module TcResolutionsExtensions =
                                                       member _.Equals(x1, x2) = Range.equals x1 x2 
                                                       member _.GetHashCode o = o.GetHashCode() })
 
+                let results = ImmutableArray.CreateBuilder()
+                let inline add m typ =
+                    if duplicates.Add m then
+                        results.Add struct(m, typ)
                 resolutions
-                |> Seq.choose (fun cnr ->
-                    match cnr with
+                |> Seq.iter (fun cnr ->
+                    match cnr.Pos, cnr.Item, cnr.ItemOccurence, cnr.DisplayEnv, cnr.NameResolutionEnv, cnr.AccessorDomain, cnr.Range with
                     // 'seq' in 'seq { ... }' gets colored as keywords
-                    | CNR(_, (Item.Value vref), ItemOccurence.Use, _, _, _, m) when valRefEq g g.seq_vref vref ->
-                        Some struct(m, SemanticClassificationType.ComputationExpression)
-                    | CNR(_, (Item.Value vref), _, _, _, _, m) when isValRefMutable vref ->
-                        Some (m, SemanticClassificationType.MutableVar)
-                    | CNR(_, Item.Value KeywordIntrinsicValue, ItemOccurence.Use, _, _, _, m) ->
-                        Some (m, SemanticClassificationType.IntrinsicFunction)
-                    | CNR(_, (Item.Value vref), _, _, _, _, m) when isFunction g vref.Type ->
+                    | _, (Item.Value vref), ItemOccurence.Use, _, _, _, m when valRefEq g g.seq_vref vref ->
+                        add m SemanticClassificationType.ComputationExpression
+                    | _, (Item.Value vref), _, _, _, _, m when isValRefMutable vref ->
+                        add m SemanticClassificationType.MutableVar
+                    | _, Item.Value KeywordIntrinsicValue, ItemOccurence.Use, _, _, _, m ->
+                        add m SemanticClassificationType.IntrinsicFunction
+                    | _, (Item.Value vref), _, _, _, _, m when isFunction g vref.Type ->
                         if valRefEq g g.range_op_vref vref || valRefEq g g.range_step_op_vref vref then 
-                            None
+                            ()
                         elif vref.IsPropertyGetterMethod || vref.IsPropertySetterMethod then
-                            Some (m, SemanticClassificationType.Property)
+                            add m SemanticClassificationType.Property
                         elif IsOperatorName vref.DisplayName then
-                            Some (m, SemanticClassificationType.Operator)
+                            add m SemanticClassificationType.Operator
                         else
-                            Some (m, SemanticClassificationType.Function)
-                    | CNR(_, Item.RecdField rfinfo, _, _, _, _, m) when isRecdFieldMutable rfinfo ->
-                        Some (m, SemanticClassificationType.MutableVar)
-                    | CNR(_, Item.RecdField rfinfo, _, _, _, _, m) when isFunction g rfinfo.FieldType ->
-                       Some (m, SemanticClassificationType.Function)
-                    | CNR(_, Item.RecdField EnumCaseFieldInfo, _, _, _, _, m) ->
-                        Some (m, SemanticClassificationType.Enumeration)
-                    | CNR(_, Item.MethodGroup _, _, _, _, _, m) ->
-                        Some (m, SemanticClassificationType.Function)
+                            add m SemanticClassificationType.Function
+                    | _, Item.RecdField rfinfo, _, _, _, _, m when isRecdFieldMutable rfinfo ->
+                        add m SemanticClassificationType.MutableVar
+                    | _, Item.RecdField rfinfo, _, _, _, _, m when isFunction g rfinfo.FieldType ->
+                        add m SemanticClassificationType.Function
+                    | _, Item.RecdField EnumCaseFieldInfo, _, _, _, _, m ->
+                        add m SemanticClassificationType.Enumeration
+                    | _, Item.MethodGroup _, _, _, _, _, m ->
+                        add m SemanticClassificationType.Function
                     // custom builders, custom operations get colored as keywords
-                    | CNR(_, (Item.CustomBuilder _ | Item.CustomOperation _), ItemOccurence.Use, _, _, _, m) ->
-                        Some (m, SemanticClassificationType.ComputationExpression)
+                    | _, (Item.CustomBuilder _ | Item.CustomOperation _), ItemOccurence.Use, _, _, _, m ->
+                        add m SemanticClassificationType.ComputationExpression
                     // types get colored as types when they occur in syntactic types or custom attributes
                     // type variables get colored as types when they occur in syntactic types custom builders, custom operations get colored as keywords
-                    | CNR(_, Item.Types (_, [OptionalArgumentAttribute]), LegitTypeOccurence, _, _, _, _) -> None
-                    | CNR(_, Item.CtorGroup(_, [MethInfo.FSMeth(_, OptionalArgumentAttribute, _, _)]), LegitTypeOccurence, _, _, _, _) -> None
-                    | CNR(_, Item.Types(_, types), LegitTypeOccurence, _, _, _, m) when types |> List.exists (isInterfaceTy g) -> 
-                        Some (m, SemanticClassificationType.Interface)
-                    | CNR(_, Item.Types(_, types), LegitTypeOccurence, _, _, _, m) when types |> List.exists (isStructTy g) -> 
-                        Some (m, SemanticClassificationType.ValueType)
-                    | CNR(_, Item.Types(_, TType_app(tyconRef, TType_measure _ :: _) :: _), LegitTypeOccurence, _, _, _, m) when isStructTyconRef tyconRef ->
-                        Some (m, SemanticClassificationType.ValueType)
-                    | CNR(_, Item.Types(_, types), LegitTypeOccurence, _, _, _, m) when types |> List.exists isDisposableTy ->
-                        Some (m, SemanticClassificationType.Disposable)
-                    | CNR(_, Item.Types _, LegitTypeOccurence, _, _, _, m) -> 
-                        Some (m, SemanticClassificationType.ReferenceType)
-                    | CNR(_, (Item.TypeVar _ ), LegitTypeOccurence, _, _, _, m) ->
-                        Some (m, SemanticClassificationType.TypeArgument)
-                    | CNR(_, Item.UnqualifiedType tyconRefs, LegitTypeOccurence, _, _, _, m) ->
+                    | _, Item.Types (_, [OptionalArgumentAttribute]), LegitTypeOccurence, _, _, _, _ -> ()
+                    | _, Item.CtorGroup(_, [MethInfo.FSMeth(_, OptionalArgumentAttribute, _, _)]), LegitTypeOccurence, _, _, _, _ -> ()
+                    | _, Item.Types(_, types), LegitTypeOccurence, _, _, _, m when types |> List.exists (isInterfaceTy g) -> 
+                        add m SemanticClassificationType.Interface
+                    | _, Item.Types(_, types), LegitTypeOccurence, _, _, _, m when types |> List.exists (isStructTy g) -> 
+                        add m SemanticClassificationType.ValueType
+                    | _, Item.Types(_, TType_app(tyconRef, TType_measure _ :: _) :: _), LegitTypeOccurence, _, _, _, m when isStructTyconRef tyconRef ->
+                        add m SemanticClassificationType.ValueType
+                    | _, Item.Types(_, types), LegitTypeOccurence, _, _, _, m when types |> List.exists isDisposableTy ->
+                        add m SemanticClassificationType.Disposable
+                    | _, Item.Types _, LegitTypeOccurence, _, _, _, m -> 
+                        add m SemanticClassificationType.ReferenceType
+                    | _, (Item.TypeVar _ ), LegitTypeOccurence, _, _, _, m ->
+                        add m SemanticClassificationType.TypeArgument
+                    | _, Item.UnqualifiedType tyconRefs, LegitTypeOccurence, _, _, _, m ->
                         if tyconRefs |> List.exists (fun tyconRef -> tyconRef.Deref.IsStructOrEnumTycon) then
-                            Some (m, SemanticClassificationType.ValueType)
-                        else Some (m, SemanticClassificationType.ReferenceType)
-                    | CNR(_, Item.CtorGroup(_, minfos), LegitTypeOccurence, _, _, _, m) ->
+                            add m SemanticClassificationType.ValueType
+                        else add m SemanticClassificationType.ReferenceType
+                    | _, Item.CtorGroup(_, minfos), LegitTypeOccurence, _, _, _, m ->
                         if minfos |> List.exists (fun minfo -> isStructTy g minfo.ApparentEnclosingType) then
-                            Some (m, SemanticClassificationType.ValueType)
-                        else Some (m, SemanticClassificationType.ReferenceType)
-                    | CNR(_, Item.ExnCase _, LegitTypeOccurence, _, _, _, m) ->
-                        Some (m, SemanticClassificationType.ReferenceType)
-                    | CNR(_, Item.ModuleOrNamespaces refs, LegitTypeOccurence, _, _, _, m) when refs |> List.exists (fun x -> x.IsModule) ->
-                        Some (m, SemanticClassificationType.Module)
-                    | CNR(_, (Item.ActivePatternCase _ | Item.UnionCase _ | Item.ActivePatternResult _), _, _, _, _, m) ->
-                        Some (m, SemanticClassificationType.UnionCase)
-                    | _ -> None)
-                |> Seq.filter (fun struct(m, _) -> duplicates.Add m)
-                |> Seq.toArray
-                |> Array.append (formatSpecifierLocations |> Array.map (fun (m, _) -> struct(m, SemanticClassificationType.Printf)))
+                            add m SemanticClassificationType.ValueType
+                        else add m SemanticClassificationType.ReferenceType
+                    | _, Item.ExnCase _, LegitTypeOccurence, _, _, _, m ->
+                        add m SemanticClassificationType.ReferenceType
+                    | _, Item.ModuleOrNamespaces refs, LegitTypeOccurence, _, _, _, m when refs |> List.exists (fun x -> x.IsModule) ->
+                        add m SemanticClassificationType.Module
+                    | _, (Item.ActivePatternCase _ | Item.UnionCase _ | Item.ActivePatternResult _), _, _, _, _, m ->
+                        add m SemanticClassificationType.UnionCase
+                    | _ -> ())
+                results.AddRange(formatSpecifierLocations |> Array.map (fun (m, _) -> struct(m, SemanticClassificationType.Printf)))
+                results.ToArray()
                ) 
                (fun msg -> 
                    Trace.TraceInformation(sprintf "FCS: recovering from error in GetSemanticClassification: '%s'" msg)
