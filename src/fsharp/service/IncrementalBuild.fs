@@ -1972,8 +1972,14 @@ type IncrementalBuilder(tcGlobals, frameworkTcImports, nonFrameworkAssemblyInput
                     RequireCompilationThread ctok // Note: events get raised on the CompilationThread
 
                     // Build symbol keys
+                    let preventDuplicates = HashSet({ new IEqualityComparer<struct(pos * pos)> with 
+                                                        member _.Equals((s1, e1): struct(pos * pos), (s2, e2): struct(pos * pos)) = Range.posEq s1 s2 && Range.posEq e1 e2
+                                                        member _.GetHashCode o = o.GetHashCode() })
                     sink.GetResolutions().CapturedNameResolutions
-                    |> Seq.iter (fun cnr -> symbolBuilder.Write(cnr.Range, cnr.Item))
+                    |> Seq.iter (fun cnr ->
+                        let r = cnr.Range
+                        if preventDuplicates.Add struct(r.Start, r.End) then
+                            symbolBuilder.Write(cnr.Range, cnr.Item))
 
                     fileChecked.Trigger filename
                     let newErrors = Array.append parseErrors (capturingErrorLogger.GetErrors())
