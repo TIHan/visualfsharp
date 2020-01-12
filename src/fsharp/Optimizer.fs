@@ -2321,7 +2321,7 @@ and OptimizeLinearExpr cenv env expr contf =
               Info = UnknownValue }))
 
     | Expr.Let (bind, body, m, _) ->  
-      let (bindR, bindingInfo), env = OptimizeBinding cenv false env bind 
+      let (bindR, bindingInfo), env = OptimizeBinding cenv false false env bind 
       OptimizeLinearExpr cenv env body (contf << (fun (bodyR, bodyInfo) ->  
         // PERF: This call to ValueIsUsedOrHasEffect/freeInExpr amounts to 9% of all optimization time.
         // Is it quadratic or quasi-quadratic?
@@ -3094,7 +3094,7 @@ and OptimizeDecisionTree cenv env m x =
         let esR, einfos = OptimizeExprsThenConsiderSplits cenv env es 
         TDSuccess(esR, n), CombineValueInfosUnknown einfos
     | TDBind(bind, rest) -> 
-        let (bind, binfo), envinner = OptimizeBinding cenv false env bind 
+        let (bind, binfo), envinner = OptimizeBinding cenv false false env bind 
         let rest, rinfo = OptimizeDecisionTree cenv envinner m rest 
 
         if ValueIsUsedOrHasEffect cenv (fun () -> (accFreeInDecisionTree CollectLocals rest emptyFreeVars).FreeLocals) (bind, binfo) then
@@ -3166,7 +3166,7 @@ and OptimizeSwitchFallback cenv env (eR, einfo, cases, dflt, m) =
     let info = { info with TotalSize = info.TotalSize + size; FunctionSize = info.FunctionSize + size; }
     TDSwitch (eR, casesR, dfltR, m), info
 
-and OptimizeBinding cenv isRec env (TBind(vref, expr, spBind)) =
+and OptimizeBinding cenv isRec _isRetry env (TBind(vref, expr, spBind)) =
     try 
         
         // The aim here is to stop method splitting for direct-self-tailcalls. We do more than that: if an expression
@@ -3208,7 +3208,13 @@ and OptimizeBinding cenv isRec env (TBind(vref, expr, spBind)) =
             | UnknownValue | ConstValue _ | ConstExprValue _ -> ivalue
             | SizeValue(_, a) -> MakeSizedValueInfo (cut a) 
 
+      //  let isLambda = match einfo.Info with CurriedLambdaValue _ -> true | _ -> false
         let einfo = if vref.MustInline then einfo else {einfo with Info = cut einfo.Info } 
+
+        //match einfo.Info with
+        //| UnknownValue when isLambda && not vref.IsCompiledAsTopLevel && isRetry = false -> 
+        //    OptimizeBinding { cenv with optimizing = false } isRec true env (TBind(vref, expr, spBind))
+        //| _ ->
 
         let einfo = 
             if (not vref.MustInline && not (cenv.settings.KeepOptimizationValues())) ||
@@ -3267,7 +3273,7 @@ and OptimizeBinding cenv isRec env (TBind(vref, expr, spBind)) =
         errorRecovery exn vref.Range 
         raise (ReportedError (Some exn))
           
-and OptimizeBindings cenv isRec env xs = List.mapFold (OptimizeBinding cenv isRec) env xs
+and OptimizeBindings cenv isRec env (xs: Bindings) = List.mapFold (OptimizeBinding cenv isRec true) env xs
     
 and OptimizeModuleExpr cenv env x = 
     match x with   
@@ -3372,7 +3378,7 @@ and OptimizeModuleDef cenv (env, bindInfosColl) x =
         (TMAbstract mexpr, info), (env, bindInfosColl)
 
     | TMDefLet(bind, m) ->
-        let ((bindR, binfo) as bindInfo), env = OptimizeBinding cenv false env bind
+        let ((bindR, binfo) as bindInfo), env = OptimizeBinding cenv false false env bind
         (TMDefLet(bindR, m), 
          notlazy { ValInfos=ValInfos [mkValBind bind (mkValInfo binfo bind.Var)] 
                    ModuleOrNamespaceInfos = NameMap.empty }), 
@@ -3392,7 +3398,7 @@ and OptimizeModuleBindings cenv (env, bindInfosColl) xs = List.mapFold (Optimize
 and OptimizeModuleBinding cenv (env, bindInfosColl) x = 
     match x with
     | ModuleOrNamespaceBinding.Binding bind -> 
-        let ((bindR, binfo) as bindInfo), env = OptimizeBinding cenv true env bind
+        let ((bindR, binfo) as bindInfo), env = OptimizeBinding cenv true false env bind
         (ModuleOrNamespaceBinding.Binding bindR, Choice1Of2 (bindR, binfo)), (env, [ bindInfo ] :: bindInfosColl)
     | ModuleOrNamespaceBinding.Module(mspec, def) ->
         let id = mspec.Id

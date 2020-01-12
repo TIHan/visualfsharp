@@ -18,19 +18,33 @@ module OptimizationTests =
 module Module1
 
 open System
-open System.Runtime.CompilerServices
-    
-let checkIt (a: int) (b: int) (c: int) (d: int) (e: int) (x: string) = if x = "test" then printf "test"
+open System.Text.RegularExpressions
+open FSharp.Quotations
+open FSharp.Quotations.DerivedPatterns
+open FSharp.Quotations.ExprShape
+open FSharp.Quotations.Patterns
 
-let check1 a b c d e (xs: string list) =
-    xs |> List.iter (checkIt a b c d e)
+let test() = 
+    let xs = [|1;2;3|]
+    let q = <@ xs.[0..^1] @>
+    
+    let expectEqualWithoutWhitespace s1 s2 = 
+        let a = Regex.Replace(s1, "\s", "") 
+        let b = Regex.Replace(s2, "\s", "")
+        if a <> b then failwithf "Expected '%s', but got\n'%s'" a b
+        ()
+    
+    let expected = "Call(None, GetArraySlice, [ValueWithName([|1;2;3|], xs), NewUnionCase(Some, Value(0)), NewUnionCase(Some, Call(None, []`1.GetReverseIndex, [ValueWithName([|1;2;3|], xs), Value(0), Value(1)]))])"
+    expectEqualWithoutWhitespace expected (q.ToString())
+    
+test()
             """
 
-        CompilerAssert.CompileLibraryAndVerifyILWithOptions [|"--optimize+"|] source
+        CompilerAssert.CompileLibraryAndVerifyILWithOptions [|"--optimize+";"--langversion:preview"|] source
             (fun verifier ->
                 verifier.VerifyIL
                     [
-                        "IL_0000:  newobj     instance void Module1/check1@9::.ctor()"
+                        "IL_0000:  newobj     instance void Module1/check"
                     ]
             )
 #endif
