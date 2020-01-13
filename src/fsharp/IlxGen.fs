@@ -749,7 +749,7 @@ type ValStorage =
 
     /// Indicates the value is "stored" as a IL static method (in a "main" class for a F#
     /// compilation unit, or as a member) according to its inferred or specified arity.
-    | Method of ValReprInfo * ValRef * ILMethodSpec * Range.range * ArgReprInfo list * TType list * ArgReprInfo
+    | Method of ValReprInfo * ValRef * ILMethodSpec * Range.range * ArgReprInfo list * TType list * ArgReprInfo * (FreeVars * Expr) option
 
     /// Indicates the value is stored at the given position in the closure environment accessed via "ldarg 0"
     | Env of ILType * int * ILFieldSpec * NamedLocalIlxClosureInfo ref option
@@ -1021,7 +1021,7 @@ let ComputeStorageForFSharpValue amap (g:TcGlobals) cloc optIntraAssemblyInfo op
 /// Compute the representation information for an F#-declared member
 let ComputeStorageForFSharpMember amap g topValInfo memberInfo (vref: ValRef) m =
     let mspec, _, _, paramInfos, retInfo, methodArgTys = GetMethodSpecForMemberVal amap g memberInfo vref
-    Method (topValInfo, vref, mspec, m, paramInfos, methodArgTys, retInfo)
+    Method (topValInfo, vref, mspec, m, paramInfos, methodArgTys, retInfo, None)
 
 /// Compute the representation information for an F#-declared function in a module or an F#-declared extension member.
 /// Note, there is considerable overlap with ComputeStorageForFSharpMember/GetMethodSpecForMemberVal and these could be
@@ -1036,7 +1036,7 @@ let ComputeStorageForFSharpFunctionOrFSharpExtensionMember amap (g:TcGlobals) cl
     let ilLocTy = mkILTyForCompLoc cloc
     let ilMethodInst = GenTypeArgs amap m tyenvUnderTypars (List.map mkTyparTy tps)
     let mspec = mkILStaticMethSpecInTy (ilLocTy, nm, ilMethodArgTys, ilRetTy, ilMethodInst)
-    Method (topValInfo, vref, mspec, m, paramInfos, methodArgTys, retInfo)
+    Method (topValInfo, vref, mspec, m, paramInfos, methodArgTys, retInfo, None)
 
 /// Determine if an F#-declared value, method or function is compiled as a method.
 let IsFSharpValCompiledAsMethod g (v: Val) =
@@ -3095,7 +3095,7 @@ and GenApp cenv cgbuf eenv (f, fty, tyargs, args, m) sequel =
         
             let storage = StorageForValRef g m vref eenv
             match storage with
-            | Method (_, _, mspec, _, _, _, _) ->
+            | Method (_, _, mspec, _, _, _, _, _) ->
                 CG.EmitInstr cgbuf (pop 0) (Push [g.iltyp_RuntimeMethodHandle]) (I_ldtoken (ILToken.ILMethod mspec))
             | _ ->
                 errorR(Error(FSComp.SR.ilxgenUnexpectedArgumentToMethodHandleOfDuringCodegen(), m))
@@ -3122,15 +3122,26 @@ and GenApp cenv cgbuf eenv (f, fty, tyargs, args, m) sequel =
                 when
                      (let storage = StorageForValRef g m vref eenv
                       match storage with
-                      | Method (topValInfo, vref, _, _, _, _, _) ->
+                      | Method (topValInfo, vref, _, _, _, _, _, liftInfoOpt) ->
                           (let tps, argtys, _, _ = GetTopValTypeInFSharpForm g topValInfo vref.Type m
+                           let argCount = args.Length + (match liftInfoOpt with Some (freeVars, _) -> freeVars.FreeLocals.Count | _ -> 0)
                            tps.Length = tyargs.Length &&
-                           argtys.Length <= args.Length)
+                           argtys.Length <= argCount)
                       | _ -> false) ->
 
       let storage = StorageForValRef g m vref eenv
       match storage with
-      | Method (topValInfo, vref, mspec, _, _, _, _) ->
+      | Method (topValInfo, vref, mspec, _, _, _, _, liftInfoOpt) ->
+          let args =
+            match liftInfoOpt with
+            | Some (freeVars, _) ->
+                let freeArgs =
+                    freeVars.FreeLocals.ToList()
+                    |> List.map (exprForVal m)
+                freeArgs @ args
+            | _ ->
+                args
+
           let nowArgs, laterArgs =
               let _, curriedArgInfos, _, _ = GetTopValTypeInFSharpForm g topValInfo vref.Type m
               List.splitAt curriedArgInfos.Length args
@@ -5294,7 +5305,12 @@ and GenBindingAfterSequencePoint cenv cgbuf eenv sp (TBind(vspec, rhsExpr, _)) s
         CommitStartScope cgbuf startScopeMarkOpt
         GenExpr cenv cgbuf eenv SPSuppress cctorBody discard
     
-    | Method (topValInfo, _, mspec, _, paramInfos, methodArgTys, retInfo) ->
+    | Method (topValInfo, _, mspec, _, paramInfos, methodArgTys, retInfo, liftInfoOpt) ->
+        let rhsExpr =
+            match liftInfoOpt with
+            | Some (_, r) -> r
+            | _ -> rhsExpr
+
         let tps, ctorThisValOpt, baseValOpt, vsl, body', bodyty = IteratedAdjustArityOfLambda g cenv.amap topValInfo rhsExpr
         let methodVars = List.concat vsl
         CommitStartScope cgbuf startScopeMarkOpt
@@ -6079,7 +6095,7 @@ and GenSetStorage m cgbuf storage =
     | StaticProperty (ilGetterMethSpec, _) ->
         error(Error(FSComp.SR.ilStaticMethodIsNotLambda(ilGetterMethSpec.Name), m))
 
-    | Method (_, _, mspec, m, _, _, _) ->
+    | Method (_, _, mspec, m, _, _, _, _) ->
         error(Error(FSComp.SR.ilStaticMethodIsNotLambda(mspec.Name), m))
 
     | Null ->
@@ -6123,7 +6139,7 @@ and GenGetStorageAndSequel cenv cgbuf eenv m (ty, ilTy) storage storeSequel =
         CG.EmitInstr cgbuf (pop 0) (Push [ilTy]) (I_call (Normalcall, ilGetterMethSpec, None))
         CommitGetStorageSequel cenv cgbuf eenv m ty None storeSequel
 
-    | Method (topValInfo, vref, mspec, _, _, _, _) ->
+    | Method (topValInfo, vref, mspec, _, _, _, _, _) ->
         // Get a toplevel value as a first-class value.
         // We generate a lambda expression and that simply calls
         // the toplevel method. However we optimize the case where we are
@@ -6199,6 +6215,56 @@ and AllocLocalVal cenv cgbuf v eenv repr scopeMarks =
         
                 let idx, realloc, eenv = AllocLocal cenv cgbuf eenv v.IsCompilerGenerated (v.CompiledName g.CompilerGlobalState, g.ilg.typ_Object, false) scopeMarks
                 Local (idx, realloc, Some(ref (NamedLocalIlxClosureInfoGenerator cloinfoGenerate))), eenv
+            | Some (Expr.Lambda (_, None, None, _, _, _, _) as r) when not v.IsCompiledAsTopLevel ->
+                let freeVars = (freeInExpr CollectTyparsAndLocals r)
+                let r2 = 
+                    (r, freeVars.FreeLocals.ToList())
+                    ||> List.fold (fun r x ->
+                        match r with
+                        | Expr.Lambda(_, None, None, _, _, m, _) ->
+                            Expr.Lambda(newUnique (), None, None, [x], r, m, tyOfExpr g r)
+                        | _ ->
+                            failwith "Invalid lambda"
+                    )
+                let m = v.Range
+                let cloinfo, _, _ = GetIlxClosureInfo cenv m false None eenv r2
+             //   let ilCloBody = CodeGenMethodForExpr cenv cgbuf.mgbuf (SPAlways, [], cloinfo.cloName, eenvinner, 1, body, Return)
+           //     let _mdef = mkILStaticMethod(cloinfo.localTypeFuncDirectILGenericParams, cloinfo.cloName, ILMemberAccess.Assembly, cloinfo.ilCloLambdas.Parameters, mkILReturn cloinfo.cloILFormalRetTy, MethodBody.IL ilCloBody)
+                let tref = TypeRefForCompLoc eenv.cloc
+         //       cgbuf.mgbuf.AddMethodDef (tref, mdef)
+
+                //let parameters =
+                //    freeVars.FreeLocals
+                //    |> List.map (fun x -> mkILp)
+                let mref = ILMethodRef.Create(tref, ILCallingConv.Static, cloinfo.cloName, cloinfo.cloILGenericParams.Length, cloinfo.ilCloLambdas.Parameters |> List.map (fun x -> x.Type), cloinfo.cloILFormalRetTy)
+                let mspec = ILMethodSpec.Create(mkILTyForCompLoc eenv.cloc, mref, cloinfo.cloSpec.GenericArgs)
+
+                let rec collectArgs e acc =
+                    match e with
+                    | Expr.Lambda (_, _, _, args, body, _, _) ->
+                        collectArgs body (acc @ args)
+                    | _ ->
+                        acc
+
+                let args = collectArgs r2 []
+                let argInfos =
+                    args
+                    |> List.map (fun x -> [ ({ Attribs = x.Attribs; Name = Some x.Id } : ArgReprInfo) ])
+                let argTys =
+                    args
+                    |> List.map (fun x -> x.Type)
+                let repr = ValReprInfo ([], argInfos, ValReprInfo.unnamedRetVal)
+              //  let v, _ = mkCompGenLocal v.Range v.LogicalName (tyOfExpr g r2)
+                let storage = Method(repr, mkLocalValRef v, mspec, m, List.concat argInfos, argTys, ValReprInfo.unnamedRetVal, Some (freeVars, r2))
+
+                //let lazyInstanceStorage =
+                //    lazy
+                //        let ilCloBody = CodeGenMethodForExpr cenv cgbuf.mgbuf (SPAlways, [], cloinfo.cloName, eenvinner, 1, body, Return)
+                //        let mdef = mkILStaticMethod(cloinfo.localTypeFuncDirectILGenericParams, cloinfo.cloName, ILMemberAccess.Assembly, cloinfo.ilCloLambdas.Parameters, mkILReturn cloinfo.cloILFormalRetTy, MethodBody.IL ilCloBody)
+                //        cgbuf.mgbuf.AddMethodDef (tref, mdef)
+
+              //  let storage = StaticMethod(mspec, m, OptionalShadowLocal.NoShadowLocal)
+                storage, eenv
             | _ -> 
                 // normal local 
                 let idx, realloc, eenv = AllocLocal cenv cgbuf eenv v.IsCompilerGenerated (v.CompiledName g.CompilerGlobalState, GenTypeOfVal cenv eenv v, v.IsFixed) scopeMarks
@@ -6771,7 +6837,7 @@ and GenToStringMethod cenv eenv ilThisTy m =
     let g = cenv.g
     [ match (eenv.valsInScope.TryFind g.sprintf_vref.Deref,
              eenv.valsInScope.TryFind g.new_format_vref.Deref) with
-      | Some(Lazy(Method(_, _, sprintfMethSpec, _, _, _, _))), Some(Lazy(Method(_, _, newFormatMethSpec, _, _, _, _))) ->
+      | Some(Lazy(Method(_, _, sprintfMethSpec, _, _, _, _, _))), Some(Lazy(Method(_, _, newFormatMethSpec, _, _, _, _, _))) ->
                // The type returned by the 'sprintf' call
                let funcTy = EraseClosures.mkILFuncTy g.ilxPubCloEnv ilThisTy g.ilg.typ_String
                // Give the instantiation of the printf format object, i.e. a Format`5 object compatible with StringFormat<ilThisTy>
@@ -7101,7 +7167,7 @@ and GenTypeDef cenv mgbuf lazyInitInfo eenv m (tycon: Tycon) =
                   let (|Lazy|) (x: Lazy<_>) = x.Force()
                   match (eenv.valsInScope.TryFind g.sprintf_vref.Deref,
                          eenv.valsInScope.TryFind g.new_format_vref.Deref) with
-                  | Some(Lazy(Method(_, _, sprintfMethSpec, _, _, _, _))), Some(Lazy(Method(_, _, newFormatMethSpec, _, _, _, _))) ->
+                  | Some(Lazy(Method(_, _, sprintfMethSpec, _, _, _, _, _))), Some(Lazy(Method(_, _, newFormatMethSpec, _, _, _, _, _))) ->
                       // The type returned by the 'sprintf' call
                       let funcTy = EraseClosures.mkILFuncTy g.ilxPubCloEnv ilThisTy g.ilg.typ_String
                       // Give the instantiation of the printf format object, i.e. a Format`5 object compatible with StringFormat<ilThisTy>

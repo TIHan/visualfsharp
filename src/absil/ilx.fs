@@ -63,6 +63,11 @@ type IlxClosureLambdas =
     | Lambdas_lambda of ILParameter * IlxClosureLambdas
     | Lambdas_return of ILType
 
+    member x.Parameters =
+        match x with
+        | Lambdas_lambda (ilParam, clo) -> ilParam :: clo.Parameters
+        | _ -> []
+
 type IlxClosureApps = 
   | Apps_tyapp of ILType * IlxClosureApps 
   | Apps_app of ILType * IlxClosureApps 

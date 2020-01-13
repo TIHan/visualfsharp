@@ -1761,10 +1761,10 @@ let ApplyAllOptimizations (tcConfig:TcConfig, tcGlobals, tcVal, outfile, importM
                     implFile 
                 else implFile 
 
-            let implFile = 
-                if tcConfig.doTLR then 
-                    implFile |> InnerLambdasToTopLevelFuncs.MakeTLRDecisions ccu tcGlobals 
-                else implFile 
+            //let implFile = 
+            //    if tcConfig.doTLR then 
+            //        implFile |> InnerLambdasToTopLevelFuncs.MakeTLRDecisions ccu tcGlobals 
+            //    else implFile 
 
             let implFile = 
                 LowerCallsAndSeqs.LowerImplFile tcGlobals implFile
