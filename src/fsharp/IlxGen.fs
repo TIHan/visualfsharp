@@ -5305,7 +5305,7 @@ and GenBindingAfterSequencePoint cenv cgbuf eenv sp (TBind(vspec, rhsExpr, _)) s
         CommitStartScope cgbuf startScopeMarkOpt
         GenExpr cenv cgbuf eenv SPSuppress cctorBody discard
     
-    | Method (topValInfo, _, mspec, _, paramInfos, methodArgTys, retInfo, liftInfoOpt) ->
+    | Method (topValInfo, vref, mspec, _, paramInfos, methodArgTys, retInfo, liftInfoOpt) ->
         let rhsExpr =
             match liftInfoOpt with
             | Some (_, r) -> r
@@ -5316,7 +5316,7 @@ and GenBindingAfterSequencePoint cenv cgbuf eenv sp (TBind(vspec, rhsExpr, _)) s
         CommitStartScope cgbuf startScopeMarkOpt
 
         let ilxMethInfoArgs =
-            (vspec, mspec, access, paramInfos, retInfo, topValInfo, ctorThisValOpt, baseValOpt, tps, methodVars, methodArgTys, body', bodyty)
+            (vref.Deref, mspec, access, paramInfos, retInfo, topValInfo, ctorThisValOpt, baseValOpt, tps, methodVars, methodArgTys, body', bodyty)
         // if we have any expression recursion depth, we should delay the generation of a method to prevent stack overflows
         if cenv.exprRecursionDepth > 0 then
             DelayGenMethodForBinding cenv cgbuf.mgbuf eenv ilxMethInfoArgs
@@ -6254,7 +6254,7 @@ and AllocLocalVal cenv cgbuf v eenv repr scopeMarks =
                     args
                     |> List.map (fun x -> x.Type)
                 let repr = ValReprInfo ([], argInfos, ValReprInfo.unnamedRetVal)
-              //  let v, _ = mkCompGenLocal v.Range v.LogicalName (tyOfExpr g r2)
+                let v, _ = mkCompGenLocal v.Range v.LogicalName (tyOfExpr g r2)
                 let storage = Method(repr, mkLocalValRef v, mspec, m, List.concat argInfos, argTys, ValReprInfo.unnamedRetVal, Some (freeVars, r2))
 
                 //let lazyInstanceStorage =
