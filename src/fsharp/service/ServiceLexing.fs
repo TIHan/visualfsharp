@@ -819,7 +819,7 @@ module Lexer =
 
     [<Struct;RequireQualifiedAccess>]
     type FSharpSyntaxTokenKind =
-        | Unknown
+        | None
         | HashIf
         | HashElse
         | HashEndIf
@@ -1017,6 +1017,7 @@ module Lexer =
 
         member _.Kind =
             match tok with
+            | _ when obj.ReferenceEquals(tok, null) -> FSharpSyntaxTokenKind.None
             | ASR -> FSharpSyntaxTokenKind.Asr
             | INFIX_STAR_STAR_OP "asr" -> FSharpSyntaxTokenKind.Asr
             | INFIX_STAR_DIV_MOD_OP "land" -> FSharpSyntaxTokenKind.InfixLand
@@ -1206,7 +1207,7 @@ module Lexer =
             | KEYWORD_STRING _ -> FSharpSyntaxTokenKind.KeywordString
             | STRING _ -> FSharpSyntaxTokenKind.String
             | BYTEARRAY _ -> FSharpSyntaxTokenKind.ByteArray
-            | _ -> FSharpSyntaxTokenKind.Unknown            
+            | _ -> FSharpSyntaxTokenKind.None           
 
         member this.IsKeyword =
             match this.Kind with
@@ -1317,29 +1318,34 @@ module Lexer =
             | FSharpSyntaxTokenKind.KeywordString -> true
             | _ -> false
 
-        member _.IsIdentifier =
-            match tok with
-            | Parser.token.IDENT _ -> true
+        member this.IsIdentifier =
+            match this.Kind with
+            | FSharpSyntaxTokenKind.Identifier -> true
             | _ -> false
 
-        member _.IsStringLiteral =
-            match tok with
-            | Parser.token.STRING _ -> true
+        member this.IsStringLiteral =
+            match this.Kind with
+            | FSharpSyntaxTokenKind.String -> true
             | _ -> false
 
-        member _.IsNumericLiteral =
-            match tok with
-            | Parser.token.UINT8 _
-            | Parser.token.INT16 _
-            | Parser.token.INT32 _
-            | Parser.token.INT64 _
-            | Parser.token.BIGNUM _ -> true
+        member this.IsNumericLiteral =
+            match this.Kind with
+            | FSharpSyntaxTokenKind.UInt8
+            | FSharpSyntaxTokenKind.UInt16
+            | FSharpSyntaxTokenKind.UInt64
+            | FSharpSyntaxTokenKind.Int8
+            | FSharpSyntaxTokenKind.Int16
+            | FSharpSyntaxTokenKind.Int32
+            | FSharpSyntaxTokenKind.Int64
+            | FSharpSyntaxTokenKind.Ieee32
+            | FSharpSyntaxTokenKind.Ieee64
+            | FSharpSyntaxTokenKind.BigNumber -> true
             | _ -> false
 
-        member _.IsCommentTrivia =
-            match tok with
-            | Parser.token.COMMENT _
-            | Parser.token.LINE_COMMENT _ -> true
+        member this.IsCommentTrivia =
+            match this.Kind with
+            | FSharpSyntaxTokenKind.CommentTrivia
+            | FSharpSyntaxTokenKind.LineCommentTrivia -> true
             | _ -> false
 
     let lexWithErrorLogger (text: ISourceText) (filePath: string) conditionalCompilationDefines (flags: FSharpLexerFlags) supportsFeature errorLogger lexCallback pathMap (ct: CancellationToken) =
@@ -1394,7 +1400,7 @@ module Lexer =
                         let tok = getNextToken lexbuf
                         let fsTok = FSharpSyntaxToken(tok, lexbuf.LexemeRange)
                         match fsTok.Kind with
-                        | FSharpSyntaxTokenKind.Unknown -> ()
+                        | FSharpSyntaxTokenKind.None -> ()
                         | _ -> tokenCallback fsTok
 
             lex text filePath conditionalCompilationDefines flags supportsFeature lexCallback pathMap ct

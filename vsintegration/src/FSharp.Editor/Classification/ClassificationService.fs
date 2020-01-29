@@ -5,6 +5,7 @@ namespace Microsoft.VisualStudio.FSharp.Editor
 open System
 open System.Composition
 open System.Collections.Generic
+open System.Collections.Immutable
 open System.Diagnostics
 open System.Threading
 
@@ -20,7 +21,9 @@ open Microsoft.CodeAnalysis.ExternalAccess.FSharp.Classification
 // IVT, we'll maintain the status quo.
 #nowarn "44"
 
+open FSharp.Compiler.Range
 open FSharp.Compiler.SourceCodeServices
+open FSharp.Compiler.SourceCodeServices.Lexer
 
 [<Export(typeof<IFSharpClassificationService>)>]
 type internal FSharpClassificationService
@@ -30,6 +33,32 @@ type internal FSharpClassificationService
         projectInfoManager: FSharpProjectOptionsManager
     ) =
     static let userOpName = "SemanticColorization"
+
+    static member GetLexicalClassifications(filePath: string, defines, text: SourceText, textSpan: TextSpan, ?ct) =
+        let ct = defaultArg ct CancellationToken.None
+        let result = ImmutableArray.CreateBuilder()
+        let tokenCallback =
+            let textRange = RoslynHelpers.TextSpanToFSharpRange(filePath, textSpan, text)
+            fun (tok: FSharpSyntaxToken) ->
+                if rangeContainsRange textRange tok.Range then
+                    let spanKind =
+                        if tok.IsKeyword then
+                            ClassificationTypeNames.Keyword
+                        elif tok.IsNumericLiteral then
+                            ClassificationTypeNames.NumericLiteral
+                        elif tok.IsCommentTrivia then
+                            ClassificationTypeNames.Comment
+                        else
+                            ClassificationTypeNames.Text
+
+                    match RoslynHelpers.TryFSharpRangeToTextSpan(text, tok.Range) with
+                    | Some span -> result.Add(ClassifiedSpan(spanKind, span))
+                    | _ -> ()
+                
+        FSharpLexer.Lex(text.ToFSharpSourceText(), tokenCallback, langVersion = "preview", filePath = filePath, conditionalCompilationDefines = defines, ct = ct)
+
+        result.ToImmutable()
+        
 
     interface IFSharpClassificationService with
         // Do not perform classification if we don't have project options (#defines matter)
@@ -41,7 +70,7 @@ type internal FSharpClassificationService
 
                 let defines = projectInfoManager.GetCompilationDefinesForEditingDocument(document)  
                 let! sourceText = document.GetTextAsync(cancellationToken)  |> Async.AwaitTask
-                result.AddRange(Tokenizer.getClassifiedSpans(document.Id, sourceText, textSpan, Some(document.FilePath), defines, cancellationToken))
+                result.AddRange(FSharpClassificationService.GetLexicalClassifications(document.FilePath, defines, sourceText, textSpan, ct = cancellationToken))
             } |> RoslynHelpers.StartAsyncUnitAsTask cancellationToken
 
         member __.AddSemanticClassificationsAsync(document: Document, textSpan: TextSpan, result: List<ClassifiedSpan>, cancellationToken: CancellationToken) =
