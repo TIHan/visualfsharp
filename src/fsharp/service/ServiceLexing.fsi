@@ -266,7 +266,6 @@ module public Lexer =
 
     [<Flags>]
     type public FSharpLexerFlags =
-        | None                          = 0x00000
         | Default                       = 0x11011
         | LightSyntaxOn                 = 0x00001
         | Compiling                     = 0x00010 
@@ -274,7 +273,7 @@ module public Lexer =
         | SkipTrivia                    = 0x01000
         | UseLexFilter                  = 0x10000
 
-    [<Struct;RequireQualifiedAccess>]
+    [<RequireQualifiedAccess>]
     type public FSharpSyntaxTokenKind =
         | None
         | HashIf
@@ -469,6 +468,9 @@ module public Lexer =
 
     [<Struct;NoComparison;NoEquality>]
     type public FSharpSyntaxToken =
+
+        val private tok: Parser.token
+        val private tokRange: range
 
         member Range: range
 

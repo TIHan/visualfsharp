@@ -809,7 +809,6 @@ module Lexer =
 
     [<Flags>]
     type FSharpLexerFlags =
-        | None                          = 0x00000
         | Default                       = 0x11011
         | LightSyntaxOn                 = 0x00001
         | Compiling                     = 0x00010 
@@ -817,7 +816,7 @@ module Lexer =
         | SkipTrivia                    = 0x01000
         | UseLexFilter                  = 0x10000
 
-    [<Struct;RequireQualifiedAccess>]
+    [<RequireQualifiedAccess>]
     type FSharpSyntaxTokenKind =
         | None
         | HashIf
@@ -1011,13 +1010,17 @@ module Lexer =
         | InfixMod
 
     [<Struct;NoComparison;NoEquality>]
-    type FSharpSyntaxToken(tok: token, range: range) =
+    type FSharpSyntaxToken =
 
-        member _.Range = range
+        val private tok: Parser.token
+        val private tokRange: range
 
-        member _.Kind =
-            match tok with
-            | _ when obj.ReferenceEquals(tok, null) -> FSharpSyntaxTokenKind.None
+        new (tok, tokRange) = { tok = tok; tokRange = tokRange }
+
+        member this.Range = this.tokRange
+
+        member this.Kind =
+            match this.tok with
             | ASR -> FSharpSyntaxTokenKind.Asr
             | INFIX_STAR_STAR_OP "asr" -> FSharpSyntaxTokenKind.Asr
             | INFIX_STAR_DIV_MOD_OP "land" -> FSharpSyntaxTokenKind.InfixLand
@@ -1215,18 +1218,22 @@ module Lexer =
             | FSharpSyntaxTokenKind.And
             | FSharpSyntaxTokenKind.As
             | FSharpSyntaxTokenKind.Assert
+            | FSharpSyntaxTokenKind.OffsideAssert
             | FSharpSyntaxTokenKind.Base
             | FSharpSyntaxTokenKind.Begin
             | FSharpSyntaxTokenKind.Class
             | FSharpSyntaxTokenKind.Default
             | FSharpSyntaxTokenKind.Delegate
             | FSharpSyntaxTokenKind.Do
+            | FSharpSyntaxTokenKind.OffsideDo
             | FSharpSyntaxTokenKind.Done
             | FSharpSyntaxTokenKind.Downcast
             | FSharpSyntaxTokenKind.DownTo
             | FSharpSyntaxTokenKind.Elif
             | FSharpSyntaxTokenKind.Else
+            | FSharpSyntaxTokenKind.OffsideElse
             | FSharpSyntaxTokenKind.End
+            | FSharpSyntaxTokenKind.OffsideEnd
             | FSharpSyntaxTokenKind.Exception
             | FSharpSyntaxTokenKind.Extern
             | FSharpSyntaxTokenKind.False
@@ -1234,17 +1241,23 @@ module Lexer =
             | FSharpSyntaxTokenKind.Fixed
             | FSharpSyntaxTokenKind.For
             | FSharpSyntaxTokenKind.Fun
+            | FSharpSyntaxTokenKind.OffsideFun
             | FSharpSyntaxTokenKind.Function
+            | FSharpSyntaxTokenKind.OffsideFunction
             | FSharpSyntaxTokenKind.Global
             | FSharpSyntaxTokenKind.If
             | FSharpSyntaxTokenKind.In
             | FSharpSyntaxTokenKind.Inherit
             | FSharpSyntaxTokenKind.Inline
             | FSharpSyntaxTokenKind.Interface
+            | FSharpSyntaxTokenKind.OffsideInterfaceMember
             | FSharpSyntaxTokenKind.Internal
             | FSharpSyntaxTokenKind.Lazy
+            | FSharpSyntaxTokenKind.OffsideLazy
             | FSharpSyntaxTokenKind.Let // "let" and "use"
+            | FSharpSyntaxTokenKind.OffsideLet
             | FSharpSyntaxTokenKind.DoBang //  "let!", "use!" and "do!"
+            | FSharpSyntaxTokenKind.OffsideDoBang
             | FSharpSyntaxTokenKind.Match
             | FSharpSyntaxTokenKind.MatchBang
             | FSharpSyntaxTokenKind.Member
@@ -1276,6 +1289,7 @@ module Lexer =
             | FSharpSyntaxTokenKind.When
             | FSharpSyntaxTokenKind.While
             | FSharpSyntaxTokenKind.With
+            | FSharpSyntaxTokenKind.OffsideWith
 
             // * Reserved - from OCAML *
             | FSharpSyntaxTokenKind.Asr

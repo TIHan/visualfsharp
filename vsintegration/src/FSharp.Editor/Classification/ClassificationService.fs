@@ -48,6 +48,8 @@ type internal FSharpClassificationService
                             ClassificationTypeNames.NumericLiteral
                         elif tok.IsCommentTrivia then
                             ClassificationTypeNames.Comment
+                        elif tok.IsStringLiteral then
+                            ClassificationTypeNames.StringLiteral
                         else
                             ClassificationTypeNames.Text
 
@@ -55,7 +57,8 @@ type internal FSharpClassificationService
                     | Some span -> result.Add(ClassifiedSpan(spanKind, span))
                     | _ -> ()
                 
-        FSharpLexer.Lex(text.ToFSharpSourceText(), tokenCallback, langVersion = "preview", filePath = filePath, conditionalCompilationDefines = defines, ct = ct)
+        let flags = FSharpLexerFlags.Default &&& ~~~FSharpLexerFlags.SkipTrivia
+        FSharpLexer.Lex(text.ToFSharpSourceText(), tokenCallback, langVersion = "preview", filePath = filePath, conditionalCompilationDefines = defines, flags = flags, ct = ct)
 
         result.ToImmutable()
         
