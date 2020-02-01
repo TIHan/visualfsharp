@@ -1362,7 +1362,7 @@ module Lexer =
             | FSharpSyntaxTokenKind.LineCommentTrivia -> true
             | _ -> false
 
-    let lexWithErrorLogger (text: ISourceText) (filePath: string) conditionalCompilationDefines (flags: FSharpLexerFlags) supportsFeature errorLogger lexCallback pathMap (ct: CancellationToken) =
+    let lexWithErrorLogger (text: ISourceText) (filePath: string) conditionalCompilationDefines (flags: FSharpLexerFlags) supportsFeature errorLogger onToken pathMap (ct: CancellationToken) =
         let canSkipTrivia = (flags &&& FSharpLexerFlags.SkipTrivia) = FSharpLexerFlags.SkipTrivia
         let isLightSyntaxOn = (flags &&& FSharpLexerFlags.LightSyntaxOn) = FSharpLexerFlags.LightSyntaxOn
         let isCompiling = (flags &&& FSharpLexerFlags.Compiling) = FSharpLexerFlags.Compiling
@@ -1372,20 +1372,20 @@ module Lexer =
         let lexbuf = UnicodeLexing.SourceTextAsLexbuf(supportsFeature, text)
         let lightSyntaxStatus = LightSyntaxStatus(isLightSyntaxOn, true) 
         let lexargs = mkLexargs (filePath, conditionalCompilationDefines, lightSyntaxStatus, Lexhelp.LexResourceManager(), [], errorLogger, pathMap)
-        let lexargs = { lexargs with applyLineDirectives = not isCompiling }
+        let lexargs = { lexargs with applyLineDirectives = isCompiling }
 
         let getNextToken =
             let lexer = Lexer.token lexargs canSkipTrivia
 
             if canUseLexFilter then
-                fun lexbuf ->
-                    let tokenizer = LexFilter.LexFilter(lexargs.lightSyntaxStatus, isCompilingFSharpCore, lexer, lexbuf)
-                    tokenizer.Lexer lexbuf
+                LexFilter.LexFilter(lexargs.lightSyntaxStatus, isCompilingFSharpCore, lexer, lexbuf).Lexer
             else
                 lexer
 
         usingLexbufForParsing (lexbuf, filePath) (fun lexbuf -> 
-            lexCallback lexbuf (fun lexbuf -> ct.ThrowIfCancellationRequested (); getNextToken lexbuf))
+            while not lexbuf.IsPastEndOfStream do
+                ct.ThrowIfCancellationRequested ()
+                onToken (getNextToken lexbuf) lexbuf.LexemeRange)
 
     let lex text filePath conditionalCompilationDefines flags supportsFeature lexCallback pathMap ct =
         let errorLogger = CompilationErrorLogger("Lexer", ErrorLogger.FSharpErrorSeverityOptions.Default)
@@ -1408,13 +1408,11 @@ module Lexer =
                 (PathMap.empty, pathMap)
                 ||> Seq.fold (fun state pair -> state |> PathMap.addMapping pair.Key pair.Value)
 
-            let lexCallback =
-                fun (lexbuf: Lexbuf) getNextToken ->
-                    while not lexbuf.IsPastEndOfStream do
-                        let tok = getNextToken lexbuf
-                        let fsTok = FSharpSyntaxToken(tok, lexbuf.LexemeRange)
-                        match fsTok.Kind with
-                        | FSharpSyntaxTokenKind.None -> ()
-                        | _ -> tokenCallback fsTok
+            let onToken =
+                fun tok m ->
+                    let fsTok = FSharpSyntaxToken(tok, m)
+                    match fsTok.Kind with
+                    | FSharpSyntaxTokenKind.None -> ()
+                    | _ -> tokenCallback fsTok
 
-            lex text filePath conditionalCompilationDefines flags supportsFeature lexCallback pathMap ct
+            lex text filePath conditionalCompilationDefines flags supportsFeature onToken pathMap ct

@@ -57,7 +57,7 @@ type internal FSharpClassificationService
                     | Some span -> result.Add(ClassifiedSpan(spanKind, span))
                     | _ -> ()
                 
-        let flags = FSharpLexerFlags.Default &&& ~~~FSharpLexerFlags.SkipTrivia
+        let flags = FSharpLexerFlags.Default &&& ~~~FSharpLexerFlags.Compiling
         FSharpLexer.Lex(text.ToFSharpSourceText(), tokenCallback, langVersion = "preview", filePath = filePath, conditionalCompilationDefines = defines, flags = flags, ct = ct)
 
         result.ToImmutable()
