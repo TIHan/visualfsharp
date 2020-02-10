@@ -14,6 +14,29 @@ open FSharp.Compiler.Visualizer
 open FSharp.Compiler.Ast
 open FSharp.Compiler.SourceCodeServices
 
+let createProject name referencedProjects =
+    let tmpPath = Path.GetTempPath()
+    let file = Path.Combine(tmpPath, Path.ChangeExtension(name, ".fs"))
+
+    {
+        ProjectFileName = Path.Combine(tmpPath, Path.ChangeExtension(name, ".dll"))
+        ProjectId = None
+        SourceFiles = [|file|]
+        OtherOptions = 
+            Array.append [|"--optimize+"; "--target:exe"; "--targetprofile:mscorlib" |] (referencedProjects |> Array.ofList |> Array.map (fun x -> "-r:" + x.ProjectFileName))
+        ReferencedProjects =
+            referencedProjects
+            |> List.map (fun x -> (x.ProjectFileName, x))
+            |> Array.ofList
+        IsIncompleteTypeCheckEnvironment = false
+        UseScriptResolutionRules = false
+        LoadTime = DateTime()
+        UnresolvedReferences = None
+        OriginalLoadReferences = []
+        ExtraProjectInfo = None
+        Stamp = None
+    }
+
 module private SourceText =
 
     open System.Runtime.CompilerServices
@@ -159,8 +182,8 @@ module View =
         menu.Items.Add(fileMenuItem vg) |> ignore
         menu
 
-    let rec typeTreeItem onClick preHeader (visited: HashSet<obj>) (inst: obj) =
-        if inst <> null && visited.Add inst then
+    let rec typeTreeItem onClick preHeader (visited: HashSet<Type * obj>) (inst: obj) =
+        if inst <> null && visited.Add (inst.GetType(), inst) then
             let itemType = inst.GetType()
             let treeViewItem = TreeViewItem()
             treeViewItem.Selected.Add(fun _ -> if treeViewItem.IsSelected then onClick inst)
@@ -181,7 +204,7 @@ module View =
             TreeViewItem(Header = "null")
 
     let main vg =
-        let checker = FSharpChecker.Create()
+        let checker = FSharpChecker.Create(keepAssemblyContents = true)
         let mainMenu = mainMenu vg
         DockPanel.SetDock(mainMenu, Dock.Top)
 
@@ -222,12 +245,13 @@ module View =
             let computation =
                 async {
                     do! Async.Sleep 200
-                    let parsingOptions, _ = checker.GetParsingOptionsFromCommandLineArgs(["file1.fs"])
-                    let! results = checker.ParseFile("file1.fs", sourceText.ToFSharpSourceText(), parsingOptions)
+                    let options = createProject "file1" []
+                    let! _, answer = checker.ParseAndCheckFileInProject(options.SourceFiles.[0], 0, sourceText.ToFSharpSourceText(), options)
                     
-                    match results.ParseTree with
-                    | Some parseTree -> 
-                        astTreeView.Items.Add(typeTreeItem onClick "ParsedInput" (HashSet()) parseTree) |> ignore
+                    match answer with
+                    | FSharpCheckFileAnswer.Succeeded results -> 
+                        let tree = results.ImplementationFile.Value
+                        astTreeView.Items.Add(typeTreeItem onClick "TAST" (HashSet()) tree) |> ignore
                     | _ -> ()
                 }
             Async.StartImmediate(computation, cancellationToken = cts.Token))
