@@ -2875,7 +2875,7 @@ type FsiEvaluationSession (fsi: FsiEvaluationSessionHostConfig, argv:string[], i
         // is not safe to call concurrently.
         let ctok = AssumeCompilationThreadWithoutEvidence()
         let errorOptions = TcConfig.Create(tcConfigB, validate = false).errorSeverityOptions
-        let errorLogger = CompilationErrorLogger("CreateBoundValue", errorOptions)
+        let errorLogger = CompilationErrorLogger("AddBoundValue", errorOptions)
         fsiInteractionProcessor.AddBoundValue(ctok, errorLogger, valueName, value, None)
 
     /// Performs these steps:

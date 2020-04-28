@@ -4,6 +4,8 @@ open System.IO
 open FSharp.Compiler.Interactive.Shell
 open NUnit.Framework
 
+type Test = { x: int }
+
 let createFsiSession () =
     // Intialize output and input streams
     let inStream = new StringReader("")
@@ -83,6 +85,19 @@ let ``AddBoundValue: Creating a bound value will result in retrieving the correc
     use fsiSession = createFsiSession ()
 
     fsiSession.AddBoundValue("w", [123])
+
+    let values = fsiSession.GetBoundValues()
+    let _, fsiValue = values |> List.exactlyOne
+
+    Assert.AreEqual(typeof<int list>, fsiValue.ReflectionType)
+
+[<Test>]
+let ``AddBoundValue: Creating a bound value will result in retrieving the correct record value`` () =
+    use fsiSession = createFsiSession ()
+
+    fsiSession.EvalInteraction("""#r "FSharp.Compiler.UnitTests.dll" """)
+    fsiSession.EvalInteraction("""open FSharp.Compiler.UnitTests.FsiTests""")
+    fsiSession.AddBoundValue("r", { x = 1 })
 
     let values = fsiSession.GetBoundValues()
     let _, fsiValue = values |> List.exactlyOne
