@@ -77,7 +77,7 @@ type public IlxGenResults =
       quotationResourceInfo: (ILTypeRef list * byte[])  list
     }
   
-/// Used to support the compilation-inversion operations "ClearGeneratedValue" and "LookupGeneratedValue"
+/// Used to support the compilation-inversion operations "ClearGeneratedValue", "SetGeneratedValue" and "LookupGeneratedValue"
 type ExecutionContext =
     {
       LookupFieldRef: (ILFieldRef -> FieldInfo)
@@ -103,6 +103,9 @@ type public IlxAssemblyGenerator =
 
     /// Invert the compilation of the given value and clear the storage of the value
     member ClearGeneratedValue: ExecutionContext * Val -> unit
+
+    /// Invert the compilation of the given value and set the storage of the value
+    member SetGeneratedValue: ExecutionContext * Val * obj -> unit
 
     /// Invert the compilation of the given value and return its current dynamic value and its compiled System.Type
     member LookupGeneratedValue: ExecutionContext * Val -> (obj * System.Type) option

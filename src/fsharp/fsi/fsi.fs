@@ -927,6 +927,7 @@ type internal FsiDynamicCompilerState =
       tcState   : TcState 
       tcImports   : TcImports
       ilxGenerator : IlxGen.IlxAssemblyGenerator
+      boundValues : NameMap<Val>
       // Why is this not in FsiOptions?
       timing    : bool
       debugBreak : bool }
@@ -1146,6 +1147,7 @@ type internal FsiDynamicCompiler
 
         // Find all new declarations the EvaluationListener
         let mutable itValue = None
+        let mutable boundValues = newState.boundValues
         try
             let contents = FSharpAssemblyContents(tcGlobals, tcState.Ccu, Some tcState.CcuSig, tcImports, declaredImpls)
             let contentFile = contents.ImplementationFiles.[0]
@@ -1164,8 +1166,11 @@ type internal FsiDynamicCompiler
                                 | Item.Value vref ->
                                     let optValue = newState.ilxGenerator.LookupGeneratedValue(valuePrinter.GetEvaluationContext(newState.emEnv), vref.Deref)
                                     match optValue with
-                                    | Some (res, ty) -> Some(FsiValue(res, ty, FSharpType(cenv, vref.Type)))
-                                    | None -> None 
+                                    | Some (res, ty) -> 
+                                        boundValues <- boundValues |> NameMap.add v.LogicalName vref.Deref
+                                        Some(FsiValue(res, ty, FSharpType(cenv, vref.Type)))
+                                    | None -> 
+                                        None 
                                 | _ -> None
 
                             if v.CompiledName = "it" then
@@ -1191,7 +1196,7 @@ type internal FsiDynamicCompiler
             | _ -> ()
         with _ -> ()
 
-        newState, Completed itValue
+        { newState with boundValues = boundValues }, Completed itValue
 
     /// Evaluate the given expression and produce a new interactive state.
     member fsiDynamicCompiler.EvalParsedExpression (ctok, errorLogger: ErrorLogger, istate, expr: SynExpr) =
@@ -1382,6 +1387,16 @@ type internal FsiDynamicCompiler
           let istate = (istate, sourceFiles, inputs) |||> List.fold2 (fun istate sourceFile input -> fsiDynamicCompiler.ProcessMetaCommandsFromInputAsInteractiveCommands(ctok, istate, sourceFile, input))
           fsiDynamicCompiler.EvalParsedSourceFiles (ctok, errorLogger, istate, inputs)
 
+    member __.GetBoundValues (istate) =
+        let cenv = SymbolEnv(istate.tcGlobals, istate.tcState.Ccu, Some istate.tcState.CcuSig, istate.tcImports)
+        [ for pair in istate.boundValues do
+            let nm = pair.Key
+            let v = pair.Value
+            match istate.ilxGenerator.LookupGeneratedValue(valuePrinter.GetEvaluationContext(istate.emEnv), v) with
+            | Some (res, ty) ->
+                yield (nm, FsiValue(res, ty, FSharpType(cenv, v.Type)))
+            | _ ->
+                () ]
     
     member __.GetInitialInteractiveState () =
         let tcConfig = TcConfig.Create(tcConfigB,validate=false)
@@ -1399,6 +1414,7 @@ type internal FsiDynamicCompiler
          tcState   = tcState
          tcImports = tcImports
          ilxGenerator = ilxGenerator
+         boundValues = NameMap.empty
          timing    = false
          debugBreak = false
         } 
@@ -2752,6 +2768,9 @@ type FsiEvaluationSession (fsi: FsiEvaluationSessionHostConfig, argv:string[], i
 
     /// Event fires when a root-level value is bound to an identifier, e.g., via `let x = ...`.
     member __.ValueBound = fsiDynamicCompiler.ValueBound
+
+    member __.GetBoundValues() =
+        fsiDynamicCompiler.GetBoundValues fsiInteractionProcessor.CurrentState
 
     /// Performs these steps:
     ///    - Load the dummy interaction, if any

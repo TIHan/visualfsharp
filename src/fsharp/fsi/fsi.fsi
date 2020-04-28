@@ -250,6 +250,8 @@ type FsiEvaluationSession =
     /// Event fires when a root-level value is bound to an identifier, e.g., via `let x = ...`.
     member ValueBound : IEvent<obj * System.Type * string>
 
+    member GetBoundValues : unit -> (string * FsiValue) list
+
     /// Load the dummy interaction, load the initial files, and,
     /// if interacting, start the background thread to read the standard input.
     ///
