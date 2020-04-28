@@ -1,9 +1,7 @@
 ﻿module FSharp.Compiler.UnitTests.FsiTests
 
 open System.IO
-open FSharp.Compiler
 open FSharp.Compiler.Interactive.Shell
-open FSharp.Compiler.SourceCodeServices
 open NUnit.Framework
 
 let createFsiSession () =
@@ -16,11 +14,7 @@ let createFsiSession () =
     let argv = [| "C:\\fsi.exe" |]
     let allArgs = Array.append argv [|"--noninteractive"|]
 
-    #if NETCOREAPP
     let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
-    #else
-    let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
-    #endif
     FsiEvaluationSession.Create(fsiConfig, allArgs, inStream, new StreamWriter(outStream), new StreamWriter(errStream), collectible = true)
 
 [<Test>]
