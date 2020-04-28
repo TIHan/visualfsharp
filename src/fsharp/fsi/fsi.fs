@@ -938,7 +938,38 @@ let internal WithImplicitHome (tcConfigB, dir) f =
     try f() 
     finally tcConfigB.implicitIncludeDir <- old
 
+let internal importReflectionType amap (errorLogger: ErrorLogger) (reflectionTy: Type) =
+    let reflectionTyToILTypeRef (reflectionTy: Type) =
+        let aref = ILAssemblyRef.FromAssemblyName(reflectionTy.Assembly.GetName())
+        let scoref = ILScopeRef.Assembly aref
+        mkILTyRef (scoref, reflectionTy.Namespace + "." + reflectionTy.Name)
 
+    let rec reflectionTyToILType (reflectionTy: Type) =
+        let tref = reflectionTyToILTypeRef reflectionTy
+        let genericArgs =
+            reflectionTy.GenericTypeArguments
+            |> Seq.map reflectionTyToILType
+            |> List.ofSeq
+
+        let boxity =
+            if reflectionTy.IsValueType then
+                ILBoxity.AsValue
+            else
+                ILBoxity.AsObject
+
+        let tspec = ILTypeSpec.Create(tref, genericArgs)
+
+        mkILTy boxity tspec           
+
+    let ilTy = reflectionTyToILType reflectionTy
+
+    let rec import (ilTy: ILType) =              
+        if Import.CanImportILType amap range0 ilTy then
+            Import.ImportILType amap range0 (ilTy.GenericArgs |> List.map import) ilTy
+        else
+            errorLogger.Error(InternalError("Unable to create a bound value as the assembly of the value's type is not referenced.", range0))
+
+    import ilTy
 
 /// Encapsulates the coordination of the typechecking, optimization and code generation
 /// components of the F# compiler for interactively executed fragments of code.
@@ -991,7 +1022,9 @@ type internal FsiDynamicCompiler
                 (let man = mainModule.ManifestOfAssembly
                  Some { man with  CustomAttrsStored = storeILCustomAttrs (mkILCustomAttrs codegenResults.ilAssemAttrs) }) }
 
-    let ProcessCodegenResults (ctok, errorLogger: ErrorLogger, istate, emEnv, optEnv, tcState: TcState, tcEnvAtEndOfLastInput: TcEnv, tcConfig, prefixPath, showTypes: bool, isIncrementalFragment, fragName, declaredImpls, ilxGenerator: IlxAssemblyGenerator, codegenResults) =
+    let ProcessCodegenResults (ctok, errorLogger: ErrorLogger, istate, optEnv, tcState: TcState, tcEnvAtEndOfLastInput: TcEnv, tcConfig, prefixPath, showTypes: bool, isIncrementalFragment, fragName, declaredImpls, ilxGenerator: IlxAssemblyGenerator, codegenResults) =
+        let emEnv = istate.emEnv
+
         // Each input is like a small separately compiled extension to a single source file. 
         // The incremental extension to the environment is dictated by the "signature" of the values as they come out 
         // of the type checker. Hence we add the declaredImpls (unoptimized) to the environment, rather than the 
@@ -1108,7 +1141,6 @@ type internal FsiDynamicCompiler
 
     let ProcessInputs (ctok, errorLogger: ErrorLogger, istate: FsiDynamicCompilerState, inputs: ParsedInput list, showTypes: bool, isIncrementalFragment: bool, isInteractiveItExpr: bool, prefixPath: LongIdent) =
         let optEnv    = istate.optEnv
-        let emEnv     = istate.emEnv
         let tcState   = istate.tcState
         let ilxGenerator = istate.ilxGenerator
         let tcConfig = TcConfig.Create(tcConfigB,validate=false)
@@ -1119,7 +1151,7 @@ type internal FsiDynamicCompiler
             lock tcLockObject (fun _ -> TypeCheckClosedInputSet(ctok, errorLogger.CheckForErrors, tcConfig, tcImports, tcGlobals, Some prefixPath, tcState, inputs))
 
         let codegenResults, optEnv, fragName = ProcessTypedImpl(errorLogger, optEnv, tcState, tcConfig, isInteractiveItExpr, topCustomAttrs, prefixPath, isIncrementalFragment, declaredImpls, ilxGenerator)
-        ProcessCodegenResults(ctok, errorLogger, istate, emEnv, optEnv, tcState, tcEnvAtEndOfLastInput, tcConfig, prefixPath, showTypes, isIncrementalFragment, fragName, declaredImpls, ilxGenerator, codegenResults)
+        ProcessCodegenResults(ctok, errorLogger, istate, optEnv, tcState, tcEnvAtEndOfLastInput, tcConfig, prefixPath, showTypes, isIncrementalFragment, fragName, declaredImpls, ilxGenerator, codegenResults)
 
     let nextFragmentId() = fragmentId <- fragmentId + 1; fragmentId
 
@@ -1404,45 +1436,15 @@ type internal FsiDynamicCompiler
             | _ ->
                 () ]
 
-    member __.CreateBoundValue (ctok, errorLogger: ErrorLogger, istate, valueName: string, value: obj, valueTypeNameOpt: string option) =
-        match valueTypeNameOpt with
-        | Some _valueTypeName ->
+    member __.AddBoundValue (ctok, errorLogger: ErrorLogger, istate, name: string, value: obj, typeAnnotationOpt: string option) =
+        match typeAnnotationOpt with
+        | Some _typeAnnotation ->
             // TODO: Use name resolution.
             istate
         | _ ->
 
-            let reflectionTyToILTypeRef (reflectionTy: Type) =
-                let aref = ILAssemblyRef.FromAssemblyName(reflectionTy.Assembly.GetName())
-                let scoref = ILScopeRef.Assembly aref
-                mkILTyRef (scoref, reflectionTy.Namespace + "." + reflectionTy.Name)
-
-            let rec reflectionTyToILType (reflectionTy: Type) =
-                let tref = reflectionTyToILTypeRef reflectionTy
-                let genericArgs =
-                    reflectionTy.GenericTypeArguments
-                    |> Seq.map reflectionTyToILType
-                    |> List.ofSeq
-
-                let boxity =
-                    if reflectionTy.IsValueType then
-                        ILBoxity.AsValue
-                    else
-                        ILBoxity.AsObject
-
-                let tspec = ILTypeSpec.Create(tref, genericArgs)
-
-                mkILTy boxity tspec           
-
-            let ilTy = reflectionTyToILType (value.GetType())
-
             let amap = istate.tcImports.GetImportMap()
-            let rec import (ilTy: ILType) =              
-                if Import.CanImportILType amap range0 ilTy then
-                    Import.ImportILType amap range0 (ilTy.GenericArgs |> List.map import) ilTy
-                else
-                    errorLogger.Error(InternalError("Unable to create a bound value as the assembly of the value's type is not referenced.", range0))
-
-            let ty = import ilTy
+            let ty = importReflectionType amap errorLogger (value.GetType())
 
             let i = nextFragmentId()
             let prefixPath = mkFragmentPath i
@@ -1454,7 +1456,7 @@ type internal FsiDynamicCompiler
             let moduleOrNamespace = Construct.NewModuleOrNamespace (Some compPath) vis (Ident(fragName, range0)) XmlDoc.Empty [] (MaybeLazy.Lazy(lazy mty))
             let v =
                 Construct.NewVal
-                    (valueName, range0, None, ty, ValMutability.Immutable,
+                    (name, range0, None, ty, ValMutability.Immutable,
                      false, Some(ValReprInfo([], [], { Attribs = []; Name = None })), vis, ValNotInRecScope, None, NormalVal, [], ValInline.Optional,
                      XmlDoc.Empty, true, false, false, false, 
                      false, false, None, Parent(TypedTreeBasics.ERefLocal moduleOrNamespace))
@@ -1478,15 +1480,15 @@ type internal FsiDynamicCompiler
             let isIncrementalFragment = true
             
             let codegenResults, optEnv, _ = ProcessTypedImpl(errorLogger, istate.optEnv, tcState, tcConfig, false, EmptyTopAttrs, prefixPath, isIncrementalFragment, declaredImpls, ilxGenerator)
-            let newState, _, _ = ProcessCodegenResults(ctok, errorLogger, istate, istate.emEnv, optEnv, tcState, tcEnvAtEndOfLastInput, tcConfig, prefixPath, false, isIncrementalFragment, fragName, declaredImpls, ilxGenerator, codegenResults)
+            let newState, _, _ = ProcessCodegenResults(ctok, errorLogger, istate, optEnv, tcState, tcEnvAtEndOfLastInput, tcConfig, prefixPath, false, isIncrementalFragment, fragName, declaredImpls, ilxGenerator, codegenResults)
 
             let ctxt = valuePrinter.GetEvaluationContext(newState.emEnv)
             ilxGenerator.ForceSetGeneratedValue(ctxt, v, value)
 
             match istate.ilxGenerator.LookupGeneratedValue(ctxt, v) with
             | Some (res, ty) ->
-                valueBoundEvent.Trigger(res, ty, valueName)
-                { newState with boundValues = newState.boundValues.Add(valueName, v) }
+                valueBoundEvent.Trigger(res, ty, v.LogicalName)
+                { newState with boundValues = newState.boundValues.Add(v.LogicalName, v) }
             | _ ->
                 istate
     
@@ -2346,10 +2348,8 @@ type internal FsiInteractionProcessor
             mainThreadProcessParsedExpression ctok errorLogger (exprWithSeq, istate))
         |> commitResult
 
-    member __.CreateBoundValue(ctok, valueName, value, valueTypeNameOpt) =
-        let errorOptions = TcConfig.Create(tcConfigB, validate = false).errorSeverityOptions
-        let errorLogger = CompilationErrorLogger("CreateBoundValue", errorOptions)
-        setCurrState (fsiDynamicCompiler.CreateBoundValue(ctok, errorLogger, currState, valueName, value, valueTypeNameOpt))
+    member __.AddBoundValue(ctok, errorLogger, valueName, value, typeAnnotationOpt) =
+        setCurrState (fsiDynamicCompiler.AddBoundValue(ctok, errorLogger, currState, valueName, value, typeAnnotationOpt))
 
     member __.PartialAssemblySignatureUpdated = event.Publish
 
@@ -2869,13 +2869,14 @@ type FsiEvaluationSession (fsi: FsiEvaluationSessionHostConfig, argv:string[], i
     member __.GetBoundValues() =
         fsiDynamicCompiler.GetBoundValues fsiInteractionProcessor.CurrentState
 
-    member __.CreateBoundValue(valueName: string, value: obj) =
+    member __.AddBoundValue(valueName: string, value: obj) =
         // Explanation: When the user of the FsiInteractiveSession object calls this method, the 
         // code is parsed, checked and evaluated on the calling thread. This means EvalExpression
         // is not safe to call concurrently.
         let ctok = AssumeCompilationThreadWithoutEvidence()
-
-        fsiInteractionProcessor.CreateBoundValue(ctok, valueName, value, None)
+        let errorOptions = TcConfig.Create(tcConfigB, validate = false).errorSeverityOptions
+        let errorLogger = CompilationErrorLogger("CreateBoundValue", errorOptions)
+        fsiInteractionProcessor.AddBoundValue(ctok, errorLogger, valueName, value, None)
 
     /// Performs these steps:
     ///    - Load the dummy interaction, if any

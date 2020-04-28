@@ -30,9 +30,9 @@ let ``GetBoundValues: Bound value has correct name`` () =
     fsiSession.EvalInteraction("let x = 1")
 
     let values = fsiSession.GetBoundValues()
-    let valueName, _ = values |> List.exactlyOne
+    let name, _ = values |> List.exactlyOne
 
-    Assert.AreEqual("x", valueName)
+    Assert.AreEqual("x", name)
 
 [<Test>]
 let ``GetBoundValues: Bound value has correct value`` () =
@@ -57,12 +57,34 @@ let ``GetBoundValues: Bound value has correct type`` () =
     Assert.AreEqual(typeof<int>, fsiValue.ReflectionType)
 
 [<Test>]
-let ``CreateBoundValue: Creating a bound value will result in retrieving the correct value`` () =
+let ``AddBoundValue: Creating a bound value will result in retrieving the correct name`` () =
     use fsiSession = createFsiSession ()
 
-    fsiSession.CreateBoundValue("w", [123])
+    fsiSession.AddBoundValue("w", [123])
+
+    let values = fsiSession.GetBoundValues()
+    let name, _ = values |> List.exactlyOne
+
+    Assert.AreEqual("w", name)
+
+[<Test>]
+let ``AddBoundValue: Creating a bound value will result in retrieving the correct value`` () =
+    use fsiSession = createFsiSession ()
+
+    fsiSession.AddBoundValue("w", [123])
 
     let values = fsiSession.GetBoundValues()
     let _, fsiValue = values |> List.exactlyOne
 
     Assert.AreEqual([123], fsiValue.ReflectionValue)
+
+[<Test>]
+let ``AddBoundValue: Creating a bound value will result in retrieving the correct type`` () =
+    use fsiSession = createFsiSession ()
+
+    fsiSession.AddBoundValue("w", [123])
+
+    let values = fsiSession.GetBoundValues()
+    let _, fsiValue = values |> List.exactlyOne
+
+    Assert.AreEqual(typeof<int list>, fsiValue.ReflectionType)

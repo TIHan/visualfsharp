@@ -252,7 +252,7 @@ type FsiEvaluationSession =
 
     member GetBoundValues : unit -> (string * FsiValue) list
 
-    member CreateBoundValue : name: string * value: obj -> unit
+    member AddBoundValue : name: string * value: obj -> unit
 
     /// Load the dummy interaction, load the initial files, and,
     /// if interacting, start the background thread to read the standard input.
