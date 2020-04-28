@@ -55,3 +55,14 @@ let ``GetBoundValues: Bound value has correct type`` () =
     let _, fsiValue = values |> List.exactlyOne
 
     Assert.AreEqual(typeof<int>, fsiValue.ReflectionType)
+
+[<Test>]
+let ``CreateBoundValue: Creating a bound value will result in retrieving the correct value`` () =
+    use fsiSession = createFsiSession ()
+
+    fsiSession.CreateBoundValue("w", [123])
+
+    let values = fsiSession.GetBoundValues()
+    let _, fsiValue = values |> List.exactlyOne
+
+    Assert.AreEqual([123], fsiValue.ReflectionValue)

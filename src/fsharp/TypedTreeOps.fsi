@@ -261,6 +261,9 @@ val mkReraise : range -> TType -> Expr
 
 /// Make an expression that re-raises an exception via a library call
 val mkReraiseLibCall : TcGlobals -> TType -> range -> Expr
+
+/// Make an expression that calls Unchecked.defaultof<_> via a library call
+val mkUncheckedDefaultOfLibCall : TcGlobals -> TType -> range -> Expr
  
 /// Make an expression that gets an item from a tuple
 val mkTupleFieldGet                : TcGlobals -> TupInfo * Expr * TypeInst * int * range -> Expr

@@ -14,6 +14,7 @@ open FSharp.Compiler.SyntaxTree
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeOps
+open FSharp.Compiler.NameResolution
 
 [<Sealed>]
 type TcEnv =
@@ -106,3 +107,7 @@ exception InvalidInternalsVisibleToAssemblyName of (*badName*)string * (*fileNam
 val TcFieldInit : range -> ILFieldInit -> Const
 
 val LightweightTcValForUsingInBuildMethodCall : g : TcGlobals -> vref:ValRef -> vrefFlags : ValUseFlag -> vrefTypeInst : TTypes -> m : range -> Expr * TType
+
+val AddLocalVal : TcResultsSink -> scopem: range -> v: Val -> TcEnv -> TcEnv
+
+val AddLocalSubModule : TcGlobals -> ImportMap -> range -> TcEnv -> ModuleOrNamespace -> TcEnv

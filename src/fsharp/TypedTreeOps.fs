@@ -7097,6 +7097,10 @@ let mkReraiseLibCall (g: TcGlobals) ty m =
 
 let mkReraise m returnTy = Expr.Op (TOp.Reraise, [returnTy], [], m) (* could suppress unitArg *)
 
+let mkUncheckedDefaultOfLibCall (g: TcGlobals) ty m =
+    let ve, vt = typedExprForIntrinsic g m g.unchecked_defaultof_info
+    Expr.App (ve, vt, [ty], [], m)
+
 //----------------------------------------------------------------------------
 // CompilationMappingAttribute, SourceConstructFlags
 //----------------------------------------------------------------------------

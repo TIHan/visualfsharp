@@ -7800,15 +7800,21 @@ let LookupGeneratedValue (amap: ImportMap) (ctxt: ExecutionContext) eenv (v: Val
       None
 
 // Invoke the set_Foo method for a declaration with a value. Used to create variables with values programatically in fsi.exe.
-let SetGeneratedValue (ctxt: ExecutionContext) (g: TcGlobals) eenv (v: Val) (value: obj) =
+let SetGeneratedValue (ctxt: ExecutionContext) (g: TcGlobals) eenv isForced (v: Val) (value: obj) =
   try
     match StorageForVal g v.Range v eenv with
-      | StaticField (_, _, hasLiteralAttr, _, _, _, _f, ilSetterMethRef, _) ->
-          if not hasLiteralAttr && v.IsMutable then
-              let staticTy = ctxt.LookupTypeRef ilSetterMethRef.DeclaringTypeRef
+      | StaticField (fspec, _, hasLiteralAttr, _, _, _, _f, ilSetterMethRef, _) ->
+          if not hasLiteralAttr && (v.IsMutable || isForced) then
+              if isForced then
+                  let staticTy = ctxt.LookupTypeRef fspec.DeclaringTypeRef
 
-              let methInfo = staticTy.GetMethod(ilSetterMethRef.Name, BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic)
-              methInfo.Invoke (null, [| value |]) |> ignore
+                  let fieldInfo = staticTy.GetField(fspec.Name, BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+                  fieldInfo.SetValue(null, value)
+              else
+                  let staticTy = ctxt.LookupTypeRef ilSetterMethRef.DeclaringTypeRef
+
+                  let methInfo = staticTy.GetMethod(ilSetterMethRef.Name, BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+                  methInfo.Invoke (null, [| value |]) |> ignore
       | _ -> ()
   with
     e ->
@@ -7824,7 +7830,7 @@ let ClearGeneratedValue (ctxt: ExecutionContext) (g: TcGlobals) eenv (v: Val) =
       | StaticField (fspec, _, hasLiteralAttr, _, _, _, _, _, _) ->
           if not hasLiteralAttr && v.IsMutable then
               let ty = ctxt.LookupType fspec.ActualType
-              SetGeneratedValue ctxt g eenv v (defaultOf ty)
+              SetGeneratedValue ctxt g eenv false v (defaultOf ty)
       | _ -> ()
   with
     e ->
@@ -7871,7 +7877,7 @@ type IlxAssemblyGenerator(amap: ImportMap, tcGlobals: TcGlobals, tcVal: Constrai
     member __.ClearGeneratedValue (ctxt, v) = ClearGeneratedValue ctxt tcGlobals ilxGenEnv v
 
     /// Invert the compilation of the given value and set the storage of the value
-    member __.SetGeneratedValue (ctxt, v, value: obj) = SetGeneratedValue ctxt tcGlobals ilxGenEnv v value
+    member __.ForceSetGeneratedValue (ctxt, v, value: obj) = SetGeneratedValue ctxt tcGlobals ilxGenEnv true v value
 
     /// Invert the compilation of the given value and return its current dynamic value and its compiled System.Type
     member __.LookupGeneratedValue (ctxt, v) = LookupGeneratedValue amap ctxt ilxGenEnv v

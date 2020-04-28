@@ -1248,6 +1248,8 @@ type public TcGlobals(compilingFslib: bool, ilg:ILGlobals, fslibCcu: CcuThunk, d
   member val unchecked_multiply_vref    = ValRefForIntrinsic v_unchecked_multiply_info
   member val unchecked_defaultof_vref    = ValRefForIntrinsic v_unchecked_defaultof_info
 
+  member val unchecked_defaultof_info  = v_unchecked_defaultof_info
+
   member __.bitwise_or_info            = v_bitwise_or_info
   member __.bitwise_and_info           = v_bitwise_and_info
   member __.bitwise_xor_info           = v_bitwise_xor_info
