@@ -24,19 +24,40 @@ let createFsiSession () =
     FsiEvaluationSession.Create(fsiConfig, allArgs, inStream, new StreamWriter(outStream), new StreamWriter(errStream), collectible = true)
 
 [<Test>]
-let ``Test get variables`` () =
+let ``GetBoundValues: No bound values at the start of FSI session`` () =
+    use fsiSession = createFsiSession ()
+    let values = fsiSession.GetBoundValues()
+    Assert.IsEmpty values
+
+[<Test>]
+let ``GetBoundValues: Bound value has correct name`` () =
     use fsiSession = createFsiSession ()
 
-    for i = 0 to 1000 do
-        fsiSession.EvalInteraction("let x = 1")
-        fsiSession.EvalInteraction("let x = 2")
-        fsiSession.EvalInteraction("let y = 2")
-        fsiSession.EvalInteraction("let z = 2")
-        fsiSession.EvalInteraction("let b = 2")
-        fsiSession.EvalInteraction("let a = 2")
-        fsiSession.EvalInteraction("5")
+    fsiSession.EvalInteraction("let x = 1")
 
     let values = fsiSession.GetBoundValues()
-    let value = values |> List.exactlyOne
+    let valueName, _ = values |> List.exactlyOne
 
-    ()
+    Assert.AreEqual("x", valueName)
+
+[<Test>]
+let ``GetBoundValues: Bound value has correct value`` () =
+    use fsiSession = createFsiSession ()
+
+    fsiSession.EvalInteraction("let y = 2")
+
+    let values = fsiSession.GetBoundValues()
+    let _, fsiValue = values |> List.exactlyOne
+
+    Assert.AreEqual(2, fsiValue.ReflectionValue)
+
+[<Test>]
+let ``GetBoundValues: Bound value has correct type`` () =
+    use fsiSession = createFsiSession ()
+
+    fsiSession.EvalInteraction("let z = 3")
+
+    let values = fsiSession.GetBoundValues()
+    let _, fsiValue = values |> List.exactlyOne
+
+    Assert.AreEqual(typeof<int>, fsiValue.ReflectionType)
