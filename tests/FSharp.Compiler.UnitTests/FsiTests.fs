@@ -98,6 +98,7 @@ let ``AddBoundValue: Creating a bound value will result in retrieving the correc
     fsiSession.EvalInteraction("""#r "FSharp.Compiler.UnitTests.dll" """)
     fsiSession.EvalInteraction("""open FSharp.Compiler.UnitTests.FsiTests""")
     fsiSession.AddBoundValue("r", { x = 1 })
+    fsiSession.EvalInteraction("let x = { r with x = 5 }")
 
     let values = fsiSession.GetBoundValues()
     let _, fsiValue = values |> List.exactlyOne

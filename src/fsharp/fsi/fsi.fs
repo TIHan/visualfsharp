@@ -942,7 +942,23 @@ let internal importReflectionType amap (errorLogger: ErrorLogger) (reflectionTy:
     let reflectionTyToILTypeRef (reflectionTy: Type) =
         let aref = ILAssemblyRef.FromAssemblyName(reflectionTy.Assembly.GetName())
         let scoref = ILScopeRef.Assembly aref
-        mkILTyRef (scoref, reflectionTy.Namespace + "." + reflectionTy.Name)
+
+        let fullName = reflectionTy.FullName
+        let index = fullName.IndexOf("[")
+        let fullName =
+            if index = -1 then
+                fullName
+            else
+                fullName.Substring(0, index - 1)
+
+        let isTop = reflectionTy.DeclaringType = null
+        if isTop then
+            ILTypeRef.Create(scoref, [], fullName)
+        else
+            let names = String.split StringSplitOptions.None [|"+";"."|] fullName
+            let enc = names.[..names.Length - 2]
+            let nm = names.[names.Length - 1]
+            ILTypeRef.Create(scoref, List.ofArray enc, nm)
 
     let rec reflectionTyToILType (reflectionTy: Type) =
         let tref = reflectionTyToILTypeRef reflectionTy
