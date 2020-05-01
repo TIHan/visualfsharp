@@ -78,6 +78,7 @@ let resSuffixes = [".resx"]
 let FSharpScriptFileSuffixes = [".fsscript";".fsx"]
 let doNotRequireNamespaceOrModuleSuffixes = [".mli";".ml"] @ FSharpScriptFileSuffixes
 let FSharpLightSyntaxFileSuffixes: string list = [ ".fs";".fsscript";".fsx";".fsi" ]
+let primaryAssemblyILGlobals = mkILGlobals (ILScopeRef.PrimaryAssembly, [])
 
 //----------------------------------------------------------------------------
 // ERROR REPORTING
@@ -4897,7 +4898,7 @@ and [<Sealed>] TcImports(tcConfigP: TcConfigProvider, initialResolutions: TcAsse
 #endif
         // do this prior to parsing, since parsing IL assembly code may refer to mscorlib
 #if !NO_INLINE_IL_PARSER
-        FSharp.Compiler.AbstractIL.Internal.AsciiConstants.parseILGlobals <- tcGlobals.ilg 
+        FSharp.Compiler.AbstractIL.Internal.AsciiConstants.parseILGlobals <- primaryAssemblyILGlobals 
 #endif
         frameworkTcImports.SetTcGlobals tcGlobals
         return tcGlobals, frameworkTcImports
