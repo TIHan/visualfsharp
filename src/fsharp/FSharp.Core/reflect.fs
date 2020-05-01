@@ -70,7 +70,7 @@ module internal Impl =
       match attrs with
       | null | [| |] -> None
       | [| res |] -> let a = (res :?> CompilationMappingAttribute) in Some (a.SourceConstructFlags, a.SequenceNumber, a.VariantNumber)
-      | _ -> raise <| System.InvalidOperationException (SR.GetString (SR.multipleCompilationMappings))
+      | _ -> invalidOp (SR.GetString (SR.multipleCompilationMappings))
 
     let findCompilationMappingAttribute (attrs: obj[]) =
       match tryFindCompilationMappingAttribute attrs with
@@ -292,7 +292,7 @@ module internal Impl =
             else "New" + constrname
 
         match typ.GetMethod(methname, BindingFlags.Static  ||| bindingFlags) with
-        | null -> raise <| System.InvalidOperationException (String.Format (SR.GetString (SR.constructorForUnionCaseNotFound), methname))
+        | null -> invalidOp (String.Format (SR.GetString (SR.constructorForUnionCaseNotFound), methname))
         | meth -> meth
 
     let getUnionCaseConstructor (typ: Type, tag: int, bindingFlags) =
@@ -391,12 +391,12 @@ module internal Impl =
             | false, _ ->
                 // the Dictionary<>s here could be ConcurrentDictionary<>'s, but then
                 // that would lock while initializing the Type array (maybe not an issue)
-                let a = ref (Array.init<Type> 8 (fun i -> makeIt (i + 1)))
+                let mutable a = Array.init<Type> 8 (fun i -> makeIt (i + 1))
                 lock dictionaryLock (fun () ->
                     match tables.TryGetValue asm with
-                    | true, t -> a := t
-                    | false, _ -> tables.Add(asm, !a))
-                !a
+                    | true, t -> a <- t
+                    | false, _ -> tables.Add(asm, a))
+                a
             | true, t -> t
 
         match tys.Length with
