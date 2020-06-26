@@ -2015,16 +2015,18 @@ and MakeOptimizedSystemStringConcatCall cenv env m args =
             optimizeArgs args accArgs
 
         // Optimize string constants, e.g. "1" + "2" will turn into "12"
-        | Expr.Const (Const.String str1, _, _), Expr.Const (Const.String str2, _, _) :: accArgs ->
-            mkString cenv.g m (str1 + str2) :: accArgs
+    //    | Expr.Const (Const.String str1, _, _), Expr.Const (Const.String str2, _, _) :: accArgs ->
+          //  Choice1Of2 (str1, str2) :: accArgs
+      //      mkString cenv.g m (str1 + str2) :: accArgs
 
-        | arg, _ -> arg :: accArgs
+        | arg, _ -> arg :: accArgs //Choice2Of2 arg :: accArgs
 
     and optimizeArgs args accArgs =
         (args, accArgs)
         ||> List.foldBack (fun arg accArgs -> optimizeArg arg accArgs)
 
-    let args = optimizeArgs args []
+    let args = 
+        optimizeArgs args []
 
     let expr =
         match args with
