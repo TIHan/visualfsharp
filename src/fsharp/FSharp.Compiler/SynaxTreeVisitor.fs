@@ -293,7 +293,7 @@ module AstVisitorHelpers =
         |> List.reduce unionRanges
 
 [<AbstractClass>]
-type AstVisitor<'T> () as this =
+type SyntaxTreeVisitor<'T> () as this =
 
     // TODO: This will go away. Use member TryVisitList.
     let tryVisitList (xs: ((unit -> range) * (unit -> 'T option)) list) : 'T option =
@@ -359,8 +359,7 @@ type AstVisitor<'T> () as this =
         match parsedInput with
         | ParsedInput.ImplFile (ParsedImplFileInput (_, _, _, _, _, modules, _)) -> 
             modules
-            |> mapVisitList (fun x -> x.AdjustedRange) this.VisitModuleOrNamespace
-            |> tryVisitList
+            |> this.TryVisitList (fun x -> x.AdjustedRange) this.VisitModuleOrNamespace
         | ParsedInput.SigFile (ParsedSigFileInput (_, _, _, _, modules)) -> 
             None
 
@@ -377,14 +376,13 @@ type AstVisitor<'T> () as this =
 
             let decls =
                 decls
-                |> mapVisitList (fun x -> x.Range) this.VisitModuleDecl
+                |> this.TryVisitList (fun x -> x.Range) this.VisitModuleDecl
 
-            let attribs =
-                attribs
-                |> mapVisitList (fun x -> x.Range) this.VisitAttributeList
+            if decls.IsSome then decls
+            else
 
-            (decls @ attribs)
-            |> tryVisitList
+            attribs
+            |> this.TryVisitList (fun x -> x.Range) this.VisitAttributeList
 
     abstract VisitModuleDecl: SynModuleDecl -> 'T option
     default this.VisitModuleDecl decl =
@@ -456,21 +454,23 @@ type AstVisitor<'T> () as this =
         | ComponentInfo(attribs, typarDecls, constraints, longId, _, _, _, m) ->
             let attribs =
                 attribs
-                |> mapVisitList (fun x -> x.Range) this.VisitAttributeList
+                |> this.TryVisitList (fun x -> x.Range) this.VisitAttributeList
+
+            if attribs.IsSome then attribs
+            else
 
             let typarDecls =
                 typarDecls
-                |> mapVisitList (fun x -> x.Range) this.VisitTyparDecl
+                |> this.TryVisitList (fun x -> x.Range) this.VisitTyparDecl
+
+            if typarDecls.IsSome then typarDecls
+            else
 
             let constraints =
                 constraints
-                |> mapVisitList (fun x -> x.Range) this.VisitTypeConstraint
+                |> this.TryVisitList (fun x -> x.Range) this.VisitTypeConstraint
 
-            let result =
-                (attribs @ typarDecls @ constraints)
-                |> tryVisitList
-
-            if result.IsSome then result
+            if constraints.IsSome then constraints
             else
 
             longId
@@ -506,63 +506,58 @@ type AstVisitor<'T> () as this =
 
         | SynTypeConstraint.WhereTyparDefaultsToType (typar, ty, _) ->
             let typar =
-                [typar]
-                |> mapVisitList (fun x -> x.Range) this.VisitTypar
+                typar
+                |> this.TryVisit typar.Range this.VisitTypar
 
-            let ty =
-                [ty]
-                |> mapVisitList (fun x -> x.Range) this.VisitType
+            if typar.IsSome then typar
+            else
 
-            (typar @ ty)
-            |> tryVisitList
+            ty
+            |> this.TryVisit ty.Range this.VisitType
 
         | SynTypeConstraint.WhereTyparSubtypeOfType (typar, ty, _) ->
             let typar =
-                [typar]
-                |> mapVisitList (fun x -> x.Range) this.VisitTypar
+                typar
+                |> this.TryVisit typar.Range this.VisitTypar
 
-            let ty =
-                [ty]
-                |> mapVisitList (fun x -> x.Range) this.VisitType
+            if typar.IsSome then typar
+            else
 
-            (typar @ ty)
-            |> tryVisitList
+            ty
+            |> this.TryVisit ty.Range this.VisitType
 
         | SynTypeConstraint.WhereTyparSupportsMember (tys, memberSig, _) ->
             let tys =
                 tys
-                |> mapVisitList (fun x -> x.Range) this.VisitType
+                |> this.TryVisitList (fun x -> x.Range) this.VisitType
 
-            let memberSig =
-                [memberSig]
-                |> mapVisitList (fun x -> x.Range) this.VisitMemberSig
+            if tys.IsSome then tys
+            else
 
-            (tys @ memberSig)
-            |> tryVisitList
+            memberSig
+            |> this.TryVisit memberSig.Range this.VisitMemberSig
 
         | SynTypeConstraint.WhereTyparIsEnum (typar, tys, _) ->
             let typar =
-                [typar]
-                |> mapVisitList (fun x -> x.Range) this.VisitTypar
+                typar
+                |> this.TryVisit typar.Range this.VisitTypar
 
-            let tys =
-                tys
-                |> mapVisitList (fun x -> x.Range) this.VisitType
+            if typar.IsSome then typar
+            else
 
-            (typar @ tys)
-            |> tryVisitList
+            tys
+            |> this.TryVisitList (fun x -> x.Range) this.VisitType
 
         | SynTypeConstraint.WhereTyparIsDelegate (typar, tys, _) ->
             let typar =
-                [typar]
-                |> mapVisitList (fun x -> x.Range) this.VisitTypar
+                typar
+                |> this.TryVisit typar.Range this.VisitTypar
 
-            let tys =
-                tys
-                |> mapVisitList (fun x -> x.Range) this.VisitType
+            if typar.IsSome then typar
+            else
 
-            (typar @ tys)
-            |> tryVisitList
+            tys
+            |> this.TryVisitList (fun x -> x.Range) this.VisitType
 
     abstract VisitMemberSig: SynMemberSig -> 'T option
     default this.VisitMemberSig memberSig =
