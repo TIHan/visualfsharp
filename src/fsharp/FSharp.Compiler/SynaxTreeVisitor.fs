@@ -587,34 +587,35 @@ type SyntaxTreeVisitor<'T> () as this =
         match typeDefnSig with
         | TypeDefnSig (info, repr, memberSigs, _) ->
             let info =
-                [info]
-                |> mapVisitList (fun x -> x.Range) this.VisitComponentInfo
+                info
+                |> this.TryVisit info.Range this.VisitComponentInfo
+
+            if info.IsSome then info
+            else
 
             let repr =
-                [repr]
-                |> mapVisitList (fun x -> x.Range) this.VisitTypeDefnSigRepr
+                repr
+                |> this.TryVisit repr.Range this.VisitTypeDefnSigRepr
 
-            let memberSigs =
-                memberSigs
-                |> mapVisitList (fun x -> x.Range) this.VisitMemberSig
+            if repr.IsSome then repr
+            else
 
-            (info @ repr @ memberSigs)
-            |> tryVisitList
+            memberSigs
+            |> this.TryVisitList (fun x -> x.Range) this.VisitMemberSig
 
     abstract VisitTypeDefnSigRepr: SynTypeDefnSigRepr -> 'T option
     default this.VisitTypeDefnSigRepr repr =
         match repr with
         | SynTypeDefnSigRepr.ObjectModel (typeDefnKind, memberSigs, _) ->
             let typeDefnKind =
-                [typeDefnKind]
-                |> mapVisitList (fun x -> x.PossibleRange) this.VisitTypeDefnKind
+                typeDefnKind
+                |> this.TryVisit typeDefnKind.PossibleRange this.VisitTypeDefnKind
 
-            let memberSigs =
-                memberSigs
-                |> mapVisitList (fun x -> x.Range) this.VisitMemberSig
+            if typeDefnKind.IsSome then typeDefnKind
+            else
 
-            (typeDefnKind @ memberSigs)
-            |> tryVisitList
+            memberSigs
+            |> this.TryVisitList (fun x -> x.Range) this.VisitMemberSig
 
         | SynTypeDefnSigRepr.Simple (simpleRepr, _) ->
             simpleRepr
@@ -630,17 +631,16 @@ type SyntaxTreeVisitor<'T> () as this =
         | SynExceptionDefnRepr (attribs, unionCase, longIdOpt, _, _, _) ->
             let attribs =
                 attribs
-                |> mapVisitList (fun x -> x.Range) this.VisitAttributeList
+                |> this.TryVisitList (fun x -> x.Range) this.VisitAttributeList
+
+            if attribs.IsSome then attribs
+            else
 
             let unionCase =
-                [unionCase]
-                |> mapVisitList (fun x -> x.Range) this.VisitUnionCase
+                unionCase
+                |> this.TryVisit unionCase.Range this.VisitUnionCase
 
-            let result =
-                (attribs @ unionCase)
-                |> tryVisitList
-
-            if result.IsSome then result
+            if unionCase.IsSome then unionCase
             else
 
             match longIdOpt with
@@ -676,20 +676,18 @@ type SyntaxTreeVisitor<'T> () as this =
         match unionCaseTy with
         | UnionCaseFields cases ->
             cases
-            |> mapVisitList (fun x -> x.Range) this.VisitField
-            |> tryVisitList
+            |> this.TryVisitList (fun x -> x.Range) this.VisitField
 
         | UnionCaseFullType (ty, valInfo) ->
             let ty =
-                [ty]
-                |> mapVisitList (fun x -> x.Range) this.VisitType
+                ty
+                |> this.TryVisit ty.Range this.VisitType
 
-            let valInfo =
-                [valInfo]
-                |> mapVisitList (fun x -> x.PossibleRange) this.VisitValInfo
+            if ty.IsSome then ty
+            else
 
-            (ty @ valInfo)
-            |> tryVisitList
+            valInfo
+            |> this.TryVisit valInfo.PossibleRange this.VisitValInfo
 
     abstract VisitArgInfo: SynArgInfo -> 'T option
     default this.VisitArgInfo argInfo =
@@ -714,61 +712,65 @@ type SyntaxTreeVisitor<'T> () as this =
         match simpleRepr with
         | SynTypeDefnSimpleRepr.Union (_, unionCases, _) ->
             unionCases
-            |> mapVisitList (fun x -> x.Range) this.VisitUnionCase
-            |> tryVisitList
+            |> this.TryVisitList (fun x -> x.Range) this.VisitUnionCase
 
         | SynTypeDefnSimpleRepr.Enum (enumCases, _) ->
             enumCases
-            |> mapVisitList (fun x -> x.Range) this.VisitEnumCase
-            |> tryVisitList
+            |> this.TryVisitList (fun x -> x.Range) this.VisitEnumCase
 
         | SynTypeDefnSimpleRepr.Record (_, fields, _) ->
             fields
-            |> mapVisitList (fun x -> x.Range) this.VisitField
-            |> tryVisitList
+            |> this.TryVisitList (fun x -> x.Range) this.VisitField
 
         | SynTypeDefnSimpleRepr.General (typeDefnKind, tys, valSigs, fields, _, _, patsOpt, m) ->
             let typeDefnKind =
-                [typeDefnKind]
-                |> mapVisitList (fun x -> x.PossibleRange) this.VisitTypeDefnKind
+                typeDefnKind
+                |> this.TryVisit typeDefnKind.PossibleRange this.VisitTypeDefnKind
+
+            if typeDefnKind.IsSome then typeDefnKind
+            else
 
             let tys =
                 tys
-                |> mapVisitList (fun (_, m, _) -> m) (fun (ty, _, idOpt) ->
+                |> this.TryVisitList (fun (_, m, _) -> m) (fun (ty, _, idOpt) ->
                     let ty =
-                        [ty]
-                        |> mapVisitList (fun x -> x.Range) this.VisitType
+                        ty
+                        |> this.TryVisit ty.Range this.VisitType
 
-                    let id =
-                        match idOpt with
-                        | Some id ->
-                            [id]
-                            |> mapiVisitList (fun x -> x.idRange) this.VisitIdent
-                        | _ ->
-                            []
+                    if ty.IsSome then ty
+                    else
 
-                    (ty @ id)
-                    |> tryVisitList
+                    match idOpt with
+                    | Some id ->
+                        (0, id)
+                        |> this.TryVisit id.idRange this.VisitIdent
+                    | _ ->
+                        None
                 )
+
+            if tys.IsSome then tys
+            else
 
             let valSigs =
                 valSigs
-                |> mapVisitList (fun (valSig, _) -> valSig.Range) (fun (valSig, _) -> this.VisitValSig valSig)
+                |> this.TryVisitList (fun (valSig, _) -> valSig.Range) (fun (valSig, _) -> this.VisitValSig valSig)
+
+            if valSigs.IsSome then valSigs
+            else
 
             let fields =
                 fields
-                |> mapVisitList (fun field -> field.Range) this.VisitField
+                |> this.TryVisitList (fun field -> field.Range) this.VisitField
 
-            let pats =
-                match patsOpt with
-                | Some pats ->
-                    [pats]
-                    |> mapVisitList (fun x -> x.Range) this.VisitSimplePats
-                | _ ->
-                    []
+            if fields.IsSome then fields
+            else
 
-            (typeDefnKind @ tys @ valSigs @ fields @ pats)
-            |> tryVisitList
+            match patsOpt with
+            | Some pats ->
+                pats
+                |> this.TryVisit pats.Range this.VisitSimplePats
+            | _ ->
+                None
 
         | SynTypeDefnSimpleRepr.LibraryOnlyILAssembly _ ->
             None
@@ -789,19 +791,18 @@ type SyntaxTreeVisitor<'T> () as this =
         match simplePat with
         | SynSimplePat.Id (id, simplePatInfoOpt, _, _, _, m) ->
             let id =
-                [id]
-                |> mapiVisitList (fun x -> x.idRange) this.VisitIdent
+                (0, id)
+                |> this.TryVisit id.idRange this.VisitIdent
 
-            let simplePatInfo =
-                match simplePatInfoOpt with
-                | Some simplePatInfo ->
-                    [simplePatInfo.contents]
-                    |> mapVisitList (fun x -> x.Range) this.VisitSimplePatAlternativeIdInfo
-                | _ ->
-                    []
+            if id.IsSome then id
+            else
 
-            (id @ simplePatInfo)
-            |> tryVisitList
+            match simplePatInfoOpt with
+            | Some simplePatInfo ->
+                simplePatInfo.contents
+                |> this.TryVisit simplePatInfo.contents.Range this.VisitSimplePatAlternativeIdInfo
+            | _ ->
+                None
 
         | SynSimplePat.Typed (simplePat, ty, _) ->
             let simplePat =
