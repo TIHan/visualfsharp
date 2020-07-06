@@ -113,16 +113,17 @@ module rec Visitor =
             |> Seq.iter (fun x -> cenv.genVisitComplete.Add x |> ignore)
             cenv.genVisit.Clear()
 
-        sb.ToString()
+        sb.ToString(), cenv.genVisitComplete |> Array.ofSeq
 
     let gen () =
+        let src, types = genRootSyntaxNode ()
         """module FSharp.Compiler.SyntaxTreeVisitor
         
 open FSharp.Compiler.AbstractIL.Internal.Library
 open FSharp.Compiler.SyntaxTree
 
 [<AbstractClass>]
-type SyntaxTreeVisitor () =""" + genRootSyntaxNode ()
+type SyntaxTreeVisitor () =""" + src
 
 open System.IO
 
