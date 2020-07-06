@@ -29,25 +29,20 @@ module rec Visitor =
                 else fieldTy
             if not (canGen fieldTy) then
                 if i = fields.Length - 1 then
-                    sprintf """            %s |> ignore""" fieldName + "\n" +
-                    sprintf """            None"""
+                    sprintf """            %s |> ignore""" fieldName 
                 else
                     sprintf """            %s |> ignore""" fieldName
             else
                 if not (cenv.genVisit.Contains fieldTy || cenv.genVisitComplete.Contains fieldTy)  then
                     cenv.genVisit.Add fieldTy |> ignore
 
-                let isConst = fieldTy.Name = "SynConst" // heuristic, TODO: fixme
-
-                if i = fields.Length - 1 then
-                    sprintf """            this.TryVisit%s(%s, this.Visit, fun x -> %s)""" (if isListType then "List" else String.Empty) fieldName (if isConst then "x.Range range0" else "x.Range")
+                if isListType then
+                    sprintf """            %s |> List.iter this.Visit""" fieldName
                 else
-                    sprintf """            let %s = this.TryVisit%s(%s, this.Visit, fun x -> %s)""" fieldName (if isListType then "List" else String.Empty) fieldName (if isConst then "x.Range range0" else "x.Range") + "\n" +
-                    sprintf """            if %s.IsSome then %s""" fieldName fieldName + "\n" +
-                    sprintf """            else"""
+                    sprintf """            this.Visit %s""" fieldName
         )
         |> function
-        | [||] -> "            None"
+        | [||] -> String.Empty
         | [|x|] -> x
         | xs -> xs |> Array.reduce (fun x y -> x + "\n" + y)
 
@@ -57,7 +52,7 @@ module rec Visitor =
         let fields = info.GetFields()
         if Array.isEmpty fields then
             sprintf """
-        | %s -> None""" caseName
+        | %s -> ()""" caseName
         else
             sprintf """
         | %s (%s) -> 
@@ -83,14 +78,14 @@ module rec Visitor =
     let genSyntaxNode cenv (ty: Type) =
         if canGen ty then
             sprintf """
-    abstract Visit: %s -> 'T option
-    default this.Visit(node: %s) : 'T option =""" ty.Name ty.Name + "\n" +
+    abstract Visit: %s -> unit
+    default this.Visit(node: %s) : unit =""" ty.Name ty.Name + "\n" +
             (
                 if FSharpType.IsUnion ty then
                     genSyntaxNodeUnionType cenv ty
                 else
-                    "        node |> ignore\n        None"
-            ) + "\n\n"
+                    "        ()"
+            ) + "\n"
         else
             String.Empty
 
@@ -127,28 +122,7 @@ open FSharp.Compiler.SyntaxTreeExtendedRanges
 
 [<AbstractClass>]
 type SyntaxTreeVisitor<'T> () =
-
-    member inline private this.TryVisit(item, visit, getRange) =
-        if this.CanVisit (getRange item) then
-            visit item
-        else
-            None
-
-    member inline private this.TryVisitList(items: _ list, visit, getRange) =
-        let mutable result = None
-        let mutable items = items
-        while not (List.isEmpty items) && result.IsNone do
-            match items with
-            | [] -> ()
-            | item :: tail ->
-                items <- tail
-                if this.CanVisit (getRange item) then
-                    result <- visit item
-        result
-
-    abstract CanVisit: range -> bool  
-    default this.CanVisit _ = true
-        """ + "\n\n" + genRootSyntaxNode ()
+        """ + "\n" + genRootSyntaxNode ()
 
 open System.IO
 
