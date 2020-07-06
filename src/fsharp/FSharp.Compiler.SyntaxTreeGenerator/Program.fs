@@ -9,30 +9,31 @@ module rec Visitor =
 
     type cenv = { genVisit: HashSet<Type>; genVisitComplete: HashSet<Type> }
 
+    let isListType (ty: Type) =
+        ty.IsGenericType && ty.GetGenericTypeDefinition() = typedefof<_ list>
+
+    let stripType (ty: Type) =
+        if isListType ty then ty.GenericTypeArguments.[0]
+        else ty
+
     let canGen (ty: Type) =
         ty.Name.StartsWith "Syn" ||
         ty.Name.StartsWith "Parsed" ||
-        ty.Name = "Ident"
+        ty.Name = "Ident" ||
+        ty.Name = "LongIdentWithDots"
 
     let genUnionFields (fields: PropertyInfo []) =
         fields
-        |> Array.mapi (fun i _ -> "field" + string i)
+        |> Array.mapi (fun i field -> if canGen (stripType field.PropertyType) then "field" + string i else "_")
         |> Array.reduce (fun x y -> x + ", " + y)
 
     let genUnionFieldVisits cenv (fields: PropertyInfo []) =
         fields
         |> Array.mapi (fun i field -> ("field" + string i, field.PropertyType))
-        |> Array.mapi (fun i (fieldName, fieldTy) ->
-            let isListType = fieldTy.IsGenericType && fieldTy.GetGenericTypeDefinition() = typedefof<_ list>
-            let fieldTy =
-                if isListType then fieldTy.GenericTypeArguments.[0]
-                else fieldTy
-            if not (canGen fieldTy) then
-                if i = fields.Length - 1 then
-                    sprintf """            %s |> ignore""" fieldName 
-                else
-                    sprintf """            %s |> ignore""" fieldName
-            else
+        |> Array.map (fun (fieldName, fieldTy) ->
+            let isListType = isListType fieldTy
+            let fieldTy = stripType fieldTy
+            if canGen fieldTy then
                 if not (cenv.genVisit.Contains fieldTy || cenv.genVisitComplete.Contains fieldTy)  then
                     cenv.genVisit.Add fieldTy |> ignore
 
@@ -40,9 +41,12 @@ module rec Visitor =
                     sprintf """            %s |> List.iter this.Visit""" fieldName
                 else
                     sprintf """            this.Visit %s""" fieldName
+            else
+                String.Empty
         )
+        |> Array.filter (fun x -> not (String.IsNullOrWhiteSpace x))
         |> function
-        | [||] -> String.Empty
+        | [||] -> """            ()"""
         | [|x|] -> x
         | xs -> xs |> Array.reduce (fun x y -> x + "\n" + y)
 
@@ -62,8 +66,7 @@ module rec Visitor =
     let genSyntaxNodeUnionType cenv (ty: Type) =
         let genMatch =
             sprintf """
-        match node with
-            """
+        match node with"""
             
         genMatch +
         (
@@ -79,13 +82,13 @@ module rec Visitor =
         if canGen ty then
             sprintf """
     abstract Visit: %s -> unit
-    default this.Visit(node: %s) : unit =""" ty.Name ty.Name + "\n" +
+    default this.Visit(node: %s) : unit =""" ty.Name ty.Name +
             (
                 if FSharpType.IsUnion ty then
                     genSyntaxNodeUnionType cenv ty
                 else
                     "        ()"
-            ) + "\n"
+            )
         else
             String.Empty
 
@@ -117,12 +120,9 @@ module rec Visitor =
         
 open FSharp.Compiler.AbstractIL.Internal.Library
 open FSharp.Compiler.SyntaxTree
-open FSharp.Compiler.Range
-open FSharp.Compiler.SyntaxTreeExtendedRanges
 
 [<AbstractClass>]
-type SyntaxTreeVisitor<'T> () =
-        """ + "\n" + genRootSyntaxNode ()
+type SyntaxTreeVisitor () =""" + genRootSyntaxNode ()
 
 open System.IO
 
