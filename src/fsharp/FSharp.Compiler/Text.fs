@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Threading
 open System.Linq
+open System.Collections.Immutable
 open FSharp.Compiler.Internal.ArrayExtensions
 
 [<Struct>]
@@ -117,13 +118,14 @@ and [<Sealed>] FSharpTextLineCollection internal (text: FSharpSourceText, lineSt
             lineNumber
 
 [<Sealed>]
-type StringText internal (str: string) as this =
+type private StringText (str: ReadOnlyMemory<char>) as this =
     inherit FSharpSourceText()
 
-    static let getLineStarts (str: string) =
+    static let getLineStarts (str: ReadOnlyMemory<char>) =
         [|
             let mutable position = 0
-            for c in str do
+            for i = 0 to str.Length - 1 do
+                let c = str.Span.[i]
                 if c = '\n' then
                     yield position
                 position <- position + 1
@@ -135,7 +137,7 @@ type StringText internal (str: string) as this =
 
     member _.String = str
 
-    override _.Item with get index = str.[index]
+    override _.Item with get index = str.Span.[index]
 
     override _.Lines =
         if lazyLines = Unchecked.defaultof<FSharpTextLineCollection> then
@@ -143,16 +145,55 @@ type StringText internal (str: string) as this =
         else
             lazyLines
 
-    override this.GetSubText(start, length) = 
-        FSharpSubText(this, FSharpTextSpan(start, length)) :> FSharpSourceText        
+    override _.GetSubText(start, length) = 
+        StringText(str.Slice(start, length)) :> FSharpSourceText      
 
     override _.Length = str.Length
 
     override this.ContentEquals(sourceText) =
         match sourceText with
-        | :? StringText as sourceText when sourceText = this || sourceText.String = str -> true
+        | :? StringText as sourceText when sourceText = this || sourceText.String.Equals str -> true
         | _ -> false
 
     override _.CopyTo(sourceIndex, destination, destinationIndex, count) =
-            str.CopyTo(sourceIndex, destination, destinationIndex, count)
+        str.Slice(sourceIndex).CopyTo(Memory(destination, destinationIndex, count))
 
+
+let charBufferSize = 32 * 1024
+let charBufferCount = 5
+let largeObjectHeapLimitInChars = 40 * 1024 // 40KB
+
+let private readChunks (reader: TextReader) =
+    let chunks = ImmutableArray.CreateBuilder()
+    while reader.Peek() <> -1 do
+        let mutable chunk = Array.zeroCreate<char> largeObjectHeapLimitInChars
+
+        let charsRead = reader.ReadBlock(chunk, 0, chunk.Length)
+        if charsRead = 0 then ()
+        else
+
+        if charsRead < chunk.Length then
+            Array.Resize(&chunk, charsRead)
+
+        chunks.Add chunk
+
+[<Sealed>]
+type private LargeText (chunks: ImmutableArray<char>) =
+
+    static let largeObjectHeapLimitInChars = 40 * 1024 // 40KB
+    
+    static let readChunks (reader: TextReader) =
+        let chunks = ImmutableArray.CreateBuilder()
+        while reader.Peek() <> -1 do
+            let mutable chunk = Array.zeroCreate<char> largeObjectHeapLimitInChars
+    
+            let charsRead = reader.ReadBlock(chunk, 0, chunk.Length)
+            if charsRead = 0 then ()
+            else
+    
+            if charsRead < chunk.Length then
+                Array.Resize(&chunk, charsRead)
+    
+            chunks.Add chunk
+
+    static member Create()
