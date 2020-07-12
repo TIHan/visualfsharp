@@ -82,7 +82,9 @@ module rec Visitor =
         if canGen ty then
             sprintf """
     abstract Visit: %s -> unit
-    default this.Visit(node: %s) : unit =""" ty.Name ty.Name +
+    default this.Visit(node: %s) : unit =
+        previousNode <- currentNode
+        currentNode <- ValueSome(box node)""" ty.Name ty.Name + "\n" +
             (
                 if FSharpType.IsUnion ty then
                     genSyntaxNodeUnionType cenv ty
@@ -123,7 +125,12 @@ open FSharp.Compiler.AbstractIL.Internal.Library
 open FSharp.Compiler.SyntaxTree
 
 [<AbstractClass>]
-type SyntaxTreeVisitor () =""" + src
+type SyntaxTreeVisitor () =
+    let mutable currentNode = ValueNone
+    let mutable previousNode = ValueNone
+     
+    member _.CurrentNode = currentNode
+    member _.PreviousNode = previousNode""" + src
 
 open System.IO
 
