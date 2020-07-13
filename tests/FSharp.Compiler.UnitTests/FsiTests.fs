@@ -556,9 +556,9 @@ module FsiTests =
             fun (t: FSharpSyntaxToken) -> 
                 tokens.Add(t)
         FSharpLexer.Lex(SourceText.ofString src, tokenCallback, flags = (FSharpLexerFlags.Default &&& ~~~FSharpLexerFlags.SkipTrivia &&& ~~~FSharpLexerFlags.UseLexFilter))
-        tokens |> List.ofSeq
+        tokens
 
     [<Fact>]
     let `` lex line comment`` () =
-        let tokens = lex "// test"
+        let tokens = lex ("// test\n" + """  let x = @"test"" """)
         Assert.True(tokens.[0].IsCommentTrivia)

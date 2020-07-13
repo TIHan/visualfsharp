@@ -1091,7 +1091,7 @@ and singleLineComment cargs skip = parse
        singleLineComment (buff,n,m,args) skip lexbuf  } 
        
  | surrogateChar surrogateChar
- | _ { let buf, _n,_m,args = cargs 
+ | _ { let buff, _n,_m,args = cargs 
       if not skip then SINGLE_LINE_COMMENT_TRIVIA (buff.ToString()) else token args skip lexbuf }
 
        
