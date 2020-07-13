@@ -314,7 +314,11 @@ module internal TokenClassifications =
         | CHAR _ ->
             (FSharpTokenColorKind.String, FSharpTokenCharKind.String, FSharpTokenTriggerClass.None)
 
+        | SINGLE_LINE_COMMENT_TRIVIA _ ->
+            (FSharpTokenColorKind.Comment, FSharpTokenCharKind.LineComment, FSharpTokenTriggerClass.None)
+
         | EOF _ -> failwith "tokenInfo"
+       
 
 module internal TestExpose =
   let TokenInfo tok = TokenClassifications.tokenInfo tok
@@ -1040,7 +1044,8 @@ module Lexer =
             | HASH_LINE _ -> FSharpSyntaxTokenKind.HashLine 
             | HASH_LIGHT _ -> FSharpSyntaxTokenKind.HashLight 
             | INACTIVECODE _ -> FSharpSyntaxTokenKind.InactiveCode
-            | LINE_COMMENT _ -> FSharpSyntaxTokenKind.LineCommentTrivia 
+            | LINE_COMMENT _ -> FSharpSyntaxTokenKind.LineCommentTrivia
+            | SINGLE_LINE_COMMENT_TRIVIA _ -> FSharpSyntaxTokenKind.LineCommentTrivia
             | STRING_TEXT _ -> FSharpSyntaxTokenKind.StringText 
             | FIXED  -> FSharpSyntaxTokenKind.Fixed 
             | OINTERFACE_MEMBER  -> FSharpSyntaxTokenKind.OffsideInterfaceMember 

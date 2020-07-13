@@ -5,6 +5,8 @@ open FSharp.Compiler.Interactive.Shell
 open Xunit
 open FSharp.Test.Utilities
 
+#nowarn "57"
+
 [<Collection("SingleThreaded")>]
 module FsiTests =
 
@@ -544,3 +546,19 @@ module FsiTests =
         let boundValue = fsiSession.GetBoundValues() |> List.exactlyOne
 
         Assert.shouldBe typeof<``Test2FSharp @ Func``> boundValue.Value.ReflectionType
+
+    open FSharp.Compiler.SourceCodeServices.Lexer
+    open FSharp.Compiler.Text
+
+    let lex src =
+        let tokens = ResizeArray()
+        let tokenCallback = 
+            fun (t: FSharpSyntaxToken) -> 
+                tokens.Add(t)
+        FSharpLexer.Lex(SourceText.ofString src, tokenCallback, flags = (FSharpLexerFlags.Default &&& ~~~FSharpLexerFlags.SkipTrivia &&& ~~~FSharpLexerFlags.UseLexFilter))
+        tokens |> List.ofSeq
+
+    [<Fact>]
+    let `` lex line comment`` () =
+        let tokens = lex "// test"
+        Assert.True(tokens.[0].IsCommentTrivia)
