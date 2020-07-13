@@ -317,7 +317,7 @@ module internal TokenClassifications =
         | SINGLE_LINE_COMMENT_TRIVIA _ ->
             (FSharpTokenColorKind.Comment, FSharpTokenCharKind.LineComment, FSharpTokenTriggerClass.None)
 
-        | EOF _ -> failwith "tokenInfo"
+        | _ -> failwith "tokenInfo"
        
 
 module internal TestExpose =

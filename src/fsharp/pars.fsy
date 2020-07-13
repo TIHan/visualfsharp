@@ -158,7 +158,8 @@ let rangeOfLongIdent(lid:LongIdent) =
 %token <byte[]> BYTEARRAY
 %token <string> STRING 
 %token <string> KEYWORD_STRING // Like __SOURCE_DIRECTORY__
-%token <string> SINGLE_LINE_COMMENT_TRIVIA
+%token <string> VERBATIM_STRING
+%token <string> TRIPLE_QUOTE_STRING
 %token <string> IDENT 
 %token <string> INFIX_STAR_STAR_OP 
 %token <string> INFIX_COMPARE_OP 
@@ -170,6 +171,9 @@ let rangeOfLongIdent(lid:LongIdent) =
 %token <string> PLUS_MINUS_OP 
 %token <string> ADJACENT_PREFIX_OP 
 %token <string> FUNKY_OPERATOR_NAME
+%token <string> SINGLE_LINE_COMMENT_TRIVIA
+%token <string> MULTI_LINE_COMMENT_TRIVIA
+%token <string> WHITESPACE_TRIVIA
 
 /* bool indicates if INT8 was 'bad' max_int+1, e.g. '128'  */
 %token <sbyte * bool> INT8 
