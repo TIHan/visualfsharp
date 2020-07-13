@@ -65,6 +65,8 @@ val stringBufferIsBytes: ByteBuffer -> bool
 
 val newline: Lexing.LexBuffer<'a> -> unit
 
+val eof: Lexing.LexBuffer<'a> -> unit
+
 val trigraph: char -> char -> char -> char
 
 val digit: char -> int32

@@ -138,6 +138,10 @@ let stringBufferIsBytes (buf: ByteBuffer) =
 let newline (lexbuf:LexBuffer<_>) = 
     lexbuf.EndPos <- lexbuf.EndPos.NextLine
 
+let eof (lexbuf:LexBuffer<_>) =
+    lexbuf.StartPos <- lexbuf.EndPos
+    lexbuf.IsPastEndOfStream <- false
+
 let trigraph c1 c2 c3 =
     let digit (c:char) = int c - int '0' 
     char (digit c1 * 100 + digit c2 * 10 + digit c3)

@@ -1079,9 +1079,10 @@ and singleLineComment cargs skip = parse
        if not skip then SINGLE_LINE_COMMENT_TRIVIA (buff.ToString()) else token args skip lexbuf }
  
  | eof 
-     { let _, _n,_m,args = cargs 
+     { let buff, _n,_m,args = cargs 
+       eof lexbuf
        // NOTE: it is legal to end a file with this comment, so we'll return EOF as a token 
-       EOF (LexCont.Token args.ifdefStack) } 
+       if not skip then SINGLE_LINE_COMMENT_TRIVIA (buff.ToString()) else token args skip lexbuf } 
       
  | [^ ' ' '\n' '\r' ]+
  | anywhite+

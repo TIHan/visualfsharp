@@ -472,6 +472,7 @@ module public Lexer =
         | InfixLsr
         | InfixLxor
         | InfixMod
+        | EndOfFile
 
     [<Struct;NoComparison;NoEquality;Experimental("This FCS API is experimental and subject to change.")>]
     type public FSharpSyntaxToken =

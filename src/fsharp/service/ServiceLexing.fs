@@ -1015,6 +1015,7 @@ module Lexer =
         | InfixLsr
         | InfixLxor
         | InfixMod
+        | EndOfFile
 
     [<Struct;NoComparison;NoEquality>]
     type FSharpSyntaxToken =
@@ -1218,6 +1219,7 @@ module Lexer =
             | KEYWORD_STRING _ -> FSharpSyntaxTokenKind.KeywordString
             | STRING _ -> FSharpSyntaxTokenKind.String
             | BYTEARRAY _ -> FSharpSyntaxTokenKind.ByteArray
+            | EOF _ -> FSharpSyntaxTokenKind.EndOfFile
             | _ -> FSharpSyntaxTokenKind.None           
 
         member this.IsKeyword =
