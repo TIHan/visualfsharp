@@ -1011,6 +1011,7 @@ module Lexer =
         | InfixLsr
         | InfixLxor
         | InfixMod
+        | Eof
 
     [<Struct;NoComparison;NoEquality>]
     type FSharpSyntaxToken =
@@ -1213,6 +1214,7 @@ module Lexer =
             | KEYWORD_STRING _ -> FSharpSyntaxTokenKind.KeywordString
             | STRING _ -> FSharpSyntaxTokenKind.String
             | BYTEARRAY _ -> FSharpSyntaxTokenKind.ByteArray
+            | EOF _ -> FSharpSyntaxTokenKind.Eof
             | _ -> FSharpSyntaxTokenKind.None           
 
         member this.IsKeyword =
@@ -1423,3 +1425,22 @@ module Lexer =
                     | _ -> tokenCallback fsTok
 
             lex text filePath conditionalCompilationDefines flags supportsFeature onToken pathMap ct
+
+        static member LexFast(text: ISourceText, tokenCallback) =
+            let lexer = Lexer.Lexer.Create(text)
+
+            let onToken =
+                fun tok m ->
+                    let fsTok = FSharpSyntaxToken(tok, m)
+                    match fsTok.Kind with
+                    | FSharpSyntaxTokenKind.None -> ()
+                    | _ -> tokenCallback fsTok
+
+            let rec lex (tok: Parser.token) =
+                onToken tok (lexer.LexemeRange)
+                match tok with
+                | EOF _ -> ()
+                | _ ->
+                    lex (lexer.ScanToken())
+
+            lex (lexer.ScanToken())

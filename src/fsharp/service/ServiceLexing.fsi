@@ -472,6 +472,7 @@ module public Lexer =
         | InfixLsr
         | InfixLxor
         | InfixMod
+        | Eof
 
     [<Struct;NoComparison;NoEquality;Experimental("This FCS API is experimental and subject to change.")>]
     type public FSharpSyntaxToken =
@@ -498,3 +499,7 @@ module public Lexer =
         
         [<Experimental("This FCS API is experimental and subject to change.")>]
         static member Lex: text: ISourceText * tokenCallback: (FSharpSyntaxToken -> unit) * ?langVersion: string * ?filePath: string * ?conditionalCompilationDefines: string list * ?flags: FSharpLexerFlags * ?pathMap: Map<string, string> * ?ct: CancellationToken -> unit
+
+        
+        [<Experimental("This FCS API is experimental and subject to change.")>]
+        static member LexFast: text: ISourceText * tokenCallback: (FSharpSyntaxToken -> unit) -> unit

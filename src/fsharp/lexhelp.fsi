@@ -100,3 +100,13 @@ module Keywords =
     /// Keywords paired with their descriptions. Used in completion and quick info.
     val keywordsWithDescription: (string * string) list
 
+module Lexer =
+
+    [<Sealed>]
+    type Lexer =
+
+        member LexemeRange : range
+
+        member ScanToken : unit -> Parser.token
+
+        static member Create : FSharp.Compiler.Text.ISourceText -> Lexer

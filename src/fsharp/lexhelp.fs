@@ -446,3 +446,207 @@ module Keywords =
           "<@@",       FSComp.SR.keywordDescriptionUntypedQuotation()
           "@@>",       FSComp.SR.keywordDescriptionUntypedQuotation() ]
 
+module Lexer =
+
+    open System.Collections.Generic
+    open FSharp.Compiler.Text
+
+    let invalidCharacter = Char.MaxValue
+
+    [<Sealed>]
+    type SlidingWindow (text: ISourceText) =
+
+        let window = Array.zeroCreate<char> 2048
+        let mutable offset = window.Length
+        let mutable absoluteBlockPosition = 0
+
+        let tryFill isInit =
+            if offset >= window.Length then
+                let lengthToCopy = 
+                    if window.Length > text.Length - absoluteBlockPosition then
+                        text.Length - absoluteBlockPosition
+                    else
+                        window.Length
+
+                if lengthToCopy > 0 then
+                    text.CopyTo(absoluteBlockPosition, window, 0, lengthToCopy)
+                    if not isInit then
+                        absoluteBlockPosition <- absoluteBlockPosition + lengthToCopy
+                    offset <- offset - window.Length
+
+        do
+            tryFill true
+
+        member _.PeekChar() =
+            tryFill false
+            if absoluteBlockPosition + offset > text.Length then
+                invalidCharacter
+            else
+                window.[offset]
+
+        member _.AdvanceChar() =
+            offset <- offset + 1
+
+    [<Sealed>]
+    type Lexer (text: ISourceText) =
+        let window = SlidingWindow text   
+        let _delayedTokens = Stack<Parser.token>()
+        let mutable lexemeStartLine = 0
+        let mutable lexemeStartColumn = 0
+
+        let mutable line = 0
+        let mutable column = 0
+
+        let newLine () = 
+            line <- line + 1
+            column <- 0
+
+        let peek () = window.PeekChar()
+        let advance () =
+            column <- column + 1
+            window.AdvanceChar()
+
+        let rec whitespace () =
+            match peek () with
+            | ' ' ->
+                advance ()
+                whitespace ()
+            | _ ->
+                WHITESPACE (LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
+
+        //| '#' { HASH }
+
+        //| '&' { AMP }
+
+        //| "&&" { AMP_AMP }
+
+        //| "||" { BAR_BAR }
+
+        //| '\'' { QUOTE }
+
+        //| '(' { LPAREN }
+
+        //| ')' { RPAREN }
+
+        //| '*' { STAR }
+
+        //| ',' { COMMA }
+
+        //| "->" { RARROW }
+
+        //| "?" { QMARK }
+
+        //| "??" { QMARK_QMARK }
+
+        //| ".." { DOT_DOT }
+
+        //| "..^" { DOT_DOT_HAT }
+
+        //| "." { DOT }
+
+        //| ":" { COLON }
+
+        //| "::" { COLON_COLON }
+
+        //| ":>" { COLON_GREATER }
+
+        //| "@>." { RQUOTE_DOT ("<@ @>",false) }
+
+        //| "@@>." { RQUOTE_DOT ("<@@ @@>",true) }
+
+        //| ">|]" { GREATER_BAR_RBRACK }
+
+        //| ":?>" { COLON_QMARK_GREATER }
+
+        //| ":?" { COLON_QMARK }
+
+        //| ":=" { COLON_EQUALS }
+
+        //| ";;" { SEMICOLON_SEMICOLON }
+
+        //| ";" { SEMICOLON }
+
+        //| "<-" { LARROW }
+
+        //| "=" { EQUALS }
+
+        //| "[" { LBRACK }
+
+        //| "[|" { LBRACK_BAR }
+
+        //| "{|" { LBRACE_BAR }
+
+        //| "<" { LESS false }
+
+        //| ">" { GREATER false }
+
+        //| "[<" { LBRACK_LESS }
+
+        //| "]" { RBRACK }
+
+        //| "|]" { BAR_RBRACK }
+
+        //| "|}" { BAR_RBRACE }
+
+        //| ">]" { GREATER_RBRACK }
+
+        //| "{" { LBRACE }
+
+        //| "|" { BAR }
+
+        //| "}" { RBRACE }
+
+        //| "$" { DOLLAR }
+
+        //| "%" { PERCENT_OP("%") }
+
+        //| "%%" { PERCENT_OP("%%") }
+
+        //| "-" { MINUS }
+
+        //| "~" { RESERVED }
+
+        //| "`" { RESERVED }
+
+        member _.LexemeRange = mkFileIndexRange 0 (mkPos lexemeStartLine lexemeStartColumn) (mkPos line column)
+
+        member this.ScanToken() =
+            lexemeStartLine <- line
+            lexemeStartColumn <- column
+            match peek () with
+            | '#' ->
+                advance ()
+                HASH
+
+            | '&' ->
+                advance ()
+                match peek () with
+                | '&' ->
+                    advance ()
+                    AMP_AMP
+                | _ ->
+                   AMP
+                   
+            | '\n' ->
+                advance ()
+                newLine ()
+                WHITESPACE (LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
+
+            | '\r' ->
+                advance ()
+                match peek () with
+                | '\n' ->
+                    advance ()
+                | _ ->
+                    ()
+                newLine ()
+                WHITESPACE (LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
+
+            | ' ' ->
+                advance ()
+                whitespace ()
+
+            | _ ->
+                EOF(LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
+
+        static member Create(text) = Lexer(text)

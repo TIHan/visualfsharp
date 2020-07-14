@@ -544,3 +544,14 @@ module FsiTests =
         let boundValue = fsiSession.GetBoundValues() |> List.exactlyOne
 
         Assert.shouldBe typeof<``Test2FSharp @ Func``> boundValue.Value.ReflectionType
+
+    open FSharp.Compiler.Text
+    open FSharp.Compiler.SourceCodeServices.Lexer
+
+    [<Fact>]
+    let ``test fast lex`` () =
+        
+        let tokens = ResizeArray()
+        FSharpLexer.Lex(SourceText.ofString "& && &\n", tokens.Add, flags = (FSharpLexerFlags.Default &&& ~~~FSharpLexerFlags.UseLexFilter &&& ~~~FSharpLexerFlags.SkipTrivia))
+       // FSharpLexer.LexFast(SourceText.ofString "& && &\n", tokens.Add)
+        printfn "%A" tokens
