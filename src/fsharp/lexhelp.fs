@@ -617,7 +617,7 @@ module Lexer =
                 advance ()
                 scanNumericLiteralInteger (count + 1) kind
 
-            | 'u' ->
+            | 'u' when count > 0 ->
                 advance ()
                 match peek () with
                 | 'l' ->
