@@ -448,10 +448,65 @@ module Keywords =
 
 module Lexer =
 
+    open System.Globalization
     open System.Collections.Generic
     open FSharp.Compiler.Text
 
     let invalidCharacter = Char.MaxValue
+
+    //--------------------------
+    // Integer parsing
+    
+    // Parsing integers is common in bootstrap runs (parsing
+    // the parser tables, no doubt). So this is an optimized
+    // version of the F# core library parsing code with the call to "Trim"
+    // removed, which appears in profiling runs as a small but significant cost.
+    
+    let getSign32 (s:string) (p:byref<int>) l = 
+        if (l >= p + 1 && s.[p] = '-') 
+        then p <- p + 1; -1 
+        else 1 
+    
+    let isOXB c = 
+        let c = Char.ToLowerInvariant c
+        c = 'x' || c = 'o' || c = 'b'
+    
+    let is0OXB (s:string) p l = 
+        l >= p + 2 && s.[p] = '0' && isOXB s.[p+1]
+    
+    let get0OXB (s:string) (p:byref<int>)  l = 
+        if is0OXB s p l
+        then let r = Char.ToLowerInvariant s.[p+1] in p <- p + 2; r
+        else 'd' 
+    
+    let formatError() = raise (new System.FormatException(SR.GetString("bad format string")))
+    
+    let parseBinaryUInt64 (s:string) = 
+        Convert.ToUInt64(s, 2)
+    
+    let parseOctalUInt64 (s:string) =
+        Convert.ToUInt64(s, 8)
+    
+    let removeUnderscores (s:string) =
+        match s with
+        | null -> null
+        | s -> s.Replace("_", "")
+    
+    let parseInt32 (s:string) = 
+        let s = removeUnderscores s
+        let l = s.Length 
+        let mutable p = 0 
+        let sign = getSign32 s &p l 
+        let specifier = get0OXB s &p l 
+        match Char.ToLower(specifier,CultureInfo.InvariantCulture) with 
+        | 'x' -> sign * (int32 (Convert.ToUInt32(UInt64.Parse(s.Substring(p), NumberStyles.AllowHexSpecifier,CultureInfo.InvariantCulture))))
+        | 'b' -> sign * (int32 (Convert.ToUInt32(parseBinaryUInt64 (s.Substring(p)))))
+        | 'o' -> sign * (int32 (Convert.ToUInt32(parseOctalUInt64  (s.Substring(p)))))
+        | _ -> Int32.Parse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture)
+
+    let lexemeTrimRightToInt32 args lexbuf n = 
+        try parseInt32 (lexemeTrimRight lexbuf n)
+        with _ -> fail args lexbuf (FSComp.SR.lexOutsideIntegerRange()) 0
 
     [<Sealed>]
     type SlidingWindow (text: ISourceText) =
@@ -487,6 +542,11 @@ module Lexer =
         member _.AdvanceChar() =
             offset <- offset + 1
 
+    type LexNumericLiteralIntegerKind =
+        | NormalInteger
+        | HexInteger
+        | BinaryInteger
+
     [<Sealed>]
     type Lexer (text: ISourceText) =
         let window = SlidingWindow text   
@@ -506,13 +566,69 @@ module Lexer =
             column <- column + 1
             window.AdvanceChar()
 
-        let rec whitespace () =
+        let lexemeTrimRightToInt32 args lexbuf n = 
+            try parseInt32 (lexemeTrimRight lexbuf n)
+            with _ -> fail args lexbuf (FSComp.SR.lexOutsideIntegerRange()) 0
+
+        let lexeme (lexbuf : UnicodeLexing.Lexbuf) = UnicodeLexing.Lexbuf.LexemeString lexbuf
+        
+        let trimBoth (s:string) n m = s.Substring(n, s.Length - (n+m))
+        
+        let lexemeTrimBoth   lexbuf n m = trimBoth (lexeme lexbuf) n m
+        
+        let lexemeTrimRight  lexbuf n = lexemeTrimBoth lexbuf 0 n
+        
+        let lexemeTrimLeft   lexbuf n = lexemeTrimBoth lexbuf n 0
+
+        let rec scanWhitespace () =
             match peek () with
             | ' ' ->
                 advance ()
-                whitespace ()
+                scanWhitespace ()
             | _ ->
                 WHITESPACE (LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
+
+        let rec scanNumericLiteralInteger (kind: LexNumericLiteralInteger) =
+            match peek () with
+            | '0'             
+            | '1' ->
+                advance ()
+                scanNumericLiteralInteger kind
+
+            | '2'
+            | '3'
+            | '4'
+            | '5'
+            | '6'
+            | '7' when not (kind = BinaryInteger) ->
+                INT8()
+            | '8'
+            | '9' when not (kind = BinaryInteger || kind = HexInteger) ->
+                advance ()
+                scanNumericLiteralInteger kind
+
+            | _ ->
+                let s = removeUnderscores (lexemeTrimRight lexbuf 1)
+                // Allow <max_int+1> to parse as min_int.  Allowed only because we parse '-' as an operator. 
+                if s = "2147483648" then INT32(-2147483648,true) else
+                let n = 
+                    try int32 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitSigned()) 0
+                INT32(n,false)
+      
+        let rec scanNumericLiteral () =
+            match peek () with
+            | '0' ->
+                
+            | '1'
+            | '2'
+            | '3'
+            | '4'
+            | '5'
+            | '6'
+            | '7'
+            | '8'
+            | '9'
+            
 
         //| "@>." { RQUOTE_DOT ("<@ @>",false) }
 
@@ -572,9 +688,7 @@ module Lexer =
 
         //| "`" { RESERVED }
 
-        member _.LexemeRange = mkFileIndexRange 0 (mkPos lexemeStartLine lexemeStartColumn) (mkPos line column)
-
-        member this.ScanToken() =
+        let scanToken () =
             lexemeStartLine <- line
             lexemeStartColumn <- column
             match peek () with
@@ -707,10 +821,26 @@ module Lexer =
                 WHITESPACE (LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
 
             | ' ' ->
-                advance ()
-                whitespace ()
+                scanWhitespace ()
+
+            | '0'
+            | '1'
+            | '2'
+            | '3'
+            | '4'
+            | '5'
+            | '6'
+            | '7'
+            | '8'
+            | '9' ->
+                scanNumericLiteral ()
 
             | _ ->
                 EOF(LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
+
+        member _.LexemeRange = mkFileIndexRange 0 (mkPos lexemeStartLine lexemeStartColumn) (mkPos line column)
+
+        member _.ScanToken() =
+            scanToken ()
 
         static member Create(text) = Lexer(text)
