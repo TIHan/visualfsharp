@@ -514,42 +514,6 @@ module Lexer =
             | _ ->
                 WHITESPACE (LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
 
-        //| '#' { HASH }
-
-        //| '&' { AMP }
-
-        //| "&&" { AMP_AMP }
-
-        //| "||" { BAR_BAR }
-
-        //| '\'' { QUOTE }
-
-        //| '(' { LPAREN }
-
-        //| ')' { RPAREN }
-
-        //| '*' { STAR }
-
-        //| ',' { COMMA }
-
-        //| "->" { RARROW }
-
-        //| "?" { QMARK }
-
-        //| "??" { QMARK_QMARK }
-
-        //| ".." { DOT_DOT }
-
-        //| "..^" { DOT_DOT_HAT }
-
-        //| "." { DOT }
-
-        //| ":" { COLON }
-
-        //| "::" { COLON_COLON }
-
-        //| ":>" { COLON_GREATER }
-
         //| "@>." { RQUOTE_DOT ("<@ @>",false) }
 
         //| "@@>." { RQUOTE_DOT ("<@@ @@>",true) }
@@ -626,6 +590,106 @@ module Lexer =
                     AMP_AMP
                 | _ ->
                    AMP
+
+            | '|' ->
+                advance ()
+                match peek () with
+                | '|' ->
+                    advance ()
+                    BAR
+                | _ ->
+                    BAR_BAR
+
+            | '\'' ->
+                advance ()
+                QUOTE
+
+            | '(' ->
+                advance ()
+                LPAREN
+
+            | ')' ->
+                advance ()
+                RPAREN
+
+            | '*' ->
+                advance ()
+                STAR
+
+            | ',' ->
+                advance ()
+                COMMA
+
+            | '-' ->
+                advance ()
+                match peek () with
+                | '>' -> 
+                    advance ()
+                    RARROW
+                | _ ->
+                    MINUS
+
+            | '@' -> MINUS
+
+            | '>' -> MINUS
+
+            | ';' -> SEMICOLON
+
+            | '=' -> EQUALS
+
+            | '[' -> LBRACK
+
+            | ']' -> RBRACK
+
+            | '<' -> LESS false
+
+            | '{' -> LBRACE
+
+            | '}' -> RBRACE
+
+            | '$' -> DOLLAR
+
+            | '%' -> MINUS
+
+            | '~' -> RESERVED
+
+            | '`' -> RESERVED
+
+            | '.' ->
+                advance ()
+                match peek () with
+                | '.' ->
+                    advance ()
+                    match peek () with
+                    | '^' ->
+                        // TODO: Split
+                        advance ()
+                        DOT_DOT_HAT
+                    | _ ->
+                        DOT_DOT
+                | _ ->
+                    DOT
+
+            | ':' ->
+                advance ()
+                match peek () with
+                | ':' ->
+                    advance ()
+                    COLON_COLON
+                | '>' ->
+                    advance ()
+                    COLON_GREATER
+                | _ ->
+                    COLON
+
+            | '?' ->
+                advance ()
+                match peek () with
+                | '?' ->
+                    advance ()
+                    QMARK_QMARK
+                | _ ->
+                    QMARK
                    
             | '\n' ->
                 advance ()
