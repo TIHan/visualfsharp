@@ -504,10 +504,6 @@ module Lexer =
         | 'o' -> sign * (int32 (Convert.ToUInt32(parseOctalUInt64  (s.Substring(p)))))
         | _ -> Int32.Parse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture)
 
-    let lexemeTrimRightToInt32 args lexbuf n = 
-        try parseInt32 (lexemeTrimRight lexbuf n)
-        with _ -> fail args lexbuf (FSComp.SR.lexOutsideIntegerRange()) 0
-
     [<Sealed>]
     type SlidingWindow (text: ISourceText) =
 
@@ -542,15 +538,17 @@ module Lexer =
         member _.AdvanceChar() =
             offset <- offset + 1
 
+        member _.Lexeme() =
+            String(window, 0, offset)
+
     type LexNumericLiteralIntegerKind =
         | NormalInteger
         | HexInteger
         | BinaryInteger
 
     [<Sealed>]
-    type Lexer (text: ISourceText) =
+    type Lexer (args: lexargs, text: ISourceText) as this =
         let window = SlidingWindow text   
-        let _delayedTokens = Stack<Parser.token>()
         let mutable lexemeStartLine = 0
         let mutable lexemeStartColumn = 0
 
@@ -566,19 +564,30 @@ module Lexer =
             column <- column + 1
             window.AdvanceChar()
 
-        let lexemeTrimRightToInt32 args lexbuf n = 
-            try parseInt32 (lexemeTrimRight lexbuf n)
-            with _ -> fail args lexbuf (FSComp.SR.lexOutsideIntegerRange()) 0
-
-        let lexeme (lexbuf : UnicodeLexing.Lexbuf) = UnicodeLexing.Lexbuf.LexemeString lexbuf
+        let lexeme () = window.Lexeme()
         
         let trimBoth (s:string) n m = s.Substring(n, s.Length - (n+m))
         
-        let lexemeTrimBoth   lexbuf n m = trimBoth (lexeme lexbuf) n m
+        let lexemeTrimBoth n m = trimBoth (lexeme ()) n m
         
-        let lexemeTrimRight  lexbuf n = lexemeTrimBoth lexbuf 0 n
+        let lexemeTrimRight n = lexemeTrimBoth 0 n
         
-        let lexemeTrimLeft   lexbuf n = lexemeTrimBoth lexbuf n 0
+        let _lexemeTrimLeft n = lexemeTrimBoth n 0
+
+        let fail args msg dflt =
+            let m = this.LexemeRange
+            args.errorLogger.ErrorR(Error(msg,m))
+            dflt
+
+        let _lexemeTrimRightToInt32 args n = 
+            try parseInt32 (lexemeTrimRight n)
+            with _ -> fail args (FSComp.SR.lexOutsideIntegerRange()) 0
+
+        let _evalFloat args =
+            try
+                float32(removeUnderscores (lexemeTrimRight 1))
+            with _ ->
+                fail args (FSComp.SR.lexInvalidFloat()) 0.0f
 
         let rec scanWhitespace () =
             match peek () with
@@ -588,12 +597,12 @@ module Lexer =
             | _ ->
                 WHITESPACE (LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
 
-        let rec scanNumericLiteralInteger (kind: LexNumericLiteralInteger) =
+        let rec scanNumericLiteralInteger count kind =
             match peek () with
             | '0'             
             | '1' ->
                 advance ()
-                scanNumericLiteralInteger kind
+                scanNumericLiteralInteger (count + 1) kind
 
             | '2'
             | '3'
@@ -601,24 +610,53 @@ module Lexer =
             | '5'
             | '6'
             | '7' when not (kind = BinaryInteger) ->
-                INT8()
+                advance ()
+                scanNumericLiteralInteger (count + 1) kind
             | '8'
             | '9' when not (kind = BinaryInteger || kind = HexInteger) ->
                 advance ()
-                scanNumericLiteralInteger kind
+                scanNumericLiteralInteger (count + 1) kind
+
+            | 'u' ->
+                advance ()
+                match peek () with
+                | 'l' ->
+                    advance ()
+                | _ ->
+                    ()
+
+                let s = removeUnderscores (lexemeTrimRight 1)
+                let n = 
+                    try int64 s with _ ->  fail args (FSComp.SR.lexOutsideThirtyTwoBitUnsigned()) 0L
+                if n > 0xFFFFFFFFL || n < 0L then fail args (FSComp.SR.lexOutsideThirtyTwoBitUnsigned()) (UINT32(0u)) else
+                UINT32(uint32 (uint64 n))
+
+            | _ when count > 0 ->
+                let s = removeUnderscores (lexemeTrimRight 1)
+                // Allow <max_int+1> to parse as min_int.  Allowed only because we parse '-' as an operator. 
+                if s = "2147483648" then INT32(-2147483648, true) else
+                let n = 
+                    try int32 s with _ -> fail args (FSComp.SR.lexOutsideThirtyTwoBitSigned()) 0
+                INT32(n,false)
 
             | _ ->
-                let s = removeUnderscores (lexemeTrimRight lexbuf 1)
-                // Allow <max_int+1> to parse as min_int.  Allowed only because we parse '-' as an operator. 
-                if s = "2147483648" then INT32(-2147483648,true) else
-                let n = 
-                    try int32 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitSigned()) 0
-                INT32(n,false)
+                fail args (FSComp.SR.lexInvalidNumericLiteral()) (INT32(0, false))
       
         let rec scanNumericLiteral () =
             match peek () with
             | '0' ->
-                
+                advance ()
+                match peek () with
+                | 'b'
+                | 'B' ->
+                    advance ()
+                    scanNumericLiteralInteger 0 BinaryInteger
+                | 'x'
+                | 'X' ->
+                    advance ()
+                    scanNumericLiteralInteger 0 HexInteger
+                | _ ->
+                    scanNumericLiteralInteger 0 NormalInteger
             | '1'
             | '2'
             | '3'
