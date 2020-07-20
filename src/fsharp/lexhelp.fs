@@ -535,6 +535,20 @@ module Lexer =
             else
                 window.[offset]
 
+        member this.PeekCharAhead(amount: int) =
+            if amount < 0 then
+                invalidArg "amount" "Amount must be greater than or equal to zero."
+
+            if amount = 0 then
+                this.PeekChar()
+            else
+                tryFill false
+                let i = absoluteBlockPosition + offset + amount
+                if i > text.Length then
+                    invalidCharacter
+                else
+                    text.[i]
+
         member _.AdvanceChar() =
             offset <- offset + 1
 
@@ -560,6 +574,7 @@ module Lexer =
             column <- 0
 
         let peek () = window.PeekChar()
+        let peekAhead amount = window.PeekCharAhead amount
         let advance () =
             column <- column + 1
             window.AdvanceChar()
@@ -657,15 +672,8 @@ module Lexer =
                     scanNumericLiteralInteger 0 HexInteger
                 | _ ->
                     scanNumericLiteralInteger 0 NormalInteger
-            | '1'
-            | '2'
-            | '3'
-            | '4'
-            | '5'
-            | '6'
-            | '7'
-            | '8'
-            | '9'
+            | _ ->
+                scanNumericLiteralInteger 0 NormalInteger
             
 
         //| "@>." { RQUOTE_DOT ("<@ @>",false) }
@@ -781,13 +789,31 @@ module Lexer =
                 | _ ->
                     MINUS
 
-            | '@' -> MINUS
+            | '>' ->
+                advance ()
+                match peek (), peekAhead 1 with
+                | '|', ']' ->
+                    advance ()
+                    advance ()
+                    GREATER_BAR_RBRACK
+                | ']', _ ->
+                    advance ()
+                    GREATER_RBRACK
+                | _ ->
+                    GREATER false
 
-            | '>' -> MINUS
+            | ';' -> 
+                advance ()
+                match peek () with
+                | ';' ->
+                    advance ()
+                    SEMICOLON_SEMICOLON
+                | _ ->
+                    SEMICOLON
 
-            | ';' -> SEMICOLON
-
-            | '=' -> EQUALS
+            | '=' ->
+                advance ()
+                EQUALS
 
             | '[' -> LBRACK
 
