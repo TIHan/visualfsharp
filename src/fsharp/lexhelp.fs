@@ -561,8 +561,7 @@ module Lexer =
         | BinaryInteger
 
     [<Sealed>]
-    type Lexer (args: lexargs, text: ISourceText) as this =
-        let window = SlidingWindow text   
+    type Lexer (args: lexargs, text: ISourceText) =  
         let mutable lexemeStartLine = 0
         let mutable lexemeStartColumn = 0
 
@@ -573,6 +572,7 @@ module Lexer =
             line <- line + 1
             column <- 0
 
+        let window = SlidingWindow text 
         let peek () = window.PeekChar()
         let peekAhead amount = window.PeekCharAhead amount
         let advance () =
@@ -580,6 +580,7 @@ module Lexer =
             window.AdvanceChar()
 
         let lexeme () = window.Lexeme()
+        let lexemeRange () = mkFileIndexRange 0 (mkPos lexemeStartLine lexemeStartColumn) (mkPos line column)
         
         let trimBoth (s:string) n m = s.Substring(n, s.Length - (n+m))
         
@@ -590,7 +591,7 @@ module Lexer =
         let _lexemeTrimLeft n = lexemeTrimBoth n 0
 
         let fail args msg dflt =
-            let m = this.LexemeRange
+            let m = lexemeRange ()
             args.errorLogger.ErrorR(Error(msg,m))
             dflt
 
@@ -902,9 +903,8 @@ module Lexer =
             | _ ->
                 EOF(LexerWhitespaceContinuation.Token(LexerIfdefStackEntries.Empty))
 
-        member _.LexemeRange = mkFileIndexRange 0 (mkPos lexemeStartLine lexemeStartColumn) (mkPos line column)
+        member _.LexemeRange = lexemeRange ()
 
-        member _.ScanToken() =
-            scanToken ()
+        member _.ScanToken() = scanToken ()
 
         static member Create(text) = Lexer(text)
