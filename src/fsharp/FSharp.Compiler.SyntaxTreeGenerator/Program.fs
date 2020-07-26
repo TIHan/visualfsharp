@@ -7,7 +7,7 @@ open FSharp.Compiler.SyntaxTree
 
 module rec Visitor =
 
-    type cenv = { genVisit: HashSet<Type>; genVisitComplete: HashSet<Type> }
+    type cenv = { queue: Queue<Type * string>; cache: Dictionary<Type, string * string> }
 
     let isListType (ty: Type) =
         ty.IsGenericType && ty.GetGenericTypeDefinition() = typedefof<_ list>
@@ -60,15 +60,34 @@ type %s internal (parent: FSharpSyntaxNode, internalNode: %s) =
         match info.GetFields() with
         | [||] -> String.Empty
         | fields ->
-            fields
-            |> Array.filter (fun field ->
-              //  let isListType = isListType fieldTy
-                let fieldTy = stripType fieldTy
-                canGen fieldTy
-            )
-            |> Array.mapi (fun i field ->
-                
-            )
+            let fields =
+                fields
+                |> Array.filter (fun field ->
+                  //  let isListType = isListType fieldTy
+                    let fieldTy = stripType fieldTy
+                    canGen fieldTy
+                )
+
+            let mutableFields =
+                fields
+                |> Array.mapi (fun i field ->
+                    let name = "Item" + string i
+
+                    sprintf "    let mutable __%s : %s = Unchecked.defaultof<_>" name (genSyntaxNode cenv field.PropertyType)
+                )
+                |> Array.reduce (fun x y -> x + "\n" + y)
+
+            let properties =
+                fields
+                |> Array.mapi (fun i field ->
+                    let name = "Item" + string i
+
+                    sprintf "    member this.%s =
+        match this with
+        | SynType.
+                    "
+                )
+
         if Array.isEmpty fields then
             String.Empty
         else
@@ -89,6 +108,10 @@ type %s internal (parent: FSharpSyntaxNode, internalNode: %s) =
             String.Empty
 
     let genSyntaxNode cenv (ty: Type) =
+        match cenv.cache.TryGetValue ty with
+        | true, (name, _) -> name
+        | _ ->
+
         if canGen ty then
             let tyDefName = "FSharpSyntax" + ty.Name.Replace("Syn", String.Empty)
             let gen =
@@ -100,32 +123,11 @@ type FSharpSyntax%s internal (parent: FSharpSyntaxNode, internalNode: %s) =
     member _.InternalNode = internalNode
 
     override _.Range = internalNode.Range""" tyDefName ty.Name + "\n\n" + genSyntaxNodeBody cenv ty
-            cenv.
+            cenv.queue.Enqueue(ty, gen)
+            cenv.cache.[ty] <- (tyDefName, gen)
+            tyDefName
         else
             failwith "invalid syntax node"
-
-    let genRootSyntaxNode () =
-        let cenv = { genVisit = HashSet(); genVisitComplete = HashSet() }
-        cenv.genVisitComplete.Add typeof<ParsedInput> |> ignore
-
-        let sb = StringBuilder()
-        sb.Append(genSyntaxNode cenv typeof<ParsedInput>) |> ignore
-
-        let queue = Queue(cenv.genVisit)
-        cenv.genVisit
-        |> Seq.iter (fun x -> cenv.genVisitComplete.Add x |> ignore)
-        cenv.genVisit.Clear()
-
-        let mutable ty = Unchecked.defaultof<_>
-        while queue.TryDequeue &ty do
-            sb.Append(genSyntaxNode cenv ty) |> ignore
-            cenv.genVisit
-            |> Seq.iter (queue.Enqueue)
-            cenv.genVisit
-            |> Seq.iter (fun x -> cenv.genVisitComplete.Add x |> ignore)
-            cenv.genVisit.Clear()
-
-        sb.ToString(), cenv.genVisitComplete |> Array.ofSeq
 
     let gen () =
         let src, types = genRootSyntaxNode ()
