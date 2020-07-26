@@ -382,39 +382,81 @@ let (|MeasureVar|) (synMeasure: FSharpSyntaxMeasure) =
         None
 
 [<Sealed>]
+type FSharpSyntaxBinding internal (parent: FSharpSyntaxNode, internalNode: SynBinding) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+
+    member _.InternalNode = internalNode
+
+    override _.Parent = parent
+
+    override this.Range = FSharpSourceRange this.InternalNode.Range
+
+    override this.Children =
+        if children.IsEmpty then
+            children <-
+                match this.InternalNode with
+                | SynBinding.
+        children
+
+[<Sealed>]
 type FSharpSyntaxModuleDecl internal (parent: FSharpSyntaxNode, internalNode: SynModuleDecl) =
     inherit FSharpSyntaxNode()
 
     let mutable children = ImmutableArray.Empty
 
-    member _.InternalModuleDecl = internalNode
+    member _.InternalNode = internalNode
 
     override _.Parent = parent
 
-    override this.Range = FSharpSourceRange this.InternalModuleDecl.Range
+    override this.Range = FSharpSourceRange this.InternalNode.Range
 
-    override this.Children = children
+    override this.Children =
+        if children.IsEmpty then
+            children <-
+                match this.InternalNode with
+                | SynModuleDecl.ModuleAbbrev (id, lid, _) ->
+                    let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                    builder.Add(FSharpSyntaxIdent(this, [id])) // 0
+                    builder.Add(FSharpSyntaxIdent(this, lid)) // 1
+                    builder.ToImmutable()
 
-let (|ModuleDeclNode|) (node: FSharpSyntaxNode) =
+                | SynModuleDecl.NestedModule (_, _, internalDecls, _, _) ->
+                    let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                    builder.Add(FSharpSyntaxList<FSharpSyntaxModuleDecl>(this, internalDecls |> Seq.map (fun x -> FSharpSyntaxModuleDecl(this, x)))) // 0
+                    builder.ToImmutable()
+
+                | SynModuleDecl.Let (_, bindings, _) ->
+                    let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+
+                    builder.ToImmutable()
+        children
+            
+
+let (|ModuleDecl|) (node: FSharpSyntaxNode) =
     match node with
     | :? FSharpSyntaxModuleDecl as node -> Some node
     | _ -> None
 
-let (|ModuleDeclModuleAbbrev|) (node: FSharpSyntaxModuleDecl) =
-    match node.InternalModuleDecl with
-    | SynModuleDecl.ModuleAbbrev _ ->
-        let children = node.Children
-        Some(children.[0] :?> FSharpSyntaxIdent, children.[1] :?> FSharpSyntaxIdent)
-    | _ ->
-        None
+[<RequireQualifiedAccess>]
+module ModuleDecl =   
 
-let (|ModuleDeclNestedModule|) (node: FSharpSyntaxModuleDecl) =
-    match node.InternalModuleDecl with
-    | SynModuleDecl.NestedModule _ ->
-        let children = node.Children
-        Some(children.[0] :?> FSharpSyntaxList<FSharpSyntaxModuleDecl>)
-    | _ ->
-        None
+    let (|ModuleAbbrev|) (node: FSharpSyntaxModuleDecl) =
+        match node.InternalNode with
+        | SynModuleDecl.ModuleAbbrev _ ->
+            let children = node.Children
+            Some(children.[0] :?> FSharpSyntaxIdent, children.[1] :?> FSharpSyntaxIdent)
+        | _ ->
+            None
+
+    let (|NestedModule|) (node: FSharpSyntaxModuleDecl) =
+        match node.InternalNode with
+        | SynModuleDecl.NestedModule _ ->
+            let children = node.Children
+            Some(children.[0] :?> FSharpSyntaxList<FSharpSyntaxModuleDecl>)
+        | _ ->
+            None
 
 [<Sealed>]
 type FSharpSyntaxModuleOrNamespace internal (parent: FSharpSyntaxNode, internalNode: SynModuleOrNamespace) =

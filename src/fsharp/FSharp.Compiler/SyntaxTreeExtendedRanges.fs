@@ -320,11 +320,11 @@ type SynMeasure with
 
 //    member this.Range = range0
 
-//type SynBinding with
+type SynBinding with
 
-//    member this.Range = 
-//        match this with
-//        | Binding (range=m) -> m
+    member this.Range = 
+        match this with
+        | Binding (range=m) -> m
 
 //type SynBindingKind with
 
