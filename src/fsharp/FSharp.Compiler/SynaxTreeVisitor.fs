@@ -26,47 +26,103 @@ type FSharpSyntaxNode internal () =
     
     abstract Range : FSharpSourceRange
 
-    abstract Children : ImmutableArray<FSharpSyntaxNode>
-
     abstract Parent : FSharpSyntaxNode
 
-[<Sealed>]
-type FSharpSyntaxList<'T when 'T :> FSharpSyntaxNode> internal (parent: FSharpSyntaxNode, nodes: 'T seq) =
-    inherit FSharpSyntaxNode()
+    abstract ChildrenCount : int
 
-    let mutable children = ImmutableArray.Empty
-    
-    override _.Range = 
-        if Seq.isEmpty nodes then
-            FSharpSourceRange FSharp.Compiler.Range.range0
-        else
-            match Seq.tryExactlyOne nodes with
-            | Some node -> node.Range
+    abstract GetChildSlot : index: int -> FSharpSyntaxNode
+
+let failSyntax () = failwith "invalid syntax"
+
+let inline getSyntax<'T when 'T :> FSharpSyntaxNode> (node: byref<'T>) f =
+    match box node with
+    | null ->
+        node <- f ()
+    | _ ->
+        ()
+    node
+
+
+[<Sealed>]
+type FSharpSyntaxConstBool (parent: FSharpSyntaxNode, internalNode: SynConst) =
+    inherit FSharpSyntaxConst (parent, internalNode)
+
+    member _.Value =
+        match internalNode with
+        | SynConst.Bool value -> value
+        | _ -> failSyntax ()
+
+[<Sealed>]
+type FSharpSyntaxConstMeasure (parent: FSharpSyntaxNode, internalNode: SynConst) =
+    inherit FSharpSyntaxConst (parent, internalNode)
+
+    let mutable innerConst = Unchecked.defaultof<FSharpSyntaxConst>
+    let mutable innerMeasure = Unchecked.defaultof<FSharpSyntaxMeasure>
+
+    member this.InnerConst =
+        getSyntax &innerConst (fun () ->
+            match this.InternalNode with
+            | SynConst.Measure (internalInner, _) ->
+                FSharpSyntaxConst.InternalCreate (this, internalInner)
             | _ ->
-                nodes
-                |> Seq.map (fun x -> x.Range)
-                |> Seq.reduce (fun x y -> FSharpSourceRange.Combine(x, y))
+                failSyntax ()
+        )
 
-    override _.Children =
-        if children.IsEmpty && not (Seq.isEmpty nodes) then
-            children
-        else
-            children <- ImmutableArray.CreateRange (nodes |> Seq.map (fun x -> x :> FSharpSyntaxNode))
-            children
+    member this.InnerMeasure =
+        getSyntax &innerMeasure (fun () ->
+            match this.InternalNode with
+            | SynConst.Measure (_, internalMeasure) ->
+                FSharpSyntaxMeasure.InternalCreate (this, internalMeasure)
+            | _ ->
+                failSyntax ()
+        )
 
-    override _.Parent = parent
 
-[<Sealed>]
+    
+
+[<AbstractClass>]
 type FSharpSyntaxConst (parent: FSharpSyntaxNode, internalNode: SynConst) =
     inherit FSharpSyntaxNode()
 
     let mutable children = ImmutableArray.Empty
 
-    member internal _.InternalConst = internalNode
+    member internal _.InternalNode = internalNode
     
     override this.Range = FSharpSourceRange(this.InternalConst.Range FSharp.Compiler.Range.range0)
 
     override _.Parent = parent
+
+    static member internal Create(parent: FSharpSyntaxNode, internalNode: SynConst) =
+        match internalNode with
+        | SynConst.Bool _ -> 
+        | SynConst.Byte _
+        | SynConst.Bytes _
+        | SynConst.Char _
+        | SynConst.Decimal _
+        | SynConst.Double _
+        | SynConst.Int16 _
+        | SynConst.Int32 _
+        | SynConst.Int64 _
+        | SynConst.IntPtr _
+        | SynConst.SByte _
+        | SynConst.Single _
+        | SynConst.String _
+        | SynConst.UInt16 _
+        | SynConst.UInt16s _
+        | SynConst.UInt32 _
+        | SynConst.UInt64 _
+        | SynConst.UIntPtr _
+        | SynConst.Unit
+        | SynConst.UserNum _ -> children
+        | SynConst.Measure (internalConst, internalMeasure) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxConst(this, internalConst)) // 0
+                builder.Add(FSharpSyntaxMeasure(this, internalMeasure)) // 1
+                children <- builder.ToImmutable()
+                children
+            else
+                children
 
     override this.Children =
         match this.InternalConst with
@@ -274,8 +330,8 @@ type FSharpSyntaxMeasure internal (parent: FSharpSyntaxNode, internalNode: SynMe
 
     override _.Parent = parent
 
-    override this.Children =
-        match this.InternalMeasure with
+    static member internal InternalCreate (parent: FSharpSyntaxNode, internalNode: SynMeasure) =
+        match internalNode with
         | SynMeasure.Anon _
         | SynMeasure.One _ -> children
         | SynMeasure.Divide (internalMeasure1, internalMeasure2, _) 

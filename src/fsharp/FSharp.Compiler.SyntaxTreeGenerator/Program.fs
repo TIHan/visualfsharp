@@ -50,52 +50,59 @@ module rec Visitor =
         | [|x|] -> x
         | xs -> xs |> Array.reduce (fun x y -> x + "\n" + y)
 
-    let genSyntaxNodeUnionCaseInfo cenv (info: UnionCaseInfo) =
-        let caseName = (info.DeclaringType.Name + "." + info.Name)
+    let genSyntaxSubNodeByUnionCase cenv tyDefName (info: UnionCaseInfo) =
+        let name = "FSharpSyntax" + (info.DeclaringType.Name.Replace("Syn", String.Empty) + info.Name)
 
-        let fields = info.GetFields()
+        sprintf """
+[<Sealed>]
+type %s internal (parent: FSharpSyntaxNode, internalNode: %s) =
+    inherit %s(parent, internalNode)""" name info.DeclaringType.Name tyDefName + "\n\n" +
+        match info.GetFields() with
+        | [||] -> String.Empty
+        | fields ->
+            fields
+            |> Array.filter (fun field ->
+              //  let isListType = isListType fieldTy
+                let fieldTy = stripType fieldTy
+                canGen fieldTy
+            )
+            |> Array.mapi (fun i field ->
+                
+            )
         if Array.isEmpty fields then
-            sprintf """
-        | %s -> ()""" caseName
+            String.Empty
         else
             sprintf """
         | %s (%s) -> 
 %s
             """ caseName (genUnionFields fields) (genUnionFieldVisits cenv fields)
 
-    let genSyntaxNodeUnionType cenv (ty: Type) =
-        let genMatch =
-            sprintf """
-        match node with"""
-            
-        genMatch +
-        (
+    let genSyntaxNodeBody cenv (ty: Type) =
+        if FSharpType.IsUnion ty then
             FSharpType.GetUnionCases(ty)
-            |> Array.map (genSyntaxNodeUnionCaseInfo cenv)
+            |> Array.map (genSyntaxSubNodeByUnionCase cenv)
             |> function
-            | [||] -> "        None"
+            | [||] -> String.Empty
             | [|x|] -> x
             | xs -> xs |> Array.reduce (+)
-        )  
+        else
+            String.Empty
 
     let genSyntaxNode cenv (ty: Type) =
         if canGen ty then
-            sprintf """
+            let tyDefName = "FSharpSyntax" + ty.Name.Replace("Syn", String.Empty)
+            let gen =
+                sprintf """
 [<Sealed>]
 type FSharpSyntax%s internal (parent: FSharpSyntaxNode, internalNode: %s) =
-    inherit 
-    abstract Visit: %s -> unit
-    default this.Visit(node: %s) : unit =
-        previousNode <- currentNode
-        currentNode <- ValueSome(box node)""" ty.Name ty.Name + "\n" +
-            (
-                if FSharpType.IsUnion ty then
-                    genSyntaxNodeUnionType cenv ty
-                else
-                    "        ()"
-            )
+    inherit FSharpSyntaxNode (parent)
+
+    member _.InternalNode = internalNode
+
+    override _.Range = internalNode.Range""" tyDefName ty.Name + "\n\n" + genSyntaxNodeBody cenv ty
+            cenv.
         else
-            String.Empty
+            failwith "invalid syntax node"
 
     let genRootSyntaxNode () =
         let cenv = { genVisit = HashSet(); genVisitComplete = HashSet() }
@@ -122,7 +129,7 @@ type FSharpSyntax%s internal (parent: FSharpSyntaxNode, internalNode: %s) =
 
     let gen () =
         let src, types = genRootSyntaxNode ()
-        """module rec FSharp.Compiler.SyntaxTreeVisitor
+        """module rec FSharp.CodeAnalysis.SyntaxTree
         
 open FSharp.Compiler.Range
 open FSharp.Compiler.AbstractIL.Internal.Library
@@ -145,17 +152,19 @@ type FSharpSourceRange internal (range: range) =
         FSharpSourceRange(FSharp.Compiler.Range.unionRanges range1.InternalRange range2.InternalRange)
 
 [<AbstractClass>]
-type FSharpSyntaxNode internal () =
+type FSharpSyntaxNode internal (parent: FSharpSyntaxNode) =
     
     abstract Range : FSharpSourceRange
 
-    abstract Children : ImmutableArray<FSharpSyntaxNode>
+    abstract GetChild : index: int -> FSharpSyntaxNode
 
-    abstract Parent : FSharpSyntaxNode""" + "\n" + src
+    abstract ChildrenCount : unit -> int
+
+    member _.Parent = parent""" + "\n" + src
 
 open System.IO
 
 [<EntryPoint>]
 let main _ =
-    File.WriteAllText("SyntaxTreeVisitor.fs", Visitor.gen ())
+    File.WriteAllText("FSharpSyntaxTree.fs", Visitor.gen ())
     0
