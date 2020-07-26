@@ -146,118 +146,121 @@ type FSharpSyntaxTypar internal (parent: FSharpSyntaxNode, internalNode: SynTypa
             else
                 children
 
-let (|ConstNode|) (node: FSharpSyntaxNode) =
-    match node with
-    | :? FSharpSyntaxConst as synConst -> Some(synConst)
-    | _ -> None
+[<RequireQualifiedAccess>]
+module Const =
 
-let (|ConstBool|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Bool value -> Some value
-    | _ -> None
-    
-let (|ConstByte|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Byte value -> Some value
-    | _ -> None
-    
-let (|ConstBytes|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Bytes (value, _) -> Some (ReadOnlyMemory value)
-    | _ -> None
-    
-let (|ConstChar|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Char value -> Some value
-    | _ -> None
+    let (|ConstNode|) (node: FSharpSyntaxNode) =
+        match node with
+        | :? FSharpSyntaxConst as synConst -> Some(synConst)
+        | _ -> None
 
-let (|ConstDecimal|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Decimal value -> Some value
-    | _ -> None
+    let (|ConstBool|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Bool value -> Some value
+        | _ -> None
     
-let (|ConstDouble|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Double value -> Some value
-    | _ -> None
+    let (|ConstByte|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Byte value -> Some value
+        | _ -> None
     
-let (|ConstInt16|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Int16 value -> Some value
-    | _ -> None
+    let (|ConstBytes|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Bytes (value, _) -> Some (ReadOnlyMemory value)
+        | _ -> None
     
-let (|ConstInt32|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Int32 value -> Some value
-    | _ -> None
-    
-let (|ConstInt64|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Int64 value -> Some value
-    | _ -> None
-    
-let (|ConstIntPtr|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.IntPtr value -> Some value
-    | _ -> None
-    
-let (|ConstSByte|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.SByte value -> Some value
-    | _ -> None
-    
-let (|ConstSingle|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Single value -> Some value
-    | _ -> None
-    
-let (|ConstString|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.String (value, _) -> Some value
-    | _ -> None
+    let (|ConstChar|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Char value -> Some value
+        | _ -> None
 
-let (|ConstUInt16|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.UInt16 value -> Some value
-    | _ -> None
+    let (|ConstDecimal|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Decimal value -> Some value
+        | _ -> None
     
-let (|ConstUInt16s|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.UInt16s value -> Some(ReadOnlyMemory value)
-    | _ -> None
+    let (|ConstDouble|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Double value -> Some value
+        | _ -> None
     
-let (|ConstUInt32|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.UInt32 value -> Some value
-    | _ -> None
+    let (|ConstInt16|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Int16 value -> Some value
+        | _ -> None
     
-let (|ConstUInt64|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.UInt64 value -> Some value
-    | _ -> None
+    let (|ConstInt32|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Int32 value -> Some value
+        | _ -> None
     
-let (|ConstUIntPtr|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.UIntPtr value -> Some value
-    | _ -> None
+    let (|ConstInt64|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Int64 value -> Some value
+        | _ -> None
     
-let (|ConstUnit|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Unit -> Some()
-    | _ -> None
+    let (|ConstIntPtr|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.IntPtr value -> Some value
+        | _ -> None
     
-let (|ConstUserNumber|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.UserNum (value, suffix) -> Some(value, suffix)
-    | _ -> None
+    let (|ConstSByte|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.SByte value -> Some value
+        | _ -> None
     
-let (|ConstMeasure|) (synConst: FSharpSyntaxConst) =
-    match synConst.InternalConst with
-    | SynConst.Measure _ ->
-        let children = synConst.Children
-        Some(children.[0] :?> FSharpSyntaxConst, children.[1] :?> FSharpSyntaxMeasure)
-    | _ -> 
-        None
+    let (|ConstSingle|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Single value -> Some value
+        | _ -> None
+    
+    let (|ConstString|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.String (value, _) -> Some value
+        | _ -> None
+
+    let (|ConstUInt16|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UInt16 value -> Some value
+        | _ -> None
+    
+    let (|ConstUInt16s|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UInt16s value -> Some(ReadOnlyMemory value)
+        | _ -> None
+    
+    let (|ConstUInt32|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UInt32 value -> Some value
+        | _ -> None
+    
+    let (|ConstUInt64|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UInt64 value -> Some value
+        | _ -> None
+    
+    let (|ConstUIntPtr|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UIntPtr value -> Some value
+        | _ -> None
+    
+    let (|ConstUnit|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Unit -> Some()
+        | _ -> None
+    
+    let (|ConstUserNumber|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UserNum (value, suffix) -> Some(value, suffix)
+        | _ -> None
+    
+    let (|ConstMeasure|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Measure _ ->
+            let children = synConst.Children
+            Some(children.[0] :?> FSharpSyntaxConst, children.[1] :?> FSharpSyntaxMeasure)
+        | _ -> 
+            None
 
 [<Sealed>]
 type FSharpSyntaxMeasure internal (parent: FSharpSyntaxNode, internalNode: SynMeasure) =
@@ -397,7 +400,8 @@ type FSharpSyntaxBinding internal (parent: FSharpSyntaxNode, internalNode: SynBi
         if children.IsEmpty then
             children <-
                 match this.InternalNode with
-                | SynBinding.
+                | SynBinding.Binding (_, _, _, _, internalAttribs, _, _, _, _, _, _, _) ->
+                    ImmutableArray.Empty
         children
 
 [<Sealed>]
@@ -431,6 +435,9 @@ type FSharpSyntaxModuleDecl internal (parent: FSharpSyntaxNode, internalNode: Sy
                     let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
 
                     builder.ToImmutable()
+
+                | _ ->
+                    failwith "nope"
         children
             
 
