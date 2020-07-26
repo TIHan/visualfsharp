@@ -380,4 +380,139 @@ let (|MeasureVar|) (synMeasure: FSharpSyntaxMeasure) =
         Some(children.[0] :?> FSharpSyntaxList<FSharpSyntaxTypar>)
     | _ -> 
         None
+
+[<Sealed>]
+type FSharpSyntaxModuleDecl internal (parent: FSharpSyntaxNode, internalNode: SynModuleDecl) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+
+    member _.InternalModuleDecl = internalNode
+
+    override _.Parent = parent
+
+    override this.Range = FSharpSourceRange this.InternalModuleDecl.Range
+
+    override this.Children = children
+
+let (|ModuleDeclNode|) (node: FSharpSyntaxNode) =
+    match node with
+    | :? FSharpSyntaxModuleDecl as node -> Some node
+    | _ -> None
+
+let (|ModuleDeclModuleAbbrev|) (node: FSharpSyntaxModuleDecl) =
+    match node.InternalModuleDecl with
+    | SynModuleDecl.ModuleAbbrev _ ->
+        let children = node.Children
+        Some(children.[0] :?> FSharpSyntaxIdent, children.[1] :?> FSharpSyntaxIdent)
+    | _ ->
+        None
+
+let (|ModuleDeclNestedModule|) (node: FSharpSyntaxModuleDecl) =
+    match node.InternalModuleDecl with
+    | SynModuleDecl.NestedModule _ ->
+        let children = node.Children
+        Some(children.[0] :?> FSharpSyntaxList<FSharpSyntaxModuleDecl>)
+    | _ ->
+        None
+
+[<Sealed>]
+type FSharpSyntaxModuleOrNamespace internal (parent: FSharpSyntaxNode, internalNode: SynModuleOrNamespace) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+
+    member _.InternalModuleOrNamespace = internalNode
+
+    override _.Parent = parent
+
+    override this.Range = FSharpSourceRange this.InternalModuleOrNamespace.Range
+
+    override this.Children =
+        match this.InternalModuleOrNamespace with
+        | SynModuleOrNamespace (longId, _, _, internalDecls, _, internalAttribs, internalAccessibility, _) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxIdent(this, longId))
+                children <- builder.ToImmutable()
+            children
+
+let (|ModuleOrNamespaceNode|) (node: FSharpSyntaxNode) =
+    match node with
+    | :? FSharpSyntaxModuleOrNamespace as node -> Some node
+    | _ -> None
+
+let (|ModuleOrNamespace|) (synModuleOrNamespace: FSharpSyntaxModuleOrNamespace) =
+    match synModuleOrNamespace.InternalModuleOrNamespace with
+    | SynModuleOrNamespace.SynModuleOrNamespace _ ->
+        let children = synModuleOrNamespace.Children
+        Some(children.[0] :?> FSharpSyntaxIdent)
     
+[<Sealed>]
+type FSharpSyntaxHashDirective (parent: FSharpSyntaxNode, name: string, args: ImmutableArray<string>, range: FSharpSourceRange) =
+    inherit FSharpSyntaxNode()
+
+    override _.Parent = parent
+
+    override _.Children = ImmutableArray.Empty
+
+    override _.Range = range
+
+    member _.Name = name
+    
+    member _.Arguments = args
+
+[<Sealed>]
+type FSharpSyntaxTree internal (implFile: ParsedImplFileInput) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+    let mutable hashDirectives = ImmutableArray<FSharpSyntaxHashDirective>.Empty
+    let mutable modules = ImmutableArray<FSharpSyntaxModuleOrNamespace>.Empty
+
+    member _.IsScript =
+        match implFile with
+        | ParsedImplFileInput (isScript=isScript) -> isScript
+
+    member _.FileName =
+        match implFile with
+        | ParsedImplFileInput (fileName=fileName) -> fileName
+
+    member this.HashedDirectives =
+        match implFile with
+        | ParsedImplFileInput (hashDirectives=internalHashDirectives) ->
+            if hashDirectives.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxHashDirective>()
+                for ParsedHashDirective (name, args, m) in internalHashDirectives do
+                    builder.Add(FSharpSyntaxHashDirective(this, name, ImmutableArray.CreateRange args, FSharpSourceRange m))
+                hashDirectives <- builder.ToImmutable()
+            hashDirectives
+
+    member this.ModuleOrNamespaces =
+        if modules.IsEmpty then
+            modules <-
+                match implFile with
+                | ParsedImplFileInput (modules=modules) ->
+                    let builder = ImmutableArray.CreateBuilder<FSharpSyntaxModuleOrNamespace>()
+                    for x in modules do
+                        builder.Add(FSharpSyntaxModuleOrNamespace(this, x))
+                    builder.ToImmutable()
+        modules
+
+    override _.Parent = Unchecked.defaultof<_>
+
+    override _.Range = FSharpSourceRange implFile.Range
+
+    override this.Children =
+        if children.IsEmpty then
+            children <-
+                seq {
+                    yield! (this.HashedDirectives |> Seq.map (fun x -> x :> FSharpSyntaxNode))
+                    yield! (this.ModuleOrNamespaces |> Seq.map (fun x -> x :> FSharpSyntaxNode)) }
+                |> ImmutableArray.CreateRange
+        children
+            
+let (|RootNode|) (node: FSharpSyntaxNode) =
+    match node with
+    | :? FSharpSyntaxTree as node -> Some node
+    | _ -> None

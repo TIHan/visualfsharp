@@ -21,17 +21,17 @@ let isZeroRange (r: range) =
 //                    |> List.reduce unionRanges
 //                unionRanges longIdRange m
 
-//type ParsedImplFileInput with
+type ParsedImplFileInput with
 
-//    member this.Range =
-//        match this with
-//        | ParsedImplFileInput(modules=modules) ->
-//            match modules with
-//            | [] -> range0
-//            | _ ->
-//                modules
-//                |> List.map (fun x -> x.Range)
-//                |> List.reduce (unionRanges)
+    member this.Range =
+        match this with
+        | ParsedImplFileInput(modules=modules) ->
+            match modules with
+            | [] -> range0
+            | _ ->
+                modules
+                |> List.map (fun x -> x.Range)
+                |> List.reduce (unionRanges)
 
 
 //type SynModuleOrNamespaceSig with
@@ -48,17 +48,17 @@ let isZeroRange (r: range) =
 //                    |> List.reduce unionRanges
 //                unionRanges longIdRange m
 
-//type ParsedSigFileInput with
+type ParsedSigFileInput with
 
-//    member this.Range =
-//        match this with
-//        | ParsedSigFileInput(modules=modules) ->
-//            match modules with
-//            | [] -> range0
-//            | _ ->
-//                modules
-//                |> List.map (fun x -> x.Range)
-//                |> List.reduce (unionRanges)
+    member this.Range =
+        match this with
+        | ParsedSigFileInput(modules=modules) ->
+            match modules with
+            | [] -> range0
+            | _ ->
+                modules
+                |> List.map (fun x -> x.Range)
+                |> List.reduce (unionRanges)
 
 //type ParsedInput with
 
