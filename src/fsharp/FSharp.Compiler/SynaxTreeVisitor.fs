@@ -338,7 +338,7 @@ let (|MeasureOne|) (synMeasure: FSharpSyntaxMeasure) =
 
 let (|MeasureDivide|) (synMeasure: FSharpSyntaxMeasure) =
     match synMeasure.InternalMeasure with
-    | SynMeasure.Divide _ -> 
+    | SynMeasure.Divide (internalMeasure1, internalMeasure2, _) -> 
         let children = synMeasure.Children
         Some(children.[0] :?> FSharpSyntaxMeasure, children.[1] :?> FSharpSyntaxMeasure)
     | _ -> 

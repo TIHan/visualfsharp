@@ -81,6 +81,9 @@ module rec Visitor =
     let genSyntaxNode cenv (ty: Type) =
         if canGen ty then
             sprintf """
+[<Sealed>]
+type FSharpSyntax%s internal (parent: FSharpSyntaxNode, internalNode: %s) =
+    inherit 
     abstract Visit: %s -> unit
     default this.Visit(node: %s) : unit =
         previousNode <- currentNode
@@ -119,18 +122,36 @@ module rec Visitor =
 
     let gen () =
         let src, types = genRootSyntaxNode ()
-        """module FSharp.Compiler.SyntaxTreeVisitor
+        """module rec FSharp.Compiler.SyntaxTreeVisitor
         
+open FSharp.Compiler.Range
 open FSharp.Compiler.AbstractIL.Internal.Library
 open FSharp.Compiler.SyntaxTree
 
+[<Struct>]
+type FSharpSourceRange internal (range: range) =
+
+    member _.StartLine = range.StartLine
+
+    member _.StartColumn = range.StartColumn
+
+    member _.EndLine = range.EndLine
+
+    member _.EndColumn = range.EndColumn
+
+    member internal _.InternalRange = range
+
+    static member Combine (range1: FSharpSourceRange, range2: FSharpSourceRange) =
+        FSharpSourceRange(FSharp.Compiler.Range.unionRanges range1.InternalRange range2.InternalRange)
+
 [<AbstractClass>]
-type SyntaxTreeVisitor () =
-    let mutable currentNode = ValueNone
-    let mutable previousNode = ValueNone
-     
-    member _.CurrentNode = currentNode
-    member _.PreviousNode = previousNode""" + src
+type FSharpSyntaxNode internal () =
+    
+    abstract Range : FSharpSourceRange
+
+    abstract Children : ImmutableArray<FSharpSyntaxNode>
+
+    abstract Parent : FSharpSyntaxNode""" + "\n" + src
 
 open System.IO
 
