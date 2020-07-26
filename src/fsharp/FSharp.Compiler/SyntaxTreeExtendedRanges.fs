@@ -1,4 +1,4 @@
-﻿module FSharp.Compiler.SyntaxTreeExtendedRanges
+﻿module internal FSharp.CodeAnalysis.Internal.SyntaxTreeExtendedRanges
 
 open FSharp.Compiler.AbstractIL.Internal.Library
 open FSharp.Compiler.SyntaxTree
@@ -117,18 +117,18 @@ let isZeroRange (r: range) =
 //        match this with
 //        | TypeDefnSig (_, _, _, m) -> m
 
-//type SynMeasure with
+type SynMeasure with
 
-//    member this.Range =
-//        match this with
-//        | SynMeasure.Named (range=m) -> m
-//        | SynMeasure.Product (range=m) -> m
-//        | SynMeasure.Seq (range=m) -> m
-//        | SynMeasure.Divide (range=m) -> m
-//        | SynMeasure.Power (range=m) -> m
-//        | SynMeasure.One -> range0
-//        | SynMeasure.Anon (range=m) -> m
-//        | SynMeasure.Var (range=m) -> m
+    member this.Range =
+        match this with
+        | SynMeasure.Named (range=m) -> m
+        | SynMeasure.Product (range=m) -> m
+        | SynMeasure.Seq (range=m) -> m
+        | SynMeasure.Divide (range=m) -> m
+        | SynMeasure.Power (range=m) -> m
+        | SynMeasure.One -> range0
+        | SynMeasure.Anon (range=m) -> m
+        | SynMeasure.Var (range=m) -> m
 
 //type SynRationalConst with
 
@@ -340,7 +340,11 @@ let isZeroRange (r: range) =
 
 //    member this.Range = this.idRange            
 
-//let longIdentRange (longId: LongIdent) =
-//    longId
-//    |> List.map (fun x -> x.idRange)
-//    |> List.reduce unionRanges
+let longIdentRange (longId: LongIdent) =
+    match longId with
+    | [] -> range0
+    | [x] -> x.idRange
+    | _ ->
+        longId
+        |> List.map (fun x -> x.idRange)
+        |> List.reduce unionRanges
