@@ -7,7 +7,7 @@ open FSharp.Compiler.SyntaxTree
 
 module rec Visitor =
 
-    type cenv = { genVisit: HashSet<Type>; genVisitComplete: HashSet<Type> }
+    type cenv = { queue: Queue<Type * string>; cache: Dictionary<Type, string * string> }
 
     let isListType (ty: Type) =
         ty.IsGenericType && ty.GetGenericTypeDefinition() = typedefof<_ list>
@@ -22,112 +22,131 @@ module rec Visitor =
         ty.Name = "Ident" ||
         ty.Name = "LongIdentWithDots"
 
-    let genUnionFields (fields: PropertyInfo []) =
+    let genUnionFields target (fields: PropertyInfo []) =
         fields
-        |> Array.mapi (fun i field -> if canGen (stripType field.PropertyType) then "field" + string i else "_")
+        |> Array.mapi (fun i _ -> if i = target then "item" + string i else "_")
         |> Array.reduce (fun x y -> x + ", " + y)
 
-    let genUnionFieldVisits cenv (fields: PropertyInfo []) =
-        fields
-        |> Array.mapi (fun i field -> ("field" + string i, field.PropertyType))
-        |> Array.map (fun (fieldName, fieldTy) ->
-            let isListType = isListType fieldTy
-            let fieldTy = stripType fieldTy
-            if canGen fieldTy then
-                if not (cenv.genVisit.Contains fieldTy || cenv.genVisitComplete.Contains fieldTy)  then
-                    cenv.genVisit.Add fieldTy |> ignore
+    let genSyntaxSubNodeByUnionCase cenv tyDefName (info: UnionCaseInfo) =
+        let name = "FSharpSyntax" + (info.DeclaringType.Name.Replace("Syn", String.Empty) + info.Name)
 
-                if isListType then
-                    sprintf """            %s |> List.iter this.Visit""" fieldName
-                else
-                    sprintf """            this.Visit %s""" fieldName
-            else
-                String.Empty
-        )
-        |> Array.filter (fun x -> not (String.IsNullOrWhiteSpace x))
-        |> function
-        | [||] -> """            ()"""
-        | [|x|] -> x
-        | xs -> xs |> Array.reduce (fun x y -> x + "\n" + y)
+        sprintf """
+[<Sealed>]
+type %s internal (parent: FSharpSyntaxNode, internalNode: %s) =
+    inherit %s(parent, internalNode)""" name info.DeclaringType.Name tyDefName + "\n\n" +
+        match info.GetFields() with
+        | [||] -> String.Empty
+        | props ->
+            let fields =
+                props
+                |> Array.mapi (fun i field -> i, field.PropertyType, if canGen (stripType field.PropertyType) then "item" + string i else "_")
 
-    let genSyntaxNodeUnionCaseInfo cenv (info: UnionCaseInfo) =
-        let caseName = (info.DeclaringType.Name + "." + info.Name)
+            let mutableFields =
+                fields
+                |> Array.filter (fun (_, _, name) -> name <> "_")
+                |> Array.map (fun (_, ty, name) ->
+                    sprintf "    let mutable __%s : %s = Unchecked.defaultof<_>" name (genSyntaxNode cenv ty)
+                )
+                |> Array.reduce (fun x y -> x + "\n" + y)
 
-        let fields = info.GetFields()
-        if Array.isEmpty fields then
-            sprintf """
-        | %s -> ()""" caseName
-        else
-            sprintf """
-        | %s (%s) -> 
-%s
-            """ caseName (genUnionFields fields) (genUnionFieldVisits cenv fields)
+            let properties =
+                fields
+                |> Array.filter (fun (_, _, name) -> name <> "_")
+                |> Array.map (fun (i, ty, name) ->
+                    sprintf "    member this.%s =
+        match this with
+        | %s.%s (%s) ->
+            %s(this, %s)" name info.DeclaringType.Name info.Name (genUnionFields i props) (genSyntaxNode cenv ty) name)
+                |> Array.reduce (fun x y -> x + "\n\n" + y)
 
-    let genSyntaxNodeUnionType cenv (ty: Type) =
-        let genMatch =
-            sprintf """
-        match node with"""
-            
-        genMatch +
-        (
+            mutableFields + "\n\n" + properties
+
+    let genSyntaxNodeBody cenv tyDefName (ty: Type) =
+        if FSharpType.IsUnion ty then
             FSharpType.GetUnionCases(ty)
-            |> Array.map (genSyntaxNodeUnionCaseInfo cenv)
+            |> Array.map (genSyntaxSubNodeByUnionCase cenv tyDefName)
             |> function
-            | [||] -> "        None"
+            | [||] -> String.Empty
             | [|x|] -> x
             | xs -> xs |> Array.reduce (+)
-        )  
-
-    let genSyntaxNode cenv (ty: Type) =
-        if canGen ty then
-            sprintf """
-    abstract Visit: %s -> unit
-    default this.Visit(node: %s) : unit =""" ty.Name ty.Name +
-            (
-                if FSharpType.IsUnion ty then
-                    genSyntaxNodeUnionType cenv ty
-                else
-                    "        ()"
-            )
         else
             String.Empty
 
-    let genRootSyntaxNode () =
-        let cenv = { genVisit = HashSet(); genVisitComplete = HashSet() }
-        cenv.genVisitComplete.Add typeof<ParsedInput> |> ignore
+    let genSyntaxNode cenv (ty: Type) =
+        match cenv.cache.TryGetValue ty with
+        | true, (name, _) -> name
+        | _ ->
 
-        let sb = StringBuilder()
-        sb.Append(genSyntaxNode cenv typeof<ParsedInput>) |> ignore
+        if isListType ty then
+            
+        elif canGen ty then
+            let tyDefName = "FSharpSyntax" + ty.Name.Replace("Syn", String.Empty)
+            let gen =
+                sprintf """
+[<Sealed>]
+type FSharpSyntax%s internal (parent: FSharpSyntaxNode, internalNode: %s) =
+    inherit FSharpSyntaxNode (parent)
 
-        let queue = Queue(cenv.genVisit)
-        cenv.genVisit
-        |> Seq.iter (fun x -> cenv.genVisitComplete.Add x |> ignore)
-        cenv.genVisit.Clear()
+    member _.InternalNode = internalNode
 
-        let mutable ty = Unchecked.defaultof<_>
-        while queue.TryDequeue &ty do
-            sb.Append(genSyntaxNode cenv ty) |> ignore
-            cenv.genVisit
-            |> Seq.iter (queue.Enqueue)
-            cenv.genVisit
-            |> Seq.iter (fun x -> cenv.genVisitComplete.Add x |> ignore)
-            cenv.genVisit.Clear()
-
-        sb.ToString(), cenv.genVisitComplete |> Array.ofSeq
+    override _.Range = internalNode.Range""" tyDefName ty.Name + "\n\n" + genSyntaxNodeBody cenv tyDefName ty
+            cenv.queue.Enqueue(ty, gen)
+            cenv.cache.[ty] <- (tyDefName, gen)
+            tyDefName
+        else
+            failwith "invalid syntax node"
 
     let gen () =
-        let src, types = genRootSyntaxNode ()
-        """module FSharp.Compiler.SyntaxTreeVisitor
+        let cenv = { queue = Queue(); cache = Dictionary() }
+        let src = genSyntaxNode cenv typeof<ParsedInput>
+        """module rec FSharp.CodeAnalysis.SyntaxTree
         
+open FSharp.Compiler.Range
 open FSharp.Compiler.AbstractIL.Internal.Library
 open FSharp.Compiler.SyntaxTree
 
+[<Struct>]
+type FSharpSourceRange internal (range: range) =
+
+    member _.StartLine = range.StartLine
+
+    member _.StartColumn = range.StartColumn
+
+    member _.EndLine = range.EndLine
+
+    member _.EndColumn = range.EndColumn
+
+    member internal _.InternalRange = range
+
+    static member Combine (range1: FSharpSourceRange, range2: FSharpSourceRange) =
+        FSharpSourceRange(FSharp.Compiler.Range.unionRanges range1.InternalRange range2.InternalRange)
+
+[<Sealed>]
+type FSharpSyntaxNodeList<'T when 'T :> FSharpSyntaxNode> (parent: FSharpSyntaxNode, nodes: 'T list) =
+    inherit FSharpSyntaxNode(parent)
+
+    override _.Range = range0
+
+    override _.GetChild index = nodes.[i]
+
+    override _.GetChildrenCount() = nodes.Length
+
+    member _.Nodes = nodes
+
 [<AbstractClass>]
-type SyntaxTreeVisitor () =""" + src
+type FSharpSyntaxNode internal (parent: FSharpSyntaxNode) =
+    
+    abstract Range : FSharpSourceRange
+
+    abstract GetChild : index: int -> FSharpSyntaxNode
+
+    abstract ChildrenCount : unit -> int
+
+    member _.Parent = parent""" + "\n" + src
 
 open System.IO
 
 [<EntryPoint>]
 let main _ =
-    File.WriteAllText("SyntaxTreeVisitor.fs", Visitor.gen ())
+    File.WriteAllText("FSharpSyntaxTree.fs", Visitor.gen ())
     0

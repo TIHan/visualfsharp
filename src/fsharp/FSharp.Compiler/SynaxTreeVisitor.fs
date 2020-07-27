@@ -1,989 +1,623 @@
-﻿module FSharp.Compiler.SyntaxTreeVisitor
+﻿module rec FSharp.CodeAnalysis.SyntaxTree
         
-open FSharp.Compiler.AbstractIL.Internal.Library
+open System
+open System.Collections.Immutable
 open FSharp.Compiler.SyntaxTree
-open FSharp.Compiler.Text
+open FSharp.CodeAnalysis.Internal.SyntaxTreeExtendedRanges
+
+[<Struct>]
+type FSharpSourceRange internal (range: FSharp.Compiler.Range.range) =
+
+    member _.StartLine = range.StartLine
+
+    member _.StartColumn = range.StartColumn
+
+    member _.EndLine = range.EndLine
+
+    member _.EndColumn = range.EndColumn
+
+    member internal _.InternalRange = range
+
+    static member Combine (range1: FSharpSourceRange, range2: FSharpSourceRange) =
+        FSharpSourceRange(FSharp.Compiler.Range.unionRanges range1.InternalRange range2.InternalRange)
+
+[<AbstractClass>]
+type FSharpSyntaxNode internal () =
+    
+    abstract Range : FSharpSourceRange
+
+    abstract Parent : FSharpSyntaxNode
+
+    abstract ChildrenCount : int
+
+    abstract GetChildSlot : index: int -> FSharpSyntaxNode
+
+let failSyntax () = failwith "invalid syntax"
+
+let inline getSyntax<'T when 'T :> FSharpSyntaxNode> (node: byref<'T>) f =
+    match box node with
+    | null ->
+        node <- f ()
+    | _ ->
+        ()
+    node
 
 
-//[<AbstractClass>]
-//type SyntaxTreeVisitor () =
-//    abstract Visit: ParsedInput -> unit
-//    default this.Visit(node: ParsedInput) : unit =
-//        match node with
-//        | ParsedInput.ImplFile (field0) -> 
-//            this.Visit field0
-            
-//        | ParsedInput.SigFile (field0) -> 
-//            this.Visit field0
-            
-//    abstract Visit: ParsedImplFileInput -> unit
-//    default this.Visit(node: ParsedImplFileInput) : unit =
-//        match node with
-//        | ParsedImplFileInput.ParsedImplFileInput (_, _, _, _, field4, field5, _) -> 
-//            field4 |> List.iter this.Visit
-//            field5 |> List.iter this.Visit
-            
-//    abstract Visit: ParsedSigFileInput -> unit
-//    default this.Visit(node: ParsedSigFileInput) : unit =
-//        match node with
-//        | ParsedSigFileInput.ParsedSigFileInput (_, _, _, field3, field4) -> 
-//            field3 |> List.iter this.Visit
-//            field4 |> List.iter this.Visit
-            
-//    abstract Visit: ParsedHashDirective -> unit
-//    default this.Visit(node: ParsedHashDirective) : unit =
-//        match node with
-//        | ParsedHashDirective.ParsedHashDirective (_, _, _) -> 
-//            ()
-            
-//    abstract Visit: SynModuleOrNamespace -> unit
-//    default this.Visit(node: SynModuleOrNamespace) : unit =
-//        match node with
-//        | SynModuleOrNamespace.SynModuleOrNamespace (field0, _, field2, field3, _, field5, _, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field2
-//            field3 |> List.iter this.Visit
-//            field5 |> List.iter this.Visit
-            
-//    abstract Visit: SynModuleOrNamespaceSig -> unit
-//    default this.Visit(node: SynModuleOrNamespaceSig) : unit =
-//        match node with
-//        | SynModuleOrNamespaceSig.SynModuleOrNamespaceSig (field0, _, field2, field3, _, field5, _, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field2
-//            field3 |> List.iter this.Visit
-//            field5 |> List.iter this.Visit
-            
-//    abstract Visit: Ident -> unit
-//    default this.Visit(node: Ident) : unit =        ()
-//    abstract Visit: SynModuleOrNamespaceKind -> unit
-//    default this.Visit(node: SynModuleOrNamespaceKind) : unit =
-//        match node with
-//        | SynModuleOrNamespaceKind.NamedModule -> ()
-//        | SynModuleOrNamespaceKind.AnonModule -> ()
-//        | SynModuleOrNamespaceKind.DeclaredNamespace -> ()
-//        | SynModuleOrNamespaceKind.GlobalNamespace -> ()
-//    abstract Visit: SynModuleDecl -> unit
-//    default this.Visit(node: SynModuleDecl) : unit =
-//        match node with
-//        | SynModuleDecl.ModuleAbbrev (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//        | SynModuleDecl.NestedModule (field0, _, field2, _, _) -> 
-//            this.Visit field0
-//            field2 |> List.iter this.Visit
-            
-//        | SynModuleDecl.Let (_, field1, _) -> 
-//            field1 |> List.iter this.Visit
-            
-//        | SynModuleDecl.DoExpr (_, field1, _) -> 
-//            this.Visit field1
-            
-//        | SynModuleDecl.Types (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynModuleDecl.Exception (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynModuleDecl.Open (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynModuleDecl.Attributes (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynModuleDecl.HashDirective (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynModuleDecl.NamespaceFragment (field0) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynAttributeList -> unit
-//    default this.Visit(node: SynAttributeList) : unit =        ()
-//    abstract Visit: SynModuleSigDecl -> unit
-//    default this.Visit(node: SynModuleSigDecl) : unit =
-//        match node with
-//        | SynModuleSigDecl.ModuleAbbrev (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//        | SynModuleSigDecl.NestedModule (field0, _, field2, _) -> 
-//            this.Visit field0
-//            field2 |> List.iter this.Visit
-            
-//        | SynModuleSigDecl.Val (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynModuleSigDecl.Types (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynModuleSigDecl.Exception (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynModuleSigDecl.Open (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynModuleSigDecl.HashDirective (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynModuleSigDecl.NamespaceFragment (field0) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynComponentInfo -> unit
-//    default this.Visit(node: SynComponentInfo) : unit =
-//        match node with
-//        | SynComponentInfo.ComponentInfo (field0, field1, field2, field3, _, _, _, _) -> 
-//            field0 |> List.iter this.Visit
-//            field1 |> List.iter this.Visit
-//            field2 |> List.iter this.Visit
-//            field3 |> List.iter this.Visit
-            
-//    abstract Visit: SynBinding -> unit
-//    default this.Visit(node: SynBinding) : unit =
-//        match node with
-//        | SynBinding.Binding (_, field1, _, _, field4, _, field6, field7, _, field9, _, _) -> 
-//            this.Visit field1
-//            field4 |> List.iter this.Visit
-//            this.Visit field6
-//            this.Visit field7
-//            this.Visit field9
-            
-//    abstract Visit: SynExpr -> unit
-//    default this.Visit(node: SynExpr) : unit =
-//        match node with
-//        | SynExpr.Paren (field0, _, _, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.Quote (field0, _, field2, _, _) -> 
-//            this.Visit field0
-//            this.Visit field2
-            
-//        | SynExpr.Const (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.Typed (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynExpr.Tuple (_, field1, _, _) -> 
-//            field1 |> List.iter this.Visit
-            
-//        | SynExpr.AnonRecd (_, _, _, _) -> 
-//            ()
-            
-//        | SynExpr.ArrayOrList (_, field1, _) -> 
-//            field1 |> List.iter this.Visit
-            
-//        | SynExpr.Record (_, _, _, _) -> 
-//            ()
-            
-//        | SynExpr.New (_, field1, field2, _) -> 
-//            this.Visit field1
-//            this.Visit field2
-            
-//        | SynExpr.ObjExpr (field0, _, field2, field3, _, _) -> 
-//            this.Visit field0
-//            field2 |> List.iter this.Visit
-//            field3 |> List.iter this.Visit
-            
-//        | SynExpr.While (_, field1, field2, _) -> 
-//            this.Visit field1
-//            this.Visit field2
-            
-//        | SynExpr.For (_, field1, field2, _, field4, field5, _) -> 
-//            this.Visit field1
-//            this.Visit field2
-//            this.Visit field4
-//            this.Visit field5
-            
-//        | SynExpr.ForEach (_, _, _, field3, field4, field5, _) -> 
-//            this.Visit field3
-//            this.Visit field4
-//            this.Visit field5
-            
-//        | SynExpr.ArrayOrListOfSeqExpr (_, field1, _) -> 
-//            this.Visit field1
-            
-//        | SynExpr.CompExpr (_, _, field2, _) -> 
-//            this.Visit field2
-            
-//        | SynExpr.Lambda (_, _, field2, field3, _) -> 
-//            this.Visit field2
-//            this.Visit field3
-            
-//        | SynExpr.MatchLambda (_, _, field2, _, _) -> 
-//            field2 |> List.iter this.Visit
-            
-//        | SynExpr.Match (_, field1, field2, _) -> 
-//            this.Visit field1
-//            field2 |> List.iter this.Visit
-            
-//        | SynExpr.Do (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.Assert (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.App (_, _, field2, field3, _) -> 
-//            this.Visit field2
-//            this.Visit field3
-            
-//        | SynExpr.TypeApp (field0, _, field2, _, _, _, _) -> 
-//            this.Visit field0
-//            field2 |> List.iter this.Visit
-            
-//        | SynExpr.LetOrUse (_, _, field2, field3, _) -> 
-//            field2 |> List.iter this.Visit
-//            this.Visit field3
-            
-//        | SynExpr.TryWith (field0, _, field2, _, _, _, _) -> 
-//            this.Visit field0
-//            field2 |> List.iter this.Visit
-            
-//        | SynExpr.TryFinally (field0, field1, _, _, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynExpr.Lazy (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.Sequential (_, _, field2, field3, _) -> 
-//            this.Visit field2
-//            this.Visit field3
-            
-//        | SynExpr.IfThenElse (field0, field1, _, _, _, _, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynExpr.Ident (field0) -> 
-//            this.Visit field0
-            
-//        | SynExpr.LongIdent (_, field1, _, _) -> 
-//            this.Visit field1
-            
-//        | SynExpr.LongIdentSet (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynExpr.DotGet (field0, _, field2, _) -> 
-//            this.Visit field0
-//            this.Visit field2
-            
-//        | SynExpr.DotSet (field0, field1, field2, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-//            this.Visit field2
-            
-//        | SynExpr.Set (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynExpr.DotIndexedGet (field0, field1, _, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//        | SynExpr.DotIndexedSet (field0, field1, field2, _, _, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-//            this.Visit field2
-            
-//        | SynExpr.NamedIndexedPropertySet (field0, field1, field2, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-//            this.Visit field2
-            
-//        | SynExpr.DotNamedIndexedPropertySet (field0, field1, field2, field3, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-//            this.Visit field2
-//            this.Visit field3
-            
-//        | SynExpr.TypeTest (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynExpr.Upcast (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynExpr.Downcast (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynExpr.InferredUpcast (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.InferredDowncast (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.Null (_) -> 
-//            ()
-            
-//        | SynExpr.AddressOf (_, field1, _, _) -> 
-//            this.Visit field1
-            
-//        | SynExpr.TraitCall (field0, field1, field2, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field1
-//            this.Visit field2
-            
-//        | SynExpr.JoinIn (field0, _, field2, _) -> 
-//            this.Visit field0
-//            this.Visit field2
-            
-//        | SynExpr.ImplicitZero (_) -> 
-//            ()
-            
-//        | SynExpr.SequentialOrImplicitYield (_, field1, field2, field3, _) -> 
-//            this.Visit field1
-//            this.Visit field2
-//            this.Visit field3
-            
-//        | SynExpr.YieldOrReturn (_, field1, _) -> 
-//            this.Visit field1
-            
-//        | SynExpr.YieldOrReturnFrom (_, field1, _) -> 
-//            this.Visit field1
-            
-//        | SynExpr.LetOrUseBang (_, _, _, field3, field4, _, field6, _) -> 
-//            this.Visit field3
-//            this.Visit field4
-//            this.Visit field6
-            
-//        | SynExpr.MatchBang (_, field1, field2, _) -> 
-//            this.Visit field1
-//            field2 |> List.iter this.Visit
-            
-//        | SynExpr.DoBang (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.LibraryOnlyILAssembly (_, field1, field2, field3, _) -> 
-//            field1 |> List.iter this.Visit
-//            field2 |> List.iter this.Visit
-//            field3 |> List.iter this.Visit
-            
-//        | SynExpr.LibraryOnlyStaticOptimization (field0, field1, field2, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field1
-//            this.Visit field2
-            
-//        | SynExpr.LibraryOnlyUnionCaseFieldGet (field0, field1, _, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//        | SynExpr.LibraryOnlyUnionCaseFieldSet (field0, field1, _, field3, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-//            this.Visit field3
-            
-//        | SynExpr.ArbitraryAfterError (_, _) -> 
-//            ()
-            
-//        | SynExpr.FromParseError (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.DiscardAfterMissingQualificationAfterDot (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynExpr.Fixed (field0, _) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynTypeDefn -> unit
-//    default this.Visit(node: SynTypeDefn) : unit =
-//        match node with
-//        | SynTypeDefn.TypeDefn (field0, field1, field2, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-//            field2 |> List.iter this.Visit
-            
-//    abstract Visit: SynExceptionDefn -> unit
-//    default this.Visit(node: SynExceptionDefn) : unit =
-//        match node with
-//        | SynExceptionDefn.SynExceptionDefn (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//    abstract Visit: LongIdentWithDots -> unit
-//    default this.Visit(node: LongIdentWithDots) : unit =
-//        match node with
-//        | LongIdentWithDots.LongIdentWithDots (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//    abstract Visit: SynValSig -> unit
-//    default this.Visit(node: SynValSig) : unit =
-//        match node with
-//        | SynValSig.ValSpfn (field0, field1, field2, field3, field4, _, _, _, _, _, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field1
-//            this.Visit field2
-//            this.Visit field3
-//            this.Visit field4
-            
-//    abstract Visit: SynTypeDefnSig -> unit
-//    default this.Visit(node: SynTypeDefnSig) : unit =
-//        match node with
-//        | SynTypeDefnSig.TypeDefnSig (field0, field1, field2, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-//            field2 |> List.iter this.Visit
-            
-//    abstract Visit: SynExceptionSig -> unit
-//    default this.Visit(node: SynExceptionSig) : unit =
-//        match node with
-//        | SynExceptionSig.SynExceptionSig (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//    abstract Visit: SynTyparDecl -> unit
-//    default this.Visit(node: SynTyparDecl) : unit =
-//        match node with
-//        | SynTyparDecl.TyparDecl (field0, field1) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field1
-            
-//    abstract Visit: SynTypeConstraint -> unit
-//    default this.Visit(node: SynTypeConstraint) : unit =
-//        match node with
-//        | SynTypeConstraint.WhereTyparIsValueType (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynTypeConstraint.WhereTyparIsReferenceType (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynTypeConstraint.WhereTyparIsUnmanaged (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynTypeConstraint.WhereTyparSupportsNull (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynTypeConstraint.WhereTyparIsComparable (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynTypeConstraint.WhereTyparIsEquatable (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynTypeConstraint.WhereTyparDefaultsToType (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynTypeConstraint.WhereTyparSubtypeOfType (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynTypeConstraint.WhereTyparSupportsMember (field0, field1, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field1
-            
-//        | SynTypeConstraint.WhereTyparIsEnum (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//        | SynTypeConstraint.WhereTyparIsDelegate (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//    abstract Visit: SynBindingKind -> unit
-//    default this.Visit(node: SynBindingKind) : unit =
-//        match node with
-//        | SynBindingKind.StandaloneExpression -> ()
-//        | SynBindingKind.NormalBinding -> ()
-//        | SynBindingKind.DoBinding -> ()
-//    abstract Visit: SynValData -> unit
-//    default this.Visit(node: SynValData) : unit =
-//        match node with
-//        | SynValData.SynValData (_, field1, _) -> 
-//            this.Visit field1
-            
-//    abstract Visit: SynPat -> unit
-//    default this.Visit(node: SynPat) : unit =
-//        match node with
-//        | SynPat.Const (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynPat.Wild (_) -> 
-//            ()
-            
-//        | SynPat.Named (field0, field1, _, _, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynPat.Typed (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynPat.Attrib (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//        | SynPat.Or (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynPat.Ands (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynPat.LongIdent (field0, _, _, field3, _, _) -> 
-//            this.Visit field0
-//            this.Visit field3
-            
-//        | SynPat.Tuple (_, field1, _) -> 
-//            field1 |> List.iter this.Visit
-            
-//        | SynPat.Paren (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynPat.ArrayOrList (_, field1, _) -> 
-//            field1 |> List.iter this.Visit
-            
-//        | SynPat.Record (_, _) -> 
-//            ()
-            
-//        | SynPat.Null (_) -> 
-//            ()
-            
-//        | SynPat.OptionalVal (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynPat.IsInst (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynPat.QuoteExpr (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynPat.DeprecatedCharRange (_, _, _) -> 
-//            ()
-            
-//        | SynPat.InstanceMember (field0, field1, _, _, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynPat.FromParseError (field0, _) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynConst -> unit
-//    default this.Visit(node: SynConst) : unit =
-//        match node with
-//        | SynConst.Unit -> ()
-//        | SynConst.Bool (_) -> 
-//            ()
-            
-//        | SynConst.SByte (_) -> 
-//            ()
-            
-//        | SynConst.Byte (_) -> 
-//            ()
-            
-//        | SynConst.Int16 (_) -> 
-//            ()
-            
-//        | SynConst.UInt16 (_) -> 
-//            ()
-            
-//        | SynConst.Int32 (_) -> 
-//            ()
-            
-//        | SynConst.UInt32 (_) -> 
-//            ()
-            
-//        | SynConst.Int64 (_) -> 
-//            ()
-            
-//        | SynConst.UInt64 (_) -> 
-//            ()
-            
-//        | SynConst.IntPtr (_) -> 
-//            ()
-            
-//        | SynConst.UIntPtr (_) -> 
-//            ()
-            
-//        | SynConst.Single (_) -> 
-//            ()
-            
-//        | SynConst.Double (_) -> 
-//            ()
-            
-//        | SynConst.Char (_) -> 
-//            ()
-            
-//        | SynConst.Decimal (_) -> 
-//            ()
-            
-//        | SynConst.UserNum (_, _) -> 
-//            ()
-            
-//        | SynConst.String (_, _) -> 
-//            ()
-            
-//        | SynConst.Bytes (_, _) -> 
-//            ()
-            
-//        | SynConst.UInt16s (_) -> 
-//            ()
-            
-//        | SynConst.Measure (field0, field1) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//    abstract Visit: SynType -> unit
-//    default this.Visit(node: SynType) : unit =
-//        match node with
-//        | SynType.LongIdent (field0) -> 
-//            this.Visit field0
-            
-//        | SynType.App (field0, _, field2, _, _, _, _) -> 
-//            this.Visit field0
-//            field2 |> List.iter this.Visit
-            
-//        | SynType.LongIdentApp (field0, field1, _, field3, _, _, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-//            field3 |> List.iter this.Visit
-            
-//        | SynType.Tuple (_, _, _) -> 
-//            ()
-            
-//        | SynType.AnonRecd (_, _, _) -> 
-//            ()
-            
-//        | SynType.Array (_, field1, _) -> 
-//            this.Visit field1
-            
-//        | SynType.Fun (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynType.Var (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynType.Anon (_) -> 
-//            ()
-            
-//        | SynType.WithGlobalConstraints (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//        | SynType.HashConstraint (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynType.MeasureDivide (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynType.MeasurePower (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynType.StaticConstant (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynType.StaticConstantExpr (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynType.StaticConstantNamed (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynType.Paren (field0, _) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynInterfaceImpl -> unit
-//    default this.Visit(node: SynInterfaceImpl) : unit =
-//        match node with
-//        | SynInterfaceImpl.InterfaceImpl (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//    abstract Visit: SynSimplePats -> unit
-//    default this.Visit(node: SynSimplePats) : unit =
-//        match node with
-//        | SynSimplePats.SimplePats (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynSimplePats.Typed (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//    abstract Visit: SynMatchClause -> unit
-//    default this.Visit(node: SynMatchClause) : unit =
-//        match node with
-//        | SynMatchClause.Clause (field0, _, field2, _, _) -> 
-//            this.Visit field0
-//            this.Visit field2
-            
-//    abstract Visit: SynIndexerArg -> unit
-//    default this.Visit(node: SynIndexerArg) : unit =
-//        match node with
-//        | SynIndexerArg.Two (field0, _, field2, _, _, _) -> 
-//            this.Visit field0
-//            this.Visit field2
-            
-//        | SynIndexerArg.One (field0, _, _) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynTypar -> unit
-//    default this.Visit(node: SynTypar) : unit =
-//        match node with
-//        | SynTypar.Typar (field0, _, _) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynMemberSig -> unit
-//    default this.Visit(node: SynMemberSig) : unit =
-//        match node with
-//        | SynMemberSig.Member (field0, _, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberSig.Interface (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberSig.Inherit (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberSig.ValField (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberSig.NestedType (field0, _) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynStaticOptimizationConstraint -> unit
-//    default this.Visit(node: SynStaticOptimizationConstraint) : unit =
-//        match node with
-//        | SynStaticOptimizationConstraint.WhenTyparTyconEqualsTycon (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynStaticOptimizationConstraint.WhenTyparIsStruct (field0, _) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynTypeDefnRepr -> unit
-//    default this.Visit(node: SynTypeDefnRepr) : unit =
-//        match node with
-//        | SynTypeDefnRepr.ObjectModel (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//        | SynTypeDefnRepr.Simple (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynTypeDefnRepr.Exception (field0) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynMemberDefn -> unit
-//    default this.Visit(node: SynMemberDefn) : unit =
-//        match node with
-//        | SynMemberDefn.Open (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynMemberDefn.Member (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberDefn.ImplicitCtor (_, field1, field2, _, _) -> 
-//            field1 |> List.iter this.Visit
-//            this.Visit field2
-            
-//        | SynMemberDefn.ImplicitInherit (field0, field1, _, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynMemberDefn.LetBindings (field0, _, _, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynMemberDefn.AbstractSlot (field0, _, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberDefn.Interface (field0, _, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberDefn.Inherit (field0, _, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberDefn.ValField (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberDefn.NestedType (field0, _, _) -> 
-//            this.Visit field0
-            
-//        | SynMemberDefn.AutoProperty (field0, _, field2, _, _, _, _, _, field8, _, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field2
-//            this.Visit field8
-            
-//    abstract Visit: SynExceptionDefnRepr -> unit
-//    default this.Visit(node: SynExceptionDefnRepr) : unit =
-//        match node with
-//        | SynExceptionDefnRepr.SynExceptionDefnRepr (field0, field1, _, _, _, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field1
-            
-//    abstract Visit: SynValTyparDecls -> unit
-//    default this.Visit(node: SynValTyparDecls) : unit =
-//        match node with
-//        | SynValTyparDecls.SynValTyparDecls (field0, _, field2) -> 
-//            field0 |> List.iter this.Visit
-//            field2 |> List.iter this.Visit
-            
-//    abstract Visit: SynValInfo -> unit
-//    default this.Visit(node: SynValInfo) : unit =
-//        match node with
-//        | SynValInfo.SynValInfo (_, field1) -> 
-//            this.Visit field1
-            
-//    abstract Visit: SynTypeDefnSigRepr -> unit
-//    default this.Visit(node: SynTypeDefnSigRepr) : unit =
-//        match node with
-//        | SynTypeDefnSigRepr.ObjectModel (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//        | SynTypeDefnSigRepr.Simple (field0, _) -> 
-//            this.Visit field0
-            
-//        | SynTypeDefnSigRepr.Exception (field0) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynArgPats -> unit
-//    default this.Visit(node: SynArgPats) : unit =
-//        match node with
-//        | SynArgPats.Pats (field0) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynArgPats.NamePatPairs (_, _) -> 
-//            ()
-            
-//    abstract Visit: SynMeasure -> unit
-//    default this.Visit(node: SynMeasure) : unit =
-//        match node with
-//        | SynMeasure.Named (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynMeasure.Product (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynMeasure.Seq (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynMeasure.Divide (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynMeasure.Power (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynMeasure.One -> ()
-//        | SynMeasure.Anon (_) -> 
-//            ()
-            
-//        | SynMeasure.Var (field0, _) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynRationalConst -> unit
-//    default this.Visit(node: SynRationalConst) : unit =
-//        match node with
-//        | SynRationalConst.Integer (_) -> 
-//            ()
-            
-//        | SynRationalConst.Rational (_, _, _) -> 
-//            ()
-            
-//        | SynRationalConst.Negate (field0) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynSimplePat -> unit
-//    default this.Visit(node: SynSimplePat) : unit =
-//        match node with
-//        | SynSimplePat.Id (field0, _, _, _, _, _) -> 
-//            this.Visit field0
-            
-//        | SynSimplePat.Typed (field0, field1, _) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//        | SynSimplePat.Attrib (field0, field1, _) -> 
-//            this.Visit field0
-//            field1 |> List.iter this.Visit
-            
-//    abstract Visit: SynField -> unit
-//    default this.Visit(node: SynField) : unit =
-//        match node with
-//        | SynField.Field (field0, _, _, field3, _, _, _, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field3
-            
-//    abstract Visit: SynTypeDefnKind -> unit
-//    default this.Visit(node: SynTypeDefnKind) : unit =
-//        match node with
-//        | SynTypeDefnKind.TyconUnspecified -> ()
-//        | SynTypeDefnKind.TyconClass -> ()
-//        | SynTypeDefnKind.TyconInterface -> ()
-//        | SynTypeDefnKind.TyconStruct -> ()
-//        | SynTypeDefnKind.TyconRecord -> ()
-//        | SynTypeDefnKind.TyconUnion -> ()
-//        | SynTypeDefnKind.TyconAbbrev -> ()
-//        | SynTypeDefnKind.TyconHiddenRepr -> ()
-//        | SynTypeDefnKind.TyconAugmentation -> ()
-//        | SynTypeDefnKind.TyconILAssemblyCode -> ()
-//        | SynTypeDefnKind.TyconDelegate (field0, field1) -> 
-//            this.Visit field0
-//            this.Visit field1
-            
-//    abstract Visit: SynTypeDefnSimpleRepr -> unit
-//    default this.Visit(node: SynTypeDefnSimpleRepr) : unit =
-//        match node with
-//        | SynTypeDefnSimpleRepr.Union (_, field1, _) -> 
-//            field1 |> List.iter this.Visit
-            
-//        | SynTypeDefnSimpleRepr.Enum (field0, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynTypeDefnSimpleRepr.Record (_, field1, _) -> 
-//            field1 |> List.iter this.Visit
-            
-//        | SynTypeDefnSimpleRepr.General (field0, _, _, field3, _, _, _, _) -> 
-//            this.Visit field0
-//            field3 |> List.iter this.Visit
-            
-//        | SynTypeDefnSimpleRepr.LibraryOnlyILAssembly (_, _) -> 
-//            ()
-            
-//        | SynTypeDefnSimpleRepr.TypeAbbrev (_, field1, _) -> 
-//            this.Visit field1
-            
-//        | SynTypeDefnSimpleRepr.None (_) -> 
-//            ()
-            
-//        | SynTypeDefnSimpleRepr.Exception (field0) -> 
-//            this.Visit field0
-            
-//    abstract Visit: SynUnionCase -> unit
-//    default this.Visit(node: SynUnionCase) : unit =
-//        match node with
-//        | SynUnionCase.UnionCase (field0, field1, field2, _, _, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field1
-//            this.Visit field2
-            
-//    abstract Visit: SynArgInfo -> unit
-//    default this.Visit(node: SynArgInfo) : unit =
-//        match node with
-//        | SynArgInfo.SynArgInfo (field0, _, _) -> 
-//            field0 |> List.iter this.Visit
-            
-//    abstract Visit: SynEnumCase -> unit
-//    default this.Visit(node: SynEnumCase) : unit =
-//        match node with
-//        | SynEnumCase.EnumCase (field0, field1, field2, _, _) -> 
-//            field0 |> List.iter this.Visit
-//            this.Visit field1
-//            this.Visit field2
-            
-//    abstract Visit: SynUnionCaseType -> unit
-//    default this.Visit(node: SynUnionCaseType) : unit =
-//        match node with
-//        | SynUnionCaseType.UnionCaseFields (field0) -> 
-//            field0 |> List.iter this.Visit
-            
-//        | SynUnionCaseType.UnionCaseFullType (field0, field1) -> 
-//            this.Visit field0
-//            this.Visit field1
+[<Sealed>]
+type FSharpSyntaxConstBool (parent: FSharpSyntaxNode, internalNode: SynConst) =
+    inherit FSharpSyntaxConst (parent, internalNode)
+
+    member _.Value =
+        match internalNode with
+        | SynConst.Bool value -> value
+        | _ -> failSyntax ()
+
+[<Sealed>]
+type FSharpSyntaxConstMeasure (parent: FSharpSyntaxNode, internalNode: SynConst) =
+    inherit FSharpSyntaxConst (parent, internalNode)
+
+    let mutable innerConst = Unchecked.defaultof<FSharpSyntaxConst>
+    let mutable innerMeasure = Unchecked.defaultof<FSharpSyntaxMeasure>
+
+    member this.InnerConst =
+        getSyntax &innerConst (fun () ->
+            match this.InternalNode with
+            | SynConst.Measure (internalInner, _) ->
+                FSharpSyntaxConst.InternalCreate (this, internalInner)
+            | _ ->
+                failSyntax ()
+        )
+
+    member this.InnerMeasure =
+        getSyntax &innerMeasure (fun () ->
+            match this.InternalNode with
+            | SynConst.Measure (_, internalMeasure) ->
+                FSharpSyntaxMeasure.InternalCreate (this, internalMeasure)
+            | _ ->
+                failSyntax ()
+        )
+
+
+    
+
+[<AbstractClass>]
+type FSharpSyntaxConst (parent: FSharpSyntaxNode, internalNode: SynConst) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+
+    member internal _.InternalNode = internalNode
+    
+    override this.Range = FSharpSourceRange(this.InternalConst.Range FSharp.Compiler.Range.range0)
+
+    override _.Parent = parent
+
+    static member internal Create(parent: FSharpSyntaxNode, internalNode: SynConst) =
+        match internalNode with
+        | SynConst.Bool _ -> 
+        | SynConst.Byte _
+        | SynConst.Bytes _
+        | SynConst.Char _
+        | SynConst.Decimal _
+        | SynConst.Double _
+        | SynConst.Int16 _
+        | SynConst.Int32 _
+        | SynConst.Int64 _
+        | SynConst.IntPtr _
+        | SynConst.SByte _
+        | SynConst.Single _
+        | SynConst.String _
+        | SynConst.UInt16 _
+        | SynConst.UInt16s _
+        | SynConst.UInt32 _
+        | SynConst.UInt64 _
+        | SynConst.UIntPtr _
+        | SynConst.Unit
+        | SynConst.UserNum _ -> children
+        | SynConst.Measure (internalConst, internalMeasure) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxConst(this, internalConst)) // 0
+                builder.Add(FSharpSyntaxMeasure(this, internalMeasure)) // 1
+                children <- builder.ToImmutable()
+                children
+            else
+                children
+
+    override this.Children =
+        match this.InternalConst with
+        | SynConst.Bool _
+        | SynConst.Byte _
+        | SynConst.Bytes _
+        | SynConst.Char _
+        | SynConst.Decimal _
+        | SynConst.Double _
+        | SynConst.Int16 _
+        | SynConst.Int32 _
+        | SynConst.Int64 _
+        | SynConst.IntPtr _
+        | SynConst.SByte _
+        | SynConst.Single _
+        | SynConst.String _
+        | SynConst.UInt16 _
+        | SynConst.UInt16s _
+        | SynConst.UInt32 _
+        | SynConst.UInt64 _
+        | SynConst.UIntPtr _
+        | SynConst.Unit
+        | SynConst.UserNum _ -> children
+        | SynConst.Measure (internalConst, internalMeasure) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxConst(this, internalConst)) // 0
+                builder.Add(FSharpSyntaxMeasure(this, internalMeasure)) // 1
+                children <- builder.ToImmutable()
+                children
+            else
+                children
+
+[<Sealed>]
+type FSharpSyntaxIdent internal (parent: FSharpSyntaxNode, internalNode: LongIdent) =
+    inherit FSharpSyntaxNode()
+
+    member internal _.InternalIdentifier = internalNode
+
+    override this.Range = FSharpSourceRange(longIdentRange this.InternalIdentifier)
+
+    override _.Parent = parent
+
+    override _.Children = ImmutableArray.Empty
+
+let (|TyparNode|) (node: FSharpSyntaxNode) =
+    match node with
+    | :? FSharpSyntaxTypar as synTypar -> Some(synTypar)
+    | _ -> None
+
+let (|Typar|) (synTypar: FSharpSyntaxTypar) =
+    match synTypar.InternalTypar with
+    | SynTypar.Typar (_, _, _) ->
+        let children = synTypar.Children
+        Some(children.[0] :?> FSharpSyntaxIdent)
+
+[<Sealed>]
+type FSharpSyntaxTypar internal (parent: FSharpSyntaxNode, internalNode: SynTypar) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+
+    member internal _.InternalTypar = internalNode
+
+    override this.Range = FSharpSourceRange(this.InternalTypar.Range)
+
+    override _.Parent = parent
+
+    override this.Children =
+        match this.InternalTypar with
+        | SynTypar.Typar (id, _, _) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxIdent(this, [id]))
+                children <- builder.ToImmutable()
+                children
+            else
+                children
+
+[<RequireQualifiedAccess>]
+module Const =
+
+    let (|ConstNode|) (node: FSharpSyntaxNode) =
+        match node with
+        | :? FSharpSyntaxConst as synConst -> Some(synConst)
+        | _ -> None
+
+    let (|ConstBool|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Bool value -> Some value
+        | _ -> None
+    
+    let (|ConstByte|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Byte value -> Some value
+        | _ -> None
+    
+    let (|ConstBytes|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Bytes (value, _) -> Some (ReadOnlyMemory value)
+        | _ -> None
+    
+    let (|ConstChar|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Char value -> Some value
+        | _ -> None
+
+    let (|ConstDecimal|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Decimal value -> Some value
+        | _ -> None
+    
+    let (|ConstDouble|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Double value -> Some value
+        | _ -> None
+    
+    let (|ConstInt16|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Int16 value -> Some value
+        | _ -> None
+    
+    let (|ConstInt32|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Int32 value -> Some value
+        | _ -> None
+    
+    let (|ConstInt64|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Int64 value -> Some value
+        | _ -> None
+    
+    let (|ConstIntPtr|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.IntPtr value -> Some value
+        | _ -> None
+    
+    let (|ConstSByte|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.SByte value -> Some value
+        | _ -> None
+    
+    let (|ConstSingle|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Single value -> Some value
+        | _ -> None
+    
+    let (|ConstString|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.String (value, _) -> Some value
+        | _ -> None
+
+    let (|ConstUInt16|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UInt16 value -> Some value
+        | _ -> None
+    
+    let (|ConstUInt16s|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UInt16s value -> Some(ReadOnlyMemory value)
+        | _ -> None
+    
+    let (|ConstUInt32|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UInt32 value -> Some value
+        | _ -> None
+    
+    let (|ConstUInt64|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UInt64 value -> Some value
+        | _ -> None
+    
+    let (|ConstUIntPtr|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UIntPtr value -> Some value
+        | _ -> None
+    
+    let (|ConstUnit|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Unit -> Some()
+        | _ -> None
+    
+    let (|ConstUserNumber|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.UserNum (value, suffix) -> Some(value, suffix)
+        | _ -> None
+    
+    let (|ConstMeasure|) (synConst: FSharpSyntaxConst) =
+        match synConst.InternalConst with
+        | SynConst.Measure _ ->
+            let children = synConst.Children
+            Some(children.[0] :?> FSharpSyntaxConst, children.[1] :?> FSharpSyntaxMeasure)
+        | _ -> 
+            None
+
+[<Sealed>]
+type FSharpSyntaxMeasure internal (parent: FSharpSyntaxNode, internalNode: SynMeasure) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+
+    member internal _.InternalMeasure = internalNode
+
+    override this.Range = FSharpSourceRange(this.InternalMeasure.Range)
+
+    override _.Parent = parent
+
+    static member internal InternalCreate (parent: FSharpSyntaxNode, internalNode: SynMeasure) =
+        match internalNode with
+        | SynMeasure.Anon _
+        | SynMeasure.One _ -> children
+        | SynMeasure.Divide (internalMeasure1, internalMeasure2, _) 
+        | SynMeasure.Product (internalMeasure1, internalMeasure2, _) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxMeasure(this, internalMeasure1)) // 0
+                builder.Add(FSharpSyntaxMeasure(this, internalMeasure2)) // 1
+                children <- builder.ToImmutable()
+                children
+            else
+                children
+        | SynMeasure.Power (internalMeasure1, _, _) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxMeasure(this, internalMeasure1)) // 0
+                children <- builder.ToImmutable()
+                children
+            else
+                children
+        | SynMeasure.Named (lid, _) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxIdent(this, lid)) // 0
+                children <- builder.ToImmutable()
+                children
+            else
+                children
+        | SynMeasure.Seq (internalMeasures, _) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxList(this, internalMeasures |> Seq.map (fun x -> FSharpSyntaxMeasure(this, x) :> FSharpSyntaxNode))) // 0
+                children <- builder.ToImmutable()
+                children
+            else
+                children
+        | SynMeasure.Var (internalTypar, _) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxTypar(this, internalTypar)) // 0
+                children <- builder.ToImmutable()
+                children
+            else
+                children
+
+let (|MeasureNode|) (node: FSharpSyntaxNode) =
+    match node with
+    | :? FSharpSyntaxMeasure as synMeasure -> Some(synMeasure)
+    | _ -> None
+
+let (|MeasureAnon|) (synMeasure: FSharpSyntaxMeasure) =
+    match synMeasure.InternalMeasure with
+    | SynMeasure.Anon _ -> Some()
+    | _ -> None
+
+let (|MeasureOne|) (synMeasure: FSharpSyntaxMeasure) =
+    match synMeasure.InternalMeasure with
+    | SynMeasure.One _ -> Some()
+    | _ -> None
+
+let (|MeasureDivide|) (synMeasure: FSharpSyntaxMeasure) =
+    match synMeasure.InternalMeasure with
+    | SynMeasure.Divide (internalMeasure1, internalMeasure2, _) -> 
+        let children = synMeasure.Children
+        Some(children.[0] :?> FSharpSyntaxMeasure, children.[1] :?> FSharpSyntaxMeasure)
+    | _ -> 
+        None
+
+let (|MeasureProduct|) (synMeasure: FSharpSyntaxMeasure) =
+    match synMeasure.InternalMeasure with
+    | SynMeasure.Product _ -> 
+        let children = synMeasure.Children
+        Some(children.[0] :?> FSharpSyntaxMeasure, children.[1] :?> FSharpSyntaxMeasure)
+    | _ -> 
+        None
+
+let (|MeasurePower|) (synMeasure: FSharpSyntaxMeasure) =
+    match synMeasure.InternalMeasure with
+    | SynMeasure.Power _ -> 
+        let children = synMeasure.Children
+        Some(children.[0] :?> FSharpSyntaxMeasure)
+    | _ -> 
+        None
+
+let (|MeasureNamed|) (synMeasure: FSharpSyntaxMeasure) =
+    match synMeasure.InternalMeasure with
+    | SynMeasure.Named _ -> 
+        let children = synMeasure.Children
+        Some(children.[0] :?> FSharpSyntaxIdent)
+    | _ -> 
+        None
+
+let (|MeasureSeq|) (synMeasure: FSharpSyntaxMeasure) =
+    match synMeasure.InternalMeasure with
+    | SynMeasure.Seq _ -> 
+        let children = synMeasure.Children
+        Some(children.[0] :?> FSharpSyntaxList<FSharpSyntaxMeasure>)
+    | _ -> 
+        None
+
+let (|MeasureVar|) (synMeasure: FSharpSyntaxMeasure) =
+    match synMeasure.InternalMeasure with
+    | SynMeasure.Var _ -> 
+        let children = synMeasure.Children
+        Some(children.[0] :?> FSharpSyntaxList<FSharpSyntaxTypar>)
+    | _ -> 
+        None
+
+[<Sealed>]
+type FSharpSyntaxBinding internal (parent: FSharpSyntaxNode, internalNode: SynBinding) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+
+    member _.InternalNode = internalNode
+
+    override _.Parent = parent
+
+    override this.Range = FSharpSourceRange this.InternalNode.Range
+
+    override this.Children =
+        if children.IsEmpty then
+            children <-
+                match this.InternalNode with
+                | SynBinding.Binding (_, _, _, _, internalAttribs, _, _, _, _, _, _, _) ->
+                    ImmutableArray.Empty
+        children
+
+[<Sealed>]
+type FSharpSyntaxModuleDecl internal (parent: FSharpSyntaxNode, internalNode: SynModuleDecl) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+
+    member _.InternalNode = internalNode
+
+    override _.Parent = parent
+
+    override this.Range = FSharpSourceRange this.InternalNode.Range
+
+    override this.Children =
+        if children.IsEmpty then
+            children <-
+                match this.InternalNode with
+                | SynModuleDecl.ModuleAbbrev (id, lid, _) ->
+                    let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                    builder.Add(FSharpSyntaxIdent(this, [id])) // 0
+                    builder.Add(FSharpSyntaxIdent(this, lid)) // 1
+                    builder.ToImmutable()
+
+                | SynModuleDecl.NestedModule (_, _, internalDecls, _, _) ->
+                    let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                    builder.Add(FSharpSyntaxList<FSharpSyntaxModuleDecl>(this, internalDecls |> Seq.map (fun x -> FSharpSyntaxModuleDecl(this, x)))) // 0
+                    builder.ToImmutable()
+
+                | SynModuleDecl.Let (_, bindings, _) ->
+                    let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+
+                    builder.ToImmutable()
+
+                | _ ->
+                    failwith "nope"
+        children
+            
+
+let (|ModuleDecl|) (node: FSharpSyntaxNode) =
+    match node with
+    | :? FSharpSyntaxModuleDecl as node -> Some node
+    | _ -> None
+
+[<RequireQualifiedAccess>]
+module ModuleDecl =   
+
+    let (|ModuleAbbrev|) (node: FSharpSyntaxModuleDecl) =
+        match node.InternalNode with
+        | SynModuleDecl.ModuleAbbrev _ ->
+            let children = node.Children
+            Some(children.[0] :?> FSharpSyntaxIdent, children.[1] :?> FSharpSyntaxIdent)
+        | _ ->
+            None
+
+    let (|NestedModule|) (node: FSharpSyntaxModuleDecl) =
+        match node.InternalNode with
+        | SynModuleDecl.NestedModule _ ->
+            let children = node.Children
+            Some(children.[0] :?> FSharpSyntaxList<FSharpSyntaxModuleDecl>)
+        | _ ->
+            None
+
+[<Sealed>]
+type FSharpSyntaxModuleOrNamespace internal (parent: FSharpSyntaxNode, internalNode: SynModuleOrNamespace) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+
+    member _.InternalModuleOrNamespace = internalNode
+
+    override _.Parent = parent
+
+    override this.Range = FSharpSourceRange this.InternalModuleOrNamespace.Range
+
+    override this.Children =
+        match this.InternalModuleOrNamespace with
+        | SynModuleOrNamespace (longId, _, _, internalDecls, _, internalAttribs, internalAccessibility, _) ->
+            if children.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxNode>()
+                builder.Add(FSharpSyntaxIdent(this, longId))
+                children <- builder.ToImmutable()
+            children
+
+let (|ModuleOrNamespaceNode|) (node: FSharpSyntaxNode) =
+    match node with
+    | :? FSharpSyntaxModuleOrNamespace as node -> Some node
+    | _ -> None
+
+let (|ModuleOrNamespace|) (synModuleOrNamespace: FSharpSyntaxModuleOrNamespace) =
+    match synModuleOrNamespace.InternalModuleOrNamespace with
+    | SynModuleOrNamespace.SynModuleOrNamespace _ ->
+        let children = synModuleOrNamespace.Children
+        Some(children.[0] :?> FSharpSyntaxIdent)
+    
+[<Sealed>]
+type FSharpSyntaxHashDirective (parent: FSharpSyntaxNode, name: string, args: ImmutableArray<string>, range: FSharpSourceRange) =
+    inherit FSharpSyntaxNode()
+
+    override _.Parent = parent
+
+    override _.Children = ImmutableArray.Empty
+
+    override _.Range = range
+
+    member _.Name = name
+    
+    member _.Arguments = args
+
+[<Sealed>]
+type FSharpSyntaxTree internal (implFile: ParsedImplFileInput) =
+    inherit FSharpSyntaxNode()
+
+    let mutable children = ImmutableArray.Empty
+    let mutable hashDirectives = ImmutableArray<FSharpSyntaxHashDirective>.Empty
+    let mutable modules = ImmutableArray<FSharpSyntaxModuleOrNamespace>.Empty
+
+    member _.IsScript =
+        match implFile with
+        | ParsedImplFileInput (isScript=isScript) -> isScript
+
+    member _.FileName =
+        match implFile with
+        | ParsedImplFileInput (fileName=fileName) -> fileName
+
+    member this.HashedDirectives =
+        match implFile with
+        | ParsedImplFileInput (hashDirectives=internalHashDirectives) ->
+            if hashDirectives.IsEmpty then
+                let builder = ImmutableArray.CreateBuilder<FSharpSyntaxHashDirective>()
+                for ParsedHashDirective (name, args, m) in internalHashDirectives do
+                    builder.Add(FSharpSyntaxHashDirective(this, name, ImmutableArray.CreateRange args, FSharpSourceRange m))
+                hashDirectives <- builder.ToImmutable()
+            hashDirectives
+
+    member this.ModuleOrNamespaces =
+        if modules.IsEmpty then
+            modules <-
+                match implFile with
+                | ParsedImplFileInput (modules=modules) ->
+                    let builder = ImmutableArray.CreateBuilder<FSharpSyntaxModuleOrNamespace>()
+                    for x in modules do
+                        builder.Add(FSharpSyntaxModuleOrNamespace(this, x))
+                    builder.ToImmutable()
+        modules
+
+    override _.Parent = Unchecked.defaultof<_>
+
+    override _.Range = FSharpSourceRange implFile.Range
+
+    override this.Children =
+        if children.IsEmpty then
+            children <-
+                seq {
+                    yield! (this.HashedDirectives |> Seq.map (fun x -> x :> FSharpSyntaxNode))
+                    yield! (this.ModuleOrNamespaces |> Seq.map (fun x -> x :> FSharpSyntaxNode)) }
+                |> ImmutableArray.CreateRange
+        children
+            
+let (|RootNode|) (node: FSharpSyntaxNode) =
+    match node with
+    | :? FSharpSyntaxTree as node -> Some node
+    | _ -> None

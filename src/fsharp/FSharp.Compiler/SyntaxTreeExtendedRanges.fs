@@ -1,4 +1,4 @@
-﻿module FSharp.Compiler.SyntaxTreeExtendedRanges
+﻿module internal FSharp.CodeAnalysis.Internal.SyntaxTreeExtendedRanges
 
 open FSharp.Compiler.AbstractIL.Internal.Library
 open FSharp.Compiler.SyntaxTree
@@ -21,17 +21,17 @@ let isZeroRange (r: range) =
 //                    |> List.reduce unionRanges
 //                unionRanges longIdRange m
 
-//type ParsedImplFileInput with
+type ParsedImplFileInput with
 
-//    member this.Range =
-//        match this with
-//        | ParsedImplFileInput(modules=modules) ->
-//            match modules with
-//            | [] -> range0
-//            | _ ->
-//                modules
-//                |> List.map (fun x -> x.Range)
-//                |> List.reduce (unionRanges)
+    member this.Range =
+        match this with
+        | ParsedImplFileInput(modules=modules) ->
+            match modules with
+            | [] -> range0
+            | _ ->
+                modules
+                |> List.map (fun x -> x.Range)
+                |> List.reduce (unionRanges)
 
 
 //type SynModuleOrNamespaceSig with
@@ -48,17 +48,17 @@ let isZeroRange (r: range) =
 //                    |> List.reduce unionRanges
 //                unionRanges longIdRange m
 
-//type ParsedSigFileInput with
+type ParsedSigFileInput with
 
-//    member this.Range =
-//        match this with
-//        | ParsedSigFileInput(modules=modules) ->
-//            match modules with
-//            | [] -> range0
-//            | _ ->
-//                modules
-//                |> List.map (fun x -> x.Range)
-//                |> List.reduce (unionRanges)
+    member this.Range =
+        match this with
+        | ParsedSigFileInput(modules=modules) ->
+            match modules with
+            | [] -> range0
+            | _ ->
+                modules
+                |> List.map (fun x -> x.Range)
+                |> List.reduce (unionRanges)
 
 //type ParsedInput with
 
@@ -117,18 +117,18 @@ let isZeroRange (r: range) =
 //        match this with
 //        | TypeDefnSig (_, _, _, m) -> m
 
-//type SynMeasure with
+type SynMeasure with
 
-//    member this.Range =
-//        match this with
-//        | SynMeasure.Named (range=m) -> m
-//        | SynMeasure.Product (range=m) -> m
-//        | SynMeasure.Seq (range=m) -> m
-//        | SynMeasure.Divide (range=m) -> m
-//        | SynMeasure.Power (range=m) -> m
-//        | SynMeasure.One -> range0
-//        | SynMeasure.Anon (range=m) -> m
-//        | SynMeasure.Var (range=m) -> m
+    member this.Range =
+        match this with
+        | SynMeasure.Named (range=m) -> m
+        | SynMeasure.Product (range=m) -> m
+        | SynMeasure.Seq (range=m) -> m
+        | SynMeasure.Divide (range=m) -> m
+        | SynMeasure.Power (range=m) -> m
+        | SynMeasure.One -> range0
+        | SynMeasure.Anon (range=m) -> m
+        | SynMeasure.Var (range=m) -> m
 
 //type SynRationalConst with
 
@@ -320,11 +320,11 @@ let isZeroRange (r: range) =
 
 //    member this.Range = range0
 
-//type SynBinding with
+type SynBinding with
 
-//    member this.Range = 
-//        match this with
-//        | Binding (range=m) -> m
+    member this.Range = 
+        match this with
+        | Binding (range=m) -> m
 
 //type SynBindingKind with
 
@@ -340,7 +340,11 @@ let isZeroRange (r: range) =
 
 //    member this.Range = this.idRange            
 
-//let longIdentRange (longId: LongIdent) =
-//    longId
-//    |> List.map (fun x -> x.idRange)
-//    |> List.reduce unionRanges
+let longIdentRange (longId: LongIdent) =
+    match longId with
+    | [] -> range0
+    | [x] -> x.idRange
+    | _ ->
+        longId
+        |> List.map (fun x -> x.idRange)
+        |> List.reduce unionRanges
