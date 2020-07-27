@@ -114,24 +114,32 @@ type FSharpSyntaxTreeSignature internal (parent: FSharpSyntaxNode, internalNode:
 type FSharpSyntaxImplementation internal (parent: FSharpSyntaxNode, internalNode: ParsedImplFileInput) =
     inherit FSharpSyntaxNode (parent)
 
-    let mutable __item4 : FSharpSyntaxNodeList<FSharpSyntaxParsedHashDirective> = Unchecked.defaultof<_>
-    let mutable __item5 : FSharpSyntaxNodeList<FSharpSyntaxModuleOrNamespace> = Unchecked.defaultof<_>
+    let mutable hashDirectives : FSharpSyntaxHashDirective list = Unchecked.defaultof<_>
+    let mutable moduleOrNamespaces : FSharpSyntaxModuleOrNamespace list = Unchecked.defaultof<_>
 
     member _.InternalNode = internalNode
 
     override _.Range = FSharpSourceRange internalNode.Range
 
-    member this.item4 =
-            match this.InternalNode with
-            | ParsedImplFileInput.ParsedImplFileInput (_, _, _, _, hashDirectives, _, _) ->
-                FSharpSyntaxNodeList<FSharpSyntaxParsedHashDirective>(this, item4)
-            | _ -> failwith "invalid syntax" 
+    member this.HashDirectives =
+        match box hashDirectives with
+        | null ->
+            hashDirectives <-
+                match this.InternalNode with
+                | ParsedImplFileInput.ParsedImplFileInput (_, _, _, _, hashDirectives, _, _) ->
+                    hashDirectives |> List.map (fun x -> FSharpSyntaxHashDirective(this, x))
+                | _ -> failSyntax ()
+        | _ ->
+            ()
+        hashDirectives
 
     member this.item5 =
-            match this.InternalNode with
-            | ParsedImplFileInput.ParsedImplFileInput (_, _, _, _, _, item5, _) ->
-                FSharpSyntaxNodeList<FSharpSyntaxModuleOrNamespace>(this, item5)
-            | _ -> failwith "invalid syntax" 
+        match box moduleOrNamespaces with
+        | null ->
+            moduleOrNamespaces <-
+                match this.InternalNode with
+                | ParsedImplFileInput.ParsedImplFileInput (_, _, _, _, _, modules, _) ->
+                    modules |> List.map (fun x -> FSharpSyntaxModuleOrNamespace(this, x))
 
 
     override _.GetChild index =
