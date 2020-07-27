@@ -1015,8 +1015,8 @@ module Lexer =
     [<Struct;NoComparison;NoEquality>]
     type FSharpSyntaxToken =
 
-        val private tok: Parser.token
-        val private tokRange: range
+        val tok: Parser.token
+        val tokRange: range
 
         new (tok, tokRange) = { tok = tok; tokRange = tokRange }
 
@@ -1366,6 +1366,21 @@ module Lexer =
             | FSharpSyntaxTokenKind.CommentTrivia
             | FSharpSyntaxTokenKind.LineCommentTrivia -> true
             | _ -> false
+
+        member this.Text =
+            match this.tok with
+            | IDENT text -> text
+            | _ -> String.Empty
+
+        override this.ToString() =
+            match this.tok with
+            | IDENT text -> text
+            | MODULE -> "module"
+            | DOT -> "."
+            | DOT_DOT -> ".."
+            | DOT_DOT_HAT -> "..^"
+            | EQUALS -> "="
+            | _ -> raise (NotImplementedException())
 
     let lexWithErrorLogger (text: ISourceText) (filePath: string) conditionalCompilationDefines (flags: FSharpLexerFlags) supportsFeature errorLogger onToken pathMap (ct: CancellationToken) =
         let canSkipTrivia = (flags &&& FSharpLexerFlags.SkipTrivia) = FSharpLexerFlags.SkipTrivia

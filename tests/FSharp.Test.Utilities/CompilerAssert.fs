@@ -644,3 +644,9 @@ let main argv = 0"""
             Assert.AreEqual(expectedErrorRange, (info.StartLineAlternate, info.StartColumn + 1, info.EndLineAlternate, info.EndColumn + 1), "expectedErrorRange")
             Assert.AreEqual(expectedErrorMsg, info.Message, "expectedErrorMsg")
         )
+
+    static member TryGetParsedSource (source: string) =
+        let sourceFileName = "test.fs"
+        let parsingOptions = { FSharpParsingOptions.Default with SourceFiles = [| sourceFileName |] }
+        let results = checker.ParseFile(sourceFileName, SourceText.ofString source, parsingOptions) |> Async.RunSynchronously
+        results.ParseTree

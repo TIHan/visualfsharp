@@ -20,6 +20,7 @@
     <Compile Include="SuggestionBuffer.fs" />
     <Compile Include="ByteMemoryTests.fs" />
     <Compile Include="FsiTests.fs" />
+    <Compile Include="CodeAnalysisSyntaxTreeTests.fs" />
     <Compile Include="ByteMemoryTests.fs" />
   </ItemGroup>
 
@@ -27,6 +28,7 @@
     <ProjectReference Include="$(FSharpSourcesRoot)\fsharp\FSharp.Compiler.Private\FSharp.Compiler.Private.fsproj" />
     <ProjectReference Include="$(FSharpSourcesRoot)\fsharp\FSharp.Core\FSharp.Core.fsproj" />
     <ProjectReference Include="$(FSharpTestsRoot)\FSharp.Test.Utilities\FSharp.Test.Utilities.fsproj" />
+    <ProjectReference Include="..\..\src\fsharp\FSharp.Compiler\FSharp.Compiler.fsproj" />
   </ItemGroup>
 
 </Project>

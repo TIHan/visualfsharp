@@ -7,19 +7,25 @@ open FSharp.Compiler.Range
 let isZeroRange (r: range) =
     posEq r.Start r.End
 
-//type SynModuleOrNamespace with
+type ScopedPragma with
 
-//    member this.Range =
-//        match this with
-//        | SynModuleOrNamespace (longId=longId;range=m) -> 
-//            match longId with
-//            | [] -> m
-//            | _ ->
-//                let longIdRange =
-//                    longId
-//                    |> List.map (fun x -> x.idRange)
-//                    |> List.reduce unionRanges
-//                unionRanges longIdRange m
+    member this.Range =
+        match this with
+        | ScopedPragma.WarningOff (range=m) -> m
+
+type SynModuleOrNamespace with
+
+    member this.Range =
+        match this with
+        | SynModuleOrNamespace (longId=longId;range=m) -> 
+            match longId with
+            | [] -> m
+            | _ ->
+                let longIdRange =
+                    longId
+                    |> List.map (fun x -> x.idRange)
+                    |> List.reduce unionRanges
+                unionRanges longIdRange m
 
 type ParsedImplFileInput with
 
@@ -33,20 +39,19 @@ type ParsedImplFileInput with
                 |> List.map (fun x -> x.Range)
                 |> List.reduce (unionRanges)
 
+type SynModuleOrNamespaceSig with
 
-//type SynModuleOrNamespaceSig with
-
-//    member this.Range =
-//        match this with
-//        | SynModuleOrNamespaceSig (longId=longId;range=m) -> 
-//            match longId with
-//            | [] -> m
-//            | _ ->
-//                let longIdRange =
-//                    longId
-//                    |> List.map (fun x -> x.idRange)
-//                    |> List.reduce unionRanges
-//                unionRanges longIdRange m
+    member this.Range =
+        match this with
+        | SynModuleOrNamespaceSig (longId=longId;range=m) -> 
+            match longId with
+            | [] -> m
+            | _ ->
+                let longIdRange =
+                    longId
+                    |> List.map (fun x -> x.idRange)
+                    |> List.reduce unionRanges
+                unionRanges longIdRange m
 
 type ParsedSigFileInput with
 
@@ -67,11 +72,11 @@ type ParsedSigFileInput with
 //        | ParsedInput.ImplFile input -> input.Range
 //        | ParsedInput.SigFile input -> input.Range
 
-//type ParsedHashDirective with
+type ParsedHashDirective with
 
-//    member this.Range =
-//        match this with
-//        | ParsedHashDirective (_, _, m) -> m
+    member this.Range =
+        match this with
+        | ParsedHashDirective (_, _, m) -> m
 
 //type SynTypeConstraint with
 

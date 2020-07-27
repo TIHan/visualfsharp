@@ -476,8 +476,10 @@ module public Lexer =
     [<Struct;NoComparison;NoEquality;Experimental("This FCS API is experimental and subject to change.")>]
     type public FSharpSyntaxToken =
 
-        val private tok: Parser.token
-        val private tokRange: range
+        val internal tok: Parser.token
+        val internal tokRange: range
+
+        internal new : tok: Parser.token * tokRange: range -> FSharpSyntaxToken
 
         member Range: range
 
@@ -492,6 +494,8 @@ module public Lexer =
         member IsNumericLiteral: bool
 
         member IsCommentTrivia: bool
+
+        member Text: string
 
     [<AbstractClass;Sealed;Experimental("This FCS API is experimental and subject to change.")>]
     type public FSharpLexer =

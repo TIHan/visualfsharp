@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <Compile Include="SyntaxTreeExtendedRanges.fs" />
-    <Compile Include="SynaxTreeVisitor.fs" />
+    <Compile Include="SynaxTree.fs" />
   </ItemGroup>
 
   <ItemGroup>
