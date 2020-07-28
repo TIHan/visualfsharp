@@ -274,6 +274,17 @@ type FSharpSyntaxImplementation internal (parent: FSharpSyntaxNode, internalNode
         | 2, offset -> mkNode this.ModuleOrNamespaces.[index - offset]
         | _ -> failIndex ()
 
+    static member Create(parent, pragmas: FSharpSyntaxPragma seq, hashDirectives: FSharpSyntaxHashDirective seq, moduleOrNamespaces: FSharpSyntaxModuleOrNamespace seq) =
+        let internalNode = 
+            ParsedImplFileInput.ParsedImplFileInput(
+                Unchecked.defaultof<_>, 
+                Unchecked.defaultof<_>, 
+                Unchecked.defaultof<_>, 
+                pragmas |> Seq.map (fun x -> x.InternalNode) |> List.ofSeq, 
+                hashDirectives |> Seq.map (fun x -> x.InternalNode) |> List.ofSeq, 
+                moduleOrNamespaces |> Seq.map (fun x -> x.InternalNode) |> List.ofSeq, 
+                Unchecked.defaultof<_>)
+        FSharpSyntaxImplementation(parent, internalNode)
             
 //[<Sealed>]
 //type FSharpSyntaxSignature internal (parent: FSharpSyntaxNode, internalNode: ParsedSigFileInput) =
