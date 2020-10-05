@@ -3019,17 +3019,17 @@ type NonLocalValOrMemberRef =
     }
 
     /// Get the thunk for the assembly referred to
-    member x.Ccu = x.EnclosingEntity.nlr.Ccu
+    member x.Ccu = x.EnclosingEntity.Ccu
 
     /// Get the name of the assembly referred to
-    member x.AssemblyName = x.EnclosingEntity.nlr.AssemblyName
+    member x.AssemblyName = x.EnclosingEntity.AssmeblyName
 
     /// For debugging
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText = x.ToString()
 
     /// For debugging
-    override x.ToString() = x.EnclosingEntity.nlr.ToString() + "::" + x.ItemKey.PartialKey.LogicalName
+    override x.ToString() = x.EnclosingEntity.ToString() + "::" + x.ItemKey.PartialKey.LogicalName
       
 /// Represents the path information for a reference to a value or member in another assembly, disassociated
 /// from any particular reference.
@@ -3215,9 +3215,347 @@ type NonLocalEntityRef =
     member x.DebugText = x.ToString()
 
     override x.ToString() = x.DisplayName
+
+[<AbstractClass;StructuredFormatDisplay("{DebugText}")>]
+type EntityRef() =
+
+    abstract Ccu : CcuThunk
+
+    abstract AssmeblyName : string
+
+    /// Indicates if the reference is a local reference
+    abstract IsLocalRef : bool
+
+    /// Indicates if the reference has been resolved
+    abstract IsResolved : bool
+
+    /// The resolved target of the reference
+    abstract ResolvedTarget : NonNullSlot<Entity>
+
+    /// Resolve the reference
+    abstract Resolve : canError: bool -> unit
+
+    /// Dereference the TyconRef to a Tycon. Amortize the cost of doing this.
+    /// This path should not allocate in the amortized case
+    abstract Deref : Entity
+
+    /// Dereference the TyconRef to a Tycon option.
+    abstract TryDeref : NonNullSlot<Entity> voption
+
+    /// Is the destination assembly available?
+    abstract CanDeref : bool
+
+    /// Gets the data indicating the compiled representation of a type or module in terms of Abstract IL data structures.
+    abstract CompiledRepresentation : CompiledTypeRepr
+
+    /// Gets the data indicating the compiled representation of a named type or module in terms of Abstract IL data structures.
+    abstract CompiledRepresentationForNamedType : ILTypeRef
+
+    /// The implementation definition location of the namespace, module or type
+    abstract DefinitionRange : range
+
+    /// The signature definition location of the namespace, module or type
+    abstract SigRange : range
+
+    /// The name of the namespace, module or type, possibly with mangling, e.g. List`1, List or FailureException
+    abstract LogicalName : string
+
+    /// The compiled name of the namespace, module or type, e.g. FSharpList`1, ListModule or FailureException 
+    abstract CompiledName : string
+
+    /// The display name of the namespace, module or type, e.g. List instead of List`1, not including static parameters
+    abstract DisplayName : string
+
+    /// The display name of the namespace, module or type with <'T, 'U, 'V> added for generic types, including static parameters
+    abstract DisplayNameWithStaticParametersAndTypars : string
+
+    /// The display name of the namespace, module or type with <_, _, _> added for generic types, including static parameters
+    abstract DisplayNameWithStaticParametersAndUnderscoreTypars : string
+
+    /// The display name of the namespace, module or type, e.g. List instead of List`1, including static parameters
+    abstract DisplayNameWithStaticParameters : string
+
+    /// The code location where the module, namespace or type is defined.
+    abstract Range : range
+
+    /// A unique stamp for this module, namespace or type definition within the context of this compilation. 
+    /// Note that because of signatures, there are situations where in a single compilation the "same" 
+    /// module, namespace or type may have two distinct Entity objects that have distinct stamps.
+    abstract Stamp : Stamp
+
+    /// The F#-defined custom attributes of the entity, if any. If the entity is backed by Abstract IL or provided metadata
+    /// then this does not include any attributes from those sources.
+    abstract Attribs : Attribs
+
+    /// The XML documentation of the entity, if any. If the entity is backed by provided metadata
+    /// then this _does_ include this documentation. If the entity is backed by Abstract IL metadata
+    /// or comes from another F# assembly then it does not (because the documentation will get read from 
+    /// an XML file).
+    abstract XmlDoc : XmlDoc
+
+    /// The XML documentation sig-string of the entity, if any, to use to lookup an .xml doc file. This also acts
+    /// as a cache for this sig-string computation.
+    abstract XmlDocSig : string
+
+    /// The logical contents of the entity when it is a module or namespace fragment.
+    abstract ModuleOrNamespaceType : ModuleOrNamespaceType
+
+    /// Demangle the module name, if FSharpModuleWithSuffix is used
+    abstract DemangledModuleOrNamespaceName : string
+
+    /// The logical contents of the entity when it is a type definition.
+    abstract TypeContents : TyconAugmentation
+
+    /// The kind of the type definition - is it a measure definition or a type definition?
+    abstract TypeOrMeasureKind : TyparKind
+
+    /// The identifier at the point of declaration of the type definition.
+    abstract Id : Ident
+
+    /// The information about the r.h.s. of a type definition, if any. For example, the r.h.s. of a union or record type.
+    abstract TypeReprInfo : TyconRepresentation
+
+    /// The information about the r.h.s. of an F# exception definition, if any. 
+    abstract ExceptionInfo : ExceptionInfo
+
+    /// Indicates if the entity represents an F# exception declaration.
+    abstract IsExceptionDecl : bool
+
+    /// Get the type parameters for an entity that is a type declaration, otherwise return the empty list.
+    /// 
+    /// Lazy because it may read metadata, must provide a context "range" in case error occurs reading metadata.
+    abstract Typars : range -> Typars
+
+    /// Get the type parameters for an entity that is a type declaration, otherwise return the empty list.
+    abstract TyparsNoRange : Typars
+
+    /// Indicates if this entity is an F# type abbreviation definition
+    abstract TypeAbbrev : TType option
+
+    /// Indicates if this entity is an F# type abbreviation definition
+    abstract IsTypeAbbrev : bool
+
+    /// Get the value representing the accessibility of the r.h.s. of an F# type definition.
+    abstract TypeReprAccessibility : Accessibility
+
+    /// Get the cache of the compiled ILTypeRef representation of this module or type.
+    abstract CompiledReprCache : cache<CompiledTypeRepr>
+
+    /// Get a blob of data indicating how this type is nested in other namespaces, modules or types.
+    abstract PublicPath : PublicPath option
+
+    /// Get the value representing the accessibility of an F# type definition or module.
+    abstract Accessibility : Accessibility
+
+    /// Indicates the type prefers the "tycon<a, b>" syntax for display etc. 
+    abstract IsPrefixDisplay : bool
+
+    /// Indicates the "tycon blob" is actually a module 
+    abstract IsModuleOrNamespace : bool
+
+    /// Indicates if the entity is a namespace
+    abstract IsNamespace : bool
+
+    /// Indicates if the entity is an F# module definition
+    abstract IsModule : bool
+
+    /// Get a blob of data indicating how this type is nested inside other namespaces, modules and types.
+    abstract CompilationPathOpt : CompilationPath option
+
+#if !NO_EXTENSIONTYPING
+    /// Indicates if the entity is a provided namespace fragment
+    abstract IsProvided : bool
+
+    /// Indicates if the entity is a provided namespace fragment
+    abstract IsProvidedNamespace : bool
+
+    /// Indicates if the entity is an erased provided type definition
+    abstract IsProvidedErasedTycon : bool
+
+    /// Indicates if the entity is an erased provided type definition that incorporates a static instantiation (and therefore in some sense compiler generated)
+    abstract IsStaticInstantiationTycon : bool
+
+    /// Indicates if the entity is a generated provided type definition, i.e. not erased.
+    abstract IsProvidedGeneratedTycon : bool
+#endif
+
+    /// Get a blob of data indicating how this type is nested inside other namespaces, modules and types.
+    abstract CompilationPath : CompilationPath
+
+    /// Get a table of fields for all the F#-defined record, struct and class fields in this type definition, including
+    /// static fields, 'val' declarations and hidden fields from the compilation of implicit class constructions.
+    abstract AllFieldTable : TyconRecdFields
+
+    /// Get an array of fields for all the F#-defined record, struct and class fields in this type definition, including
+    /// static fields, 'val' declarations and hidden fields from the compilation of implicit class constructions.
+    abstract AllFieldsArray : RecdField []
+
+    /// Get a list of fields for all the F#-defined record, struct and class fields in this type definition, including
+    /// static fields, 'val' declarations and hidden fields from the compilation of implicit class constructions.
+    abstract AllFieldsAsList : RecdField list
+
+    /// Get a list of all fields for F#-defined record, struct and class fields in this type definition,
+    /// including static fields, but excluding compiler-generate fields.
+    abstract TrueFieldsAsList : RecdField list
+
+    /// Get a list of all instance fields for F#-defined record, struct and class fields in this type definition,
+    /// excluding compiler-generate fields.
+    abstract TrueInstanceFieldsAsList : RecdField list
+
+    /// Get a list of all instance fields for F#-defined record, struct and class fields in this type definition.
+    /// including hidden fields from the compilation of implicit class constructions.
+    abstract AllInstanceFieldsAsList : RecdField list
+
+    /// Get a field by index in definition order
+    abstract GetFieldByIndex : n: int -> RecdField
+
+    /// Get a field by name.
+    abstract GetFieldByName : n: string -> RecdField option
+
+    /// Get the union cases and other union-type information for a type, if any
+    abstract UnionTypeInfo : TyconUnionData voption
+
+    /// Get the union cases for a type, if any
+    abstract UnionCasesArray : UnionCase []
+
+    /// Get the union cases for a type, if any, as a list
+    abstract UnionCasesAsList : UnionCase list
+
+    /// Get a union case of a type by name
+    abstract GetUnionCaseByName : n: string -> UnionCase option
+
+    /// Get the blob of information associated with an F# object-model type definition, i.e. class, interface, struct etc.
+    abstract FSharpObjectModelTypeInfo : TyconObjModelData 
+
+    /// Gets the immediate interface definitions of an F# type definition. Further interfaces may be supported through class and interface inheritance.
+    abstract ImmediateInterfacesOfFSharpTycon : (TType * bool * range) list
+
+    /// Gets the immediate interface types of an F# type definition. Further interfaces may be supported through class and interface inheritance.
+    abstract ImmediateInterfaceTypesOfFSharpTycon : TType list
+
+    /// Gets the immediate members of an F# type definition, excluding compiler-generated ones.
+    /// Note: result is alphabetically sorted, then for each name the results are in declaration order
+    abstract MembersOfFSharpTyconSorted : ValRef list
+
+    /// Gets all immediate members of an F# type definition keyed by name, including compiler-generated ones.
+    /// Note: result is a indexed table, and for each name the results are in reverse declaration order
+    abstract MembersOfFSharpTyconByName : NameMultiMap<ValRef>
+
+    /// Indicates if this is a struct or enum type definition, i.e. a value type definition
+    abstract IsStructOrEnumTycon : bool
+
+    /// Indicates if this is an F# type definition which is one of the special types in FSharp.Core.dll which uses 
+    /// an assembly-code representation for the type, e.g. the primitive array type constructor.
+    abstract IsAsmReprTycon : bool
+
+    /// Indicates if this is an F# type definition which is one of the special types in FSharp.Core.dll like 'float<_>' which
+    /// defines a measure type with a relation to an existing non-measure type as a representation.
+    abstract IsMeasureableReprTycon : bool
+
+    /// Indicates if the entity is erased, either a measure definition, or an erased provided type definition
+    abstract IsErased : bool
+
+    /// Gets any implicit hash/equals (with comparer argument) methods added to an F# record, union or struct type definition.
+    abstract GeneratedHashAndEqualsWithComparerValues : ValRef option
+
+    /// Gets any implicit CompareTo (with comparer argument) methods added to an F# record, union or struct type definition.
+    abstract GeneratedCompareToWithComparerValues : ValRef option
+
+    /// Gets any implicit CompareTo methods added to an F# record, union or struct type definition.
+    abstract GeneratedCompareToValues : (ValRef * ValRef) option
+
+    /// Gets any implicit hash/equals methods added to an F# record, union or struct type definition.
+    abstract GeneratedHashAndEqualsValues : (ValRef * ValRef) option
+
+    /// Indicate if this is a type definition backed by Abstract IL metadata.
+    abstract IsILTycon : bool
+
+    /// Get the Abstract IL scope, nesting and metadata for this 
+    /// type definition, assuming it is backed by Abstract IL metadata.
+    abstract ILTyconInfo : TILObjectReprData
+
+    /// Get the Abstract IL metadata for this type definition, assuming it is backed by Abstract IL metadata.
+    abstract ILTyconRawMetadata : ILTypeDef
+
+    /// Indicate if this is a type whose r.h.s. is known to be a union type definition.
+    abstract IsUnionTycon : bool
+
+    /// Indicates if this is an F# type definition whose r.h.s. is known to be a record type definition.
+    abstract IsRecordTycon : bool
+
+    /// Indicates if this is an F# type definition whose r.h.s. is known to be some kind of F# object model definition
+    abstract IsFSharpObjectModelTycon : bool
+
+    /// The on-demand analysis about whether the entity has the IsByRefLike attribute
+    abstract TryIsByRefLike : bool voption
+
+    /// Set the on-demand analysis about whether the entity has the IsByRefLike attribute
+    abstract SetIsByRefLike : b: bool -> unit
+
+    /// The on-demand analysis about whether the entity has the IsReadOnly attribute
+    abstract TryIsReadOnly : bool
+
+    /// Set the on-demand analysis about whether the entity has the IsReadOnly attribute
+    abstract SetIsReadOnly : b: bool -> unit
+
+    /// The on-demand analysis about whether the entity is assumed to be a readonly struct
+    abstract TryIsAssumedReadOnly : bool voption
+
+    /// Set the on-demand analysis about whether the entity is assumed to be a readonly struct
+    abstract SetIsAssumedReadOnly : b: bool -> unit
+
+    /// Indicates if this is an F# type definition whose r.h.s. definition is unknown (i.e. a traditional ML 'abstract' type in a signature,
+    /// which in F# is called a 'unknown representation' type).
+    abstract IsHiddenReprTycon : bool
+
+    /// Indicates if this is an F#-defined interface type definition 
+    abstract IsFSharpInterfaceTycon : bool
+
+    /// Indicates if this is an F#-defined delegate type definition 
+    abstract IsFSharpDelegateTycon : bool
+
+    /// Indicates if this is an F#-defined enum type definition 
+    abstract IsFSharpEnumTycon : bool
+
+    /// Indicates if this is a .NET-defined enum type definition 
+    abstract IsIlEnumTycon : bool
+
+    /// Indicates if this is an enum type definition 
+    abstract IsEnumTycon : bool
+
+    /// Indicates if this is an F#-defined struct or enum type definition, i.e. a value type definition
+    abstract IsFSharpStructOrEnumTycon : bool
+
+    /// Indicates if this is a .NET-defined struct or enum type definition, i.e. a value type definition
+    abstract IsILStructOrEnumTycon : bool
+
+    /// Indicates if we have pre-determined that a type definition has a default constructor.
+    abstract PreEstablishedHasDefaultConstructor : bool
+
+    /// Indicates if we have pre-determined that a type definition has a self-referential constructor using 'as x'
+    abstract HasSelfReferentialConstructor : bool
+
+    member x.UnionCasesAsRefList = x.UnionCasesAsList |> List.map x.MakeNestedUnionCaseRef
+
+    member x.TrueInstanceFieldsAsRefList = x.TrueInstanceFieldsAsList |> List.map x.MakeNestedRecdFieldRef
+
+    member x.AllFieldAsRefList = x.AllFieldsAsList |> List.map x.MakeNestedRecdFieldRef
+
+    member x.MakeNestedRecdFieldRef (rf: RecdField) = RecdFieldRef (x, rf.Name)
+
+    member x.MakeNestedUnionCaseRef (uc: UnionCase) = UnionCaseRef (x, uc.Id.idText)
+
+    [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
+    member x.DebugText = x.ToString()
+
+    override x.ToString() = 
+       if x.IsLocalRef then 
+           x.ResolvedTarget.DisplayName 
+       else 
+           x.DisplayName 
         
 [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
-type EntityRef = 
+type EntityRefOld = 
     {
       /// Indicates a reference to something bound in this CCU 
       mutable binding: NonNullSlot<Entity>
@@ -3561,16 +3899,6 @@ type EntityRef =
     /// Indicates if we have pre-determined that a type definition has a self-referential constructor using 'as x'
     member x.HasSelfReferentialConstructor = x.Deref.HasSelfReferentialConstructor
 
-    member x.UnionCasesAsRefList = x.UnionCasesAsList |> List.map x.MakeNestedUnionCaseRef
-
-    member x.TrueInstanceFieldsAsRefList = x.TrueInstanceFieldsAsList |> List.map x.MakeNestedRecdFieldRef
-
-    member x.AllFieldAsRefList = x.AllFieldsAsList |> List.map x.MakeNestedRecdFieldRef
-
-    member x.MakeNestedRecdFieldRef (rf: RecdField) = RecdFieldRef (x, rf.Name)
-
-    member x.MakeNestedUnionCaseRef (uc: UnionCase) = UnionCaseRef (x, uc.Id.idText)
-
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText = x.ToString()
 
@@ -3609,7 +3937,7 @@ type ValRef =
             let res = 
                 let nlr = vr.nlr 
                 let e = nlr.EnclosingEntity.Deref 
-                let possible = e.ModuleOrNamespaceType.TryLinkVal(nlr.EnclosingEntity.nlr.Ccu, nlr.ItemKey)
+                let possible = e.ModuleOrNamespaceType.TryLinkVal(nlr.EnclosingEntity.Ccu, nlr.ItemKey)
                 match possible with 
                 | ValueNone -> error (InternalUndefinedItemRef (FSComp.SR.tastUndefinedItemRefVal, e.DisplayNameWithStaticParameters, nlr.AssemblyName, sprintf "%+A" nlr.ItemKey.PartialKey))
                 | ValueSome h -> h
@@ -3623,7 +3951,7 @@ type ValRef =
             let resOpt = 
                 match vr.nlr.EnclosingEntity.TryDeref with 
                 | ValueNone -> ValueNone
-                | ValueSome e -> e.ModuleOrNamespaceType.TryLinkVal(vr.nlr.EnclosingEntity.nlr.Ccu, vr.nlr.ItemKey)
+                | ValueSome e -> e.ModuleOrNamespaceType.TryLinkVal(vr.nlr.EnclosingEntity.Ccu, vr.nlr.ItemKey)
             match resOpt with 
             | ValueNone -> ()
             | ValueSome res -> 
