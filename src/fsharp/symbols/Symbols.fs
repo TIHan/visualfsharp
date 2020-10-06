@@ -101,10 +101,10 @@ module Impl =
     let checkEntityIsResolved(entity:EntityRef) = 
         if entityIsUnresolved entity then 
             let poorQualifiedName =
-                if entity.nlr.AssemblyName = "mscorlib" then 
-                    entity.nlr.DisplayName + ", mscorlib"
+                if entity.NonLocalInfo.AssemblyName = "mscorlib" then 
+                    entity.NonLocalInfo.DisplayName + ", mscorlib"
                 else 
-                    entity.nlr.DisplayName + ", " + entity.nlr.Ccu.AssemblyName
+                    entity.NonLocalInfo.DisplayName + ", " + entity.NonLocalInfo.Ccu.AssemblyName
             invalidOp (sprintf "The entity '%s' does not exist or is in an unresolved assembly." poorQualifiedName)
 
     /// Checking accessibility that arise from different compilations needs more care - this is a duplicate of the F# compiler code for this case

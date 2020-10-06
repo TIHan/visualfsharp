@@ -502,7 +502,7 @@ and BindValueInGlobalModuleForFslib n mp i v vval (ss: LayeredMap<_, _>) =
     ss.Add(n, notlazy (BindValueInSubModuleFSharpCore mp i v vval (old.Force())))
 
 let BindValueForFslib (nlvref : NonLocalValOrMemberRef) v vval env =
-    {env with globalModuleInfos = BindValueInGlobalModuleForFslib nlvref.AssemblyName nlvref.EnclosingEntity.nlr.Path 0 v vval env.globalModuleInfos }
+    {env with globalModuleInfos = BindValueInGlobalModuleForFslib nlvref.AssemblyName nlvref.EnclosingEntity.NonLocalInfo.Path 0 v vval env.globalModuleInfos }
 
 let UnknownValInfo = { ValExprInfo=UnknownValue; ValMakesNoCriticalTailcalls=false }
 
@@ -632,7 +632,7 @@ let GetInfoForNonLocalVal cenv env (vref: ValRef) =
         UnknownValInfo
     // REVIEW: optionally turn x-module on/off on per-module basis or  
     elif cenv.settings.crossModuleOpt () || vref.MustInline then 
-        match TryGetInfoForNonLocalEntityRef env vref.nlr.EnclosingEntity.nlr with
+        match TryGetInfoForNonLocalEntityRef env vref.nlr.EnclosingEntity.NonLocalInfo with
         | Some structInfo ->
             match structInfo.ValInfos.TryFind vref with 
             | Some ninfo -> snd ninfo

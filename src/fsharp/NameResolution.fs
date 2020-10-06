@@ -1385,7 +1385,7 @@ and AddModuleOrNamespaceContentsToNameEnv (g: TcGlobals) amap (ad: AccessorDomai
 //    open M1
 //
 // The list contains [M1b; M1a]
-and AddModuleOrNamespaceRefsContentsToNameEnv g amap ad m root nenv modrefs =
+and AddModuleOrNamespaceRefsContentsToNameEnv g amap ad m root nenv (modrefs: EntityRef list) =
    (modrefs, nenv) ||> List.foldBack (fun modref acc -> AddModuleOrNamespaceRefContentsToNameEnv g amap ad m root acc modref)
 
 and AddTypeContentsToNameEnv g amap ad m nenv (typ: TType) =

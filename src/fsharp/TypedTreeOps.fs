@@ -70,7 +70,7 @@ type TyconRefMap<'T>(imap: StampMap<'T>) =
     member m.IsEmpty = imap.IsEmpty
 
     static member Empty: TyconRefMap<'T> = TyconRefMap Map.empty
-    static member OfList vs = (vs, TyconRefMap<'T>.Empty) ||> List.foldBack (fun (x, y) acc -> acc.Add x y) 
+    static member OfList (vs: (TyconRef * 'T) list) = (vs, TyconRefMap<'T>.Empty) ||> List.foldBack (fun (x, y) acc -> acc.Add x y) 
 
 [<Struct>]
 [<NoEquality; NoComparison>]
@@ -155,7 +155,7 @@ let instMeasureTyparRef tpinst unt (tp: Typar) =
         loop tpinst
    | _ -> failwith "instMeasureTyparRef: kind=Type"
 
-let remapTyconRef (tcmap: TyconRefMap<_>) tcref =
+let remapTyconRef (tcmap: TyconRefMap<_>) (tcref: TyconRef) =
     match tcmap.TryFind tcref with 
     | Some tcref -> tcref
     | None -> tcref
@@ -1460,7 +1460,7 @@ type TyconRefMultiMap<'T>(contents: TyconRefMap<'T list>) =
 
     member m.Add (v, x) = TyconRefMultiMap<'T>(contents.Add v (x :: m.Find v))
     static member Empty = TyconRefMultiMap<'T>(TyconRefMap<_>.Empty)
-    static member OfList vs = (vs, TyconRefMultiMap<'T>.Empty) ||> List.foldBack (fun (x, y) acc -> acc.Add (x, y)) 
+    static member OfList (vs: (TyconRef * 'T) list) = (vs, TyconRefMultiMap<'T>.Empty) ||> List.foldBack (fun (x, y) acc -> acc.Add (x, y)) 
 
 
 //--------------------------------------------------------------------------

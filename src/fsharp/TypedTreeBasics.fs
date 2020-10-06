@@ -120,16 +120,17 @@ let mkRecdFieldRef tcref f = RecdFieldRef(tcref, f)
 
 let mkUnionCaseRef tcref c = UnionCaseRef(tcref, c)
 
-let ERefLocal x: EntityRef = { binding=x; nlr=Unchecked.defaultof<_> }      
+let ERefLocal x: EntityRef = BoundLocalEntityRef(x) :> EntityRef  
 
-let ERefNonLocal x: EntityRef = { binding=Unchecked.defaultof<_>; nlr=x }      
+let ERefNonLocal x: EntityRef = BoundUnresolvedNonLocalEntityRef(x) :> EntityRef    
 
-let ERefNonLocalPreResolved x xref: EntityRef = { binding=x; nlr=xref }      
+let ERefNonLocalPreResolved x xref: EntityRef = BoundPreResolvedNonLocalEntityRef(xref, x) :> EntityRef
 
 let (|ERefLocal|ERefNonLocal|) (x: EntityRef) = 
-    match box x.nlr with 
-    | null -> ERefLocal x.binding
-    | _ -> ERefNonLocal x.nlr
+    if x.IsLocalRef then
+        ERefLocal x.Deref
+    else
+        ERefNonLocal x.NonLocalInfo
 
 //--------------------------------------------------------------------------
 // Construct local references
@@ -368,7 +369,7 @@ let fslibValRefEq fslibCcu vref1 vref2 =
             // entities in fslib that are overloaded, or, if they are overloaded, then value identity
             // is not significant
             nlr1.ItemKey.PartialKey = nm2.PartialKey &&
-            fslibRefEq nlr1.EnclosingEntity.nlr pp2
+            fslibRefEq nlr1.EnclosingEntity.NonLocalInfo pp2
         | _ -> 
             false
     // Note: I suspect this private-to-private reference comparison is not needed
@@ -389,10 +390,10 @@ let primEntityRefEq compilingFslib fslibCcu (x: EntityRef) (y: EntityRef) =
         x.ResolvedTarget === y.ResolvedTarget 
     elif not x.IsLocalRef && not y.IsLocalRef &&
         (// Two tcrefs with identical paths are always equal
-         nonLocalRefEq x.nlr y.nlr || 
+         nonLocalRefEq x.NonLocalInfo y.NonLocalInfo || 
          // The tcrefs may have forwarders. If they may possibly be equal then resolve them to get their canonical references
          // and compare those using pointer equality.
-         (not (nonLocalRefDefinitelyNotEq x.nlr y.nlr) && 
+         (not (nonLocalRefDefinitelyNotEq x.NonLocalInfo y.NonLocalInfo) && 
             match x.TryDeref with
             | ValueSome v1 -> match y.TryDeref with ValueSome v2 -> v1 === v2 | _ -> false
             | _ -> match y.TryDeref with ValueNone -> true | _ -> false)) then

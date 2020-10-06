@@ -914,7 +914,7 @@ module FSharpExprConvert =
                     nlr.EnclosingEntity.Deref 
                 with _ ->
                     failwithf "Failed to resolve type '%s'" (nlr.EnclosingEntity.CompiledName)
-            let ccu = nlr.EnclosingEntity.nlr.Ccu
+            let ccu = nlr.EnclosingEntity.Ccu
             let vName = nlr.ItemKey.PartialKey.LogicalName // this is actually compiled name
             let findByName =
                 enclosingEntity.MembersOfFSharpTyconSorted |> List.filter (fun v -> (v.CompiledName cenv.g.CompilerGlobalState) = vName)
@@ -1067,13 +1067,13 @@ module FSharpExprConvert =
                 let key = ValLinkageFullKey({ MemberParentMangledName=memberParentName; MemberIsOverride=false; LogicalName=logicalName; TotalArgCount= argCount }, Some linkageType)
 
                 let (PubPath p) = tcref.PublicPath.Value
-                let enclosingNonLocalRef = mkNonLocalEntityRef tcref.nlr.Ccu p
+                let enclosingNonLocalRef = mkNonLocalEntityRef tcref.NonLocalInfo.Ccu p
                 let vref = mkNonLocalValRef enclosingNonLocalRef key
                 makeFSExpr isMember vref 
 
             else 
                 let key = ValLinkageFullKey({ MemberParentMangledName=memberParentName; MemberIsOverride=false; LogicalName=logicalName; TotalArgCount= 0 }, None)
-                let vref = mkNonLocalValRef tcref.nlr key
+                let vref = mkNonLocalValRef tcref.NonLocalInfo key
                 makeFSExpr isMember vref 
 
           with e -> 
