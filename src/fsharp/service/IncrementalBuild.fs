@@ -711,11 +711,8 @@ type RawFSharpAssemblyDataBackedByLanguageService (tcConfig, tcGlobals, tcState:
 
 type IncrementalBuilderState =
     {
-        // stampedFileNames represent the real stamps of the files.
-        // logicalStampedFileNames represent the stamps of the files that are used to calculate the project's logical timestamp.
-        stampedFileNames: ImmutableArray<DateTime>
-        logicalStampedFileNames: ImmutableArray<DateTime>
-        stampedReferencedAssemblies: ImmutableArray<DateTime>
+        stampedFileNames: DateTime []
+        stampedReferencedAssemblies: DateTime []
         initialBoundModel: BoundModel
         boundModels: ImmutableArray<BoundModelLazy>
         finalizedBoundModel: AsyncLazy<((ILAssemblyRef * IRawFSharpAssemblyData option * TypedImplFile list option * BoundModel) * DateTime)>
@@ -784,10 +781,17 @@ type IncrementalBuilder(
 #endif
                         allDependencies) =
 
+    let fileLookup =
+        let items =
+            sourceFiles
+            |> Array.ofList
+            |> Array.mapi (fun i (_, x, _) ->
+                KeyValuePair(x, i)
+            )
+        Collections.Concurrent.ConcurrentDictionary(items, StringComparer.OrdinalIgnoreCase)
+
     let fileParsed = new Event<string>()
     let projectChecked = new Event<unit>()
-
-    let defaultTimeStamp = DateTime.UtcNow
 
     let mutable isImportsInvalidated = false
 
@@ -797,14 +801,6 @@ type IncrementalBuilder(
 
     //----------------------------------------------------
     // START OF BUILD TASK FUNCTIONS
-
-    /// Get the timestamp of the given file name.
-    let StampFileNameTask (cache: TimeStampCache) (_m: range, filename: string, _isLastCompiland) =
-        cache.GetFileTimeStamp filename
-
-    /// Timestamps of referenced assemblies are taken from the file's timestamp.
-    let StampReferencedAssemblyTask (cache: TimeStampCache) (_ref, timeStamper) =
-        timeStamper cache
 
     /// Finish up the typechecking to produce outputs for the rest of the compilation process
     let FinalizeTypeCheckTask (boundModels: ImmutableArray<BoundModel>) =
@@ -938,86 +934,6 @@ type IncrementalBuilder(
             return result
         })
 
-    and computeStampedFileName (state: IncrementalBuilderState) (cache: TimeStampCache) slot fileInfo =
-        let currentStamp = state.stampedFileNames.[slot]
-        let stamp = StampFileNameTask cache fileInfo
-
-        if currentStamp <> stamp then
-            match state.boundModels.[slot].TryGetPartial() with
-            // This prevents an implementation file that has a backing signature file from invalidating the rest of the build.
-            | ValueSome(boundModel) when enablePartialTypeChecking && boundModel.BackingSignature.IsSome ->
-                boundModel.Invalidate()
-                { state with
-                    stampedFileNames = state.stampedFileNames.SetItem(slot, StampFileNameTask cache fileInfo)
-                }
-            | _ ->
-
-                let stampedFileNames = state.stampedFileNames.ToBuilder()
-                let logicalStampedFileNames = state.logicalStampedFileNames.ToBuilder()
-                let boundModels = state.boundModels.ToBuilder()
-                
-                let refState = ref state
-
-                // Invalidate the file and all files below it.
-                for j = 0 to stampedFileNames.Count - slot - 1 do
-                    let stamp = StampFileNameTask cache fileNames.[slot + j]
-                    stampedFileNames.[slot + j] <- stamp
-                    logicalStampedFileNames.[slot + j] <- stamp
-                    boundModels.[slot + j] <- createBoundModelAsyncLazy refState (slot + j)
-
-                let state =
-                    { state with
-                        // Something changed, the finalized view of the project must be invalidated.
-                        finalizedBoundModel = createFinalizeBoundModelAsyncLazy refState
-
-                        stampedFileNames = stampedFileNames.ToImmutable()
-                        logicalStampedFileNames = logicalStampedFileNames.ToImmutable()
-                        boundModels = boundModels.ToImmutable()
-                    }
-                refState := state
-                state
-        else
-            state
-
-    and computeStampedFileNames state (cache: TimeStampCache) =
-        let mutable i = 0
-        (state, fileNames)
-        ||> Array.fold (fun state fileInfo ->
-            let newState = computeStampedFileName state cache i fileInfo
-            i <- i + 1
-            newState
-        )
-
-    and computeStampedReferencedAssemblies state canTriggerInvalidation (cache: TimeStampCache) =
-        let stampedReferencedAssemblies = state.stampedReferencedAssemblies.ToBuilder()
-
-        let mutable referencesUpdated = false
-        referencedAssemblies
-        |> Array.iteri (fun i asmInfo ->
-
-            let currentStamp = state.stampedReferencedAssemblies.[i]
-            let stamp = StampReferencedAssemblyTask cache asmInfo
-
-            if currentStamp <> stamp then
-                referencesUpdated <- true
-                stampedReferencedAssemblies.[i] <- stamp
-        )
-
-        if referencesUpdated then
-            // Build is invalidated. The build must be rebuilt with the newly updated references.
-            if not isImportsInvalidated && canTriggerInvalidation then
-                isImportsInvalidated <- true
-            { state with
-                stampedReferencedAssemblies = stampedReferencedAssemblies.ToImmutable()
-            }
-        else
-            state
-
-    let computeTimeStamps state cache =
-        let state = computeStampedReferencedAssemblies state true cache
-        let state = computeStampedFileNames state cache
-        state
-
     let tryGetSlotPartial (state: IncrementalBuilderState) slot =
         match state.boundModels.[slot].TryGetPartial() with
         | ValueSome boundModel ->
@@ -1069,58 +985,151 @@ type IncrementalBuilder(
     *)
 
     let mutable currentState =
-        let cache = TimeStampCache(defaultTimeStamp)
         let refState = ref Unchecked.defaultof<_>
         let state =
             {
-                stampedFileNames = Array.init fileNames.Length (fun _ -> DateTime.MinValue) |> ImmutableArray.CreateRange
-                logicalStampedFileNames = Array.init fileNames.Length (fun _ -> DateTime.MinValue) |> ImmutableArray.CreateRange
-                stampedReferencedAssemblies = Array.init referencedAssemblies.Length (fun _ -> DateTime.MinValue) |> ImmutableArray.CreateRange
+                stampedFileNames = Array.init fileNames.Length (fun _ -> DateTime.MinValue)
+                stampedReferencedAssemblies = Array.init referencedAssemblies.Length (fun _ -> DateTime.MinValue)
                 initialBoundModel = initialBoundModel
                 boundModels = createBoundModelsAsyncLazy refState fileNames.Length
                 finalizedBoundModel = createFinalizeBoundModelAsyncLazy refState
             }
-        let state = computeStampedReferencedAssemblies state false cache
-        let state = computeStampedFileNames state cache
         refState := state
         state
 
-    let computeProjectTimeStamp (state: IncrementalBuilderState) =
-        let t1 = MaxTimeStampInDependencies state.stampedReferencedAssemblies
-        let t2 = MaxTimeStampInDependencies state.stampedFileNames
-        max t1 t2
+    let gate = obj()
+    let fileIsReady (filename: string) =
+        try
+            use _dispose = File.Open(filename, FileMode.Open, FileAccess.Read, FileShare.Read)
+            true
+        with
+        | :? IOException ->
+            false
 
-    let agent = 
-        // States change only happen here when referenced assemblies' or files' timestamps have changed.
-        // Handled the state changes in a thread safe manner.
-        let rec loop (agent: MailboxProcessor<AsyncReplyChannel<unit> * TimeStampCache * CancellationToken>) = 
-            async {
-                let! replyChannel, cache, ct = agent.Receive()
+    let createFileWatcher (dir: string) (filenames: string seq) =
+        let fsw = new IO.FileSystemWatcher(dir)
+        fsw.NotifyFilter <- NotifyFilters.LastWrite
+        fsw.Changed.Add(fun args ->
+            let filename = args.FullPath
+            if args.ChangeType &&& IO.WatcherChangeTypes.Changed = IO.WatcherChangeTypes.Changed &&
+               filenames |> Seq.exists (fun x -> String.Equals(x, filename, StringComparison.OrdinalIgnoreCase)) &&
+               fileIsReady filename then
 
-                if ct.IsCancellationRequested then
-                    replyChannel.Reply()
-                    return! loop agent
-                else
+               lock gate (fun () ->
+                    try
+                        let state = currentState
+                        let slot = fileLookup.[filename]
+                        let boundModels = state.boundModels.ToBuilder()
 
-                currentState <- computeTimeStamps currentState cache
-                replyChannel.Reply()
-                return! loop agent
-            }
-        let agent =
-            new MailboxProcessor<_>(loop)
-        agent.Start()
-        agent
+                        match boundModels.[slot].TryGetPartial() with
+                        // This prevents an implementation file that has a backing signature file from invalidating the rest of the build.
+                        | ValueSome(boundModel) when enablePartialTypeChecking && boundModel.BackingSignature.IsSome ->
+                            boundModel.Invalidate()
+                        | _ ->
+                            state.stampedFileNames.[slot] <- FileSystem.GetLastWriteTimeShim filename
 
-    let checkFileTimeStamps (cache: TimeStampCache) =
-        async {
-            let! ct = Async.CancellationToken
-            do! agent.PostAndAsyncReply(fun replyChannel -> (replyChannel, cache, ct))
-        }
+                            let refState = ref state
+                            for j = 0 to state.stampedFileNames.Length - slot - 1 do
+                                boundModels.[slot + j] <- createBoundModelAsyncLazy refState (slot + j)
+
+                            let state =
+                                { state with
+                                    // Something changed, the finalized view of the project must be invalidated.
+                                    finalizedBoundModel = createFinalizeBoundModelAsyncLazy refState
+                                    boundModels = boundModels.ToImmutable()
+                                }
+                            refState := state
+                            currentState <- state
+                    with
+                    | _ -> ()
+            )
+        )
+        fsw.EnableRaisingEvents <- true
+        fsw 
+
+    let fileWatchers =
+        sourceFiles
+        |> Seq.map (fun (_, filename, _) -> filename)
+        |> Seq.groupBy (fun filename ->
+            Path.GetDirectoryName(filename)
+        )
+        |> Seq.choose (fun (dir, filenames) ->
+            try
+                createFileWatcher dir filenames
+                |> Some
+            with
+            | _ ->
+                None
+        )
+        |> Array.ofSeq
+
+    let references, inMemReferences =
+        tcConfig.referencedDLLs
+        |> Array.ofList
+        |> Array.partition (fun x ->
+            match x with
+            | AssemblyReference(_, _, Some _) -> false
+            | _ -> true
+        )
+
+    let createReferenceWatcher dir filenames =
+        let fsw = new IO.FileSystemWatcher(dir)
+        fsw.NotifyFilter <- NotifyFilters.LastWrite
+        fsw.Changed.Add(fun args ->
+            let filename = args.FullPath
+            if args.ChangeType &&& IO.WatcherChangeTypes.Changed = IO.WatcherChangeTypes.Changed &&
+               filenames |> Seq.exists (fun x -> String.Equals(x, filename, StringComparison.OrdinalIgnoreCase)) &&
+               fileIsReady filename then
+                isImportsInvalidated <- true
+        )
+        fsw.EnableRaisingEvents <- true
+        fsw
+
+    let referenceWatchers =
+        references
+        |> Seq.map (fun (AssemblyReference(_, filename, _)) -> filename)
+        |> Seq.groupBy (fun filename ->
+            Path.GetDirectoryName(filename)
+        )
+        |> Seq.choose (fun (dir, filenames) ->
+            try
+                createReferenceWatcher dir filenames
+                |> Some
+            with
+            | _ ->
+                None
+        )
+        |> Array.ofSeq
+
+    let mutable stampedInMemReferences = Array.init inMemReferences.Length (fun _ -> DateTime.MinValue)
+    let computeStampedInMemReferences cache canInvalidate =
+        inMemReferences
+        |> Array.iteri (fun i x ->
+            match x with
+            | AssemblyReference(_, _, Some projRef) ->
+                match projRef.TryGetLogicalTimeStamp(cache) with
+                | Some stamp ->
+                    let currentStamp = stampedInMemReferences.[i]
+                    if stamp > currentStamp then
+                        if canInvalidate then
+                            isImportsInvalidated <- true
+                        stampedInMemReferences.[i] <- stamp
+                | _ ->
+                    ()
+            | _ ->
+                failwith "invalid project reference"
+        )
+
+    do computeStampedInMemReferences (TimeStampCache(DateTime.MinValue)) false
 
     do IncrementalBuilderEventTesting.MRU.Add(IncrementalBuilderEventTesting.IBECreated)
 
-    override this.Finalize() =
-        (agent :> IDisposable).Dispose()
+    override _.Finalize() =
+        fileWatchers
+        |> Array.iter (fun x -> x.Dispose())
+
+        referenceWatchers
+        |> Array.iter (fun x -> x.Dispose())
 
     member _.TcConfig = tcConfig
 
@@ -1136,21 +1145,17 @@ type IncrementalBuilder(
     member _.ImportsInvalidatedByTypeProvider = importsInvalidatedByTypeProvider.Publish
 #endif
 
-    member _.IsReferencesInvalidated = 
-        // fast path
+    member _.IsImportsInvalidated = 
         if isImportsInvalidated then true
         else 
-            computeStampedReferencedAssemblies currentState true (TimeStampCache(defaultTimeStamp)) |> ignore
+            computeStampedInMemReferences (TimeStampCache(DateTime.MinValue)) true
             isImportsInvalidated
-
-    member _.IsImportsInvalidated = isImportsInvalidated
 
     member _.AllDependenciesDeprecated = allDependencies
 
     member _.PopulatePartialCheckingResults () =
       async {
-        let cache = TimeStampCache defaultTimeStamp // One per step
-        do! checkFileTimeStamps cache
+        computeStampedInMemReferences (TimeStampCache(DateTime.MinValue)) true
         let! _ = currentState.finalizedBoundModel.GetValueAsync()
         projectChecked.Trigger()
       }
@@ -1164,11 +1169,8 @@ type IncrementalBuilder(
         | _ -> None
 
     member builder.TryGetCheckResultsBeforeFileInProject (filename) =
-        let cache = TimeStampCache defaultTimeStamp
-        let tmpState = computeTimeStamps currentState cache
-
         let slotOfFile = builder.GetSlotOfFileName filename
-        match tryGetBeforeSlotPartial tmpState slotOfFile with
+        match tryGetBeforeSlotPartial currentState slotOfFile with
         | Some(boundModel, timestamp) -> PartialCheckResults(boundModel, timestamp) |> Some
         | _ -> None
 
@@ -1177,8 +1179,7 @@ type IncrementalBuilder(
 
     member _.GetCheckResultsBeforeSlotInProject (slotOfFile) =
       async {
-        let cache = TimeStampCache defaultTimeStamp
-        do! checkFileTimeStamps cache
+        computeStampedInMemReferences (TimeStampCache(DateTime.MinValue)) true
         let! result = evalUpToTargetSlotPartial currentState (slotOfFile - 1)
         match result with
         | Some (boundModel, timestamp) -> return PartialCheckResults(boundModel, timestamp)
@@ -1187,8 +1188,7 @@ type IncrementalBuilder(
 
     member _.GetFullCheckResultsBeforeSlotInProject (slotOfFile) =
       async {
-        let cache = TimeStampCache defaultTimeStamp
-        do! checkFileTimeStamps cache
+        computeStampedInMemReferences (TimeStampCache(DateTime.MinValue)) true
         let! result = evalUpToTargetSlotFull currentState (slotOfFile - 1)
         match result with
         | Some (boundModel, timestamp) -> return PartialCheckResults(boundModel, timestamp)
@@ -1219,8 +1219,7 @@ type IncrementalBuilder(
 
     member _.GetCheckResultsAndImplementationsForProject() =
       async {
-        let cache = TimeStampCache(defaultTimeStamp)
-        do! checkFileTimeStamps cache
+        computeStampedInMemReferences (TimeStampCache(DateTime.MinValue)) true
         let! result = currentState.finalizedBoundModel.GetValueAsync()
         match result with
         | ((ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt, boundModel), timestamp) ->
@@ -1235,9 +1234,12 @@ type IncrementalBuilder(
             return result
         }
 
-    member _.GetLogicalTimeStampForProject(cache) =
-        let tmpState = computeTimeStamps currentState cache
-        computeProjectTimeStamp tmpState
+    member _.GetLogicalTimeStampForProject(_cache: TimeStampCache) =
+        let state = currentState
+        let t1 = MaxTimeStampInDependencies state.stampedReferencedAssemblies
+        let t2 = MaxTimeStampInDependencies state.stampedFileNames
+        let t3 = MaxTimeStampInDependencies stampedInMemReferences
+        max (max t1 t2) t3
 
     member _.TryGetSlotOfFileName(filename: string) =
         // Get the slot of the given file and force it to build.

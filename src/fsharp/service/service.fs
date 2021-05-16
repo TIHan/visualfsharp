@@ -424,7 +424,7 @@ type BackgroundCompiler(
     let getOrCreateBuilderRequireCtok (ctok, options, userOpName) =
         cancellable {
             match tryGetBuilder options with
-            | Some (builderOpt,creationDiags) when builderOpt.IsNone || not builderOpt.Value.IsReferencesInvalidated -> 
+            | Some (builderOpt,creationDiags) when builderOpt.IsNone || not builderOpt.Value.IsImportsInvalidated -> 
                 Logger.Log LogCompilerFunctionId.Service_IncrementalBuildersCache_GettingCache
                 return builderOpt,creationDiags
             | _ -> 
@@ -1130,7 +1130,7 @@ type BackgroundCompiler(
 
     member _.IsProjectReferencesInvalidated(options: FSharpProjectOptions) =
         match tryGetBuilder options with
-        | Some (Some builder, _) -> builder.IsReferencesInvalidated
+        | Some (Some builder, _) -> builder.IsImportsInvalidated
         | _ -> true
 
     member _.StopBackgroundCompile   () =
